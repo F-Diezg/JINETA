@@ -38,7 +38,14 @@ code should be clear and every concept explained before it is used.
   gravity is +g along z.
 - **State vectors are NumPy arrays.**
   - Point mass: `[x, y, z, vx, vy, vz]`
-  - Rigid body (planned): position, velocity, attitude quaternion, angular rate
+  - Rotation only: `[qw, qx, qy, qz, p, q, r]`
+  - Rigid body (phase 4): position, velocity, attitude quaternion, angular rate
+- **Quaternions:** `[w, x, y, z]` (scalar first), Hamilton product, unit norm.
+  `q` rotates vectors BODY → NED: `v_ned = to_matrix(q) @ v_body`.
+- **Body axes:** x forward (nose), y right wing, z down. Angular velocity
+  `omega = [p, q, r]` is expressed in body axes.
+- Euler angles (roll φ, pitch θ, yaw ψ, ZYX order) only for display/input —
+  never as internal state (gimbal lock at θ = ±90°).
 - Dynamics expose `derivative(t, state) -> d(state)/dt`; integrators know nothing
   about physics.
 - Type hints and docstrings on every public function.
@@ -80,8 +87,8 @@ Visualisation is a separate layer that reads that data:
 |---|---|---|
 | 1 | Integrators (Euler, RK4) | ✅ Done |
 | 2 | Point mass: gravity + drag, simulation loop | ✅ Done |
-| 3 | Rotation: quaternions, Euler's equations | 🔄 Next |
-| 4 | Full 6-DOF rigid body | ⏳ |
+| 3 | Rotation: quaternions, Euler's equations | ✅ Done |
+| 4 | Full 6-DOF rigid body | 🔄 Next |
 | 5 | Environment: ISA atmosphere, wind | ⏳ |
 | 6 | Vehicle models with real parameters + attitude control | ⏳ |
 | 7 | Scenarios in YAML, multiple entities | ⏳ |
@@ -121,10 +128,18 @@ Visualisation is a separate layer that reads that data:
   `D = -½·rho·CdA·|v|·v`. Also `GRAVITY`, `DensityModel`, `sea_level_density`.
 - `jineta/core/simulation.py` — `run(f, y0, dt, t_end, stop=None)`: fixed-step RK4
   loop with optional early-stop condition; returns `(times, states)`.
-- Tests (6 passing): integrators (RK4 exact on free fall, Euler 1st-order
-  convergence); point mass (vacuum parabola, terminal velocity, drag reduces range,
-  thinner air at altitude increases range).
-- Examples: `projectile_drag.py` (vacuum vs drag), `density_comparison.py`
-  (constant vs exponential atmosphere).
-- Next: phase 3 — attitude with quaternions, Euler's rotation equations, tests
-  (torque-free rotation, conservation of angular momentum).
+- `jineta/core/quaternion.py` — `multiply`, `from_axis_angle`, `normalize`,
+  `to_matrix`, `derivative(q, omega_body) = ½ q ⊗ [0, ω]`.
+- `jineta/core/rotating_body.py` — `RotatingBody` dataclass (inertia 3x3, torque
+  model) with Euler's equations `ω̇ = I⁻¹(M − ω × Iω)`; inverse inertia computed once
+  in `__post_init__`. Also `TorqueModel`, `zero_torque`.
+- Tests (11 passing): integrators (2); point mass (4); rotation (5: 90° about z maps
+  N→E, matrix is proper orthogonal, steady spin matches axis-angle, constant torque
+  spins up linearly, torque-free motion conserves energy + NED angular momentum +
+  quaternion norm).
+- Examples: `projectile_drag.py`, `density_comparison.py`, `dzhanibekov.py`
+  (intermediate-axis instability reproduced).
+- Next: phase 4 — full 6-DOF rigid body (13-element state: position, velocity,
+  quaternion, angular rate). Forces/moments computed in body axes and rotated to NED
+  with the quaternion. Add quaternion renormalisation after each step (post-step hook
+  in `simulation.run`). Tests: combine translation + rotation results, energy checks.
