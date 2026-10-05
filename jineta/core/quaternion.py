@@ -6,6 +6,7 @@ BODY frame to the NED frame, i.e. v_ned = to_matrix(q) @ v_body.
 """
 
 import numpy as np
+import numpy.typing as npt
 
 
 def multiply(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -20,7 +21,7 @@ def multiply(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     ])
 
 
-def from_axis_angle(axis: np.ndarray, angle: float) -> np.ndarray:
+def from_axis_angle(axis: npt.ArrayLike, angle: float) -> np.ndarray:
     """Quaternion for a rotation of `angle` [rad] about `axis` (any length)."""
     axis = np.asarray(axis, dtype=float)
     axis = axis / np.linalg.norm(axis)
