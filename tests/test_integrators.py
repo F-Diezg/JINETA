@@ -9,7 +9,7 @@ G = 9.81  # gravity [m/s^2]
 
 def free_fall(t: float, y: np.ndarray) -> np.ndarray:
     """State y = [z, vz]. Returns its derivative [vz, -g]."""
-    z, vz = y
+    _z, vz = y
     return np.array([vz, -G])
 
 
