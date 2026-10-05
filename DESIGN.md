@@ -79,8 +79,8 @@ Visualisation is a separate layer that reads that data:
 | Phase | Content | Status |
 |---|---|---|
 | 1 | Integrators (Euler, RK4) | ✅ Done |
-| 2 | Point mass: gravity + drag, simulation loop | 🔄 In progress |
-| 3 | Rotation: quaternions, Euler's equations | ⏳ |
+| 2 | Point mass: gravity + drag, simulation loop | ✅ Done |
+| 3 | Rotation: quaternions, Euler's equations | 🔄 Next |
 | 4 | Full 6-DOF rigid body | ⏳ |
 | 5 | Environment: ISA atmosphere, wind | ⏳ |
 | 6 | Vehicle models with real parameters + attitude control | ⏳ |
@@ -97,12 +97,28 @@ Visualisation is a separate layer that reads that data:
 - RK4 fixed-step as the default integrator.
 - NED frame from day one, to avoid a later refactor.
 - Simulation decoupled from visualisation.
+- Gravity is constant (9.80665 m/s²): its change with altitude is ~0.3 % at 10 km,
+  far below the uncertainty in vehicle aero parameters.
+- Air density varies with altitude (~10 %/km) and matters. Dynamics receive a
+  density model `altitude -> rho` from outside; the full ISA model lives in `campo`
+  (phase 5). Until then, constant sea-level density is the default.
 - Interceptor drones vs. ballistic projectiles is physically unrealistic; threats
   are drones and slow cruise missiles. Unwinnable engagements should be reported as
   such.
 
 ## 7. Current state
 
-- `jineta/core/integrators.py` — `euler_step`, `rk4_step` (tested: free fall).
-- In progress: `jineta/core/point_mass.py`, `jineta/core/simulation.py`,
-  `tests/test_point_mass.py`, `examples/projectile_drag.py`.
+- `jineta/core/integrators.py` — `euler_step`, `rk4_step`, `Derivative` type alias.
+  Tested against free fall.
+- `jineta/core/point_mass.py` — `PointMass` dataclass (mass, drag_area, density
+  model) with `derivative()`: constant gravity + quadratic drag
+  `D = -½·rho·CdA·|v|·v`. Also `GRAVITY`, `DensityModel`, `sea_level_density`.
+- `jineta/core/simulation.py` — `run(f, y0, dt, t_end, stop=None)`: fixed-step RK4
+  loop with optional early-stop condition; returns `(times, states)`.
+- Tests (6 passing): integrators (RK4 exact on free fall, Euler 1st-order
+  convergence); point mass (vacuum parabola, terminal velocity, drag reduces range,
+  thinner air at altitude increases range).
+- Examples: `projectile_drag.py` (vacuum vs drag), `density_comparison.py`
+  (constant vs exponential atmosphere).
+- Next: phase 3 — attitude with quaternions, Euler's rotation equations, tests
+  (torque-free rotation, conservation of angular momentum).

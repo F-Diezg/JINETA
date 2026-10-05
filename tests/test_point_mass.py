@@ -35,7 +35,7 @@ def test_falling_body_reaches_terminal_velocity():
     y0 = np.zeros(6)  # at rest
     _, states = run(body.derivative, y0, dt=0.01, t_end=60.0)
 
-    terminal = np.sqrt(2 * body.mass * GRAVITY / (body.air_density * body.drag_area))
+    terminal = np.sqrt(2 * body.mass * GRAVITY / (body.density(0.0) * body.drag_area))
     assert np.isclose(states[-1, 5], terminal, rtol=1e-6)
 
 
@@ -48,3 +48,17 @@ def test_drag_reduces_range():
     _, s_drag = run(with_drag.derivative, y0, dt=0.01, t_end=60.0, stop=hit_ground)
 
     assert s_drag[-1, 0] < s_vacuum[-1, 0]
+    
+
+def test_thinner_air_at_altitude_increases_range():
+    def exponential_density(altitude: float) -> float:
+        return 1.225 * np.exp(-altitude / 8500.0)
+
+    y0 = initial_state(speed=300.0, elevation_deg=60.0)
+    constant = PointMass(mass=10.0, drag_area=0.005)
+    thinning = PointMass(mass=10.0, drag_area=0.005, density=exponential_density)
+
+    _, s_const = run(constant.derivative, y0, dt=0.01, t_end=120.0, stop=hit_ground)
+    _, s_thin = run(thinning.derivative, y0, dt=0.01, t_end=120.0, stop=hit_ground)
+
+    assert s_thin[-1, 0] > s_const[-1, 0]
