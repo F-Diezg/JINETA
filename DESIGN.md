@@ -102,6 +102,12 @@ Visualisation is a separate layer that reads that data:
 - Air density varies with altitude (~10 %/km) and matters. Dynamics receive a
   density model `altitude -> rho` from outside; the full ISA model lives in `campo`
   (phase 5). Until then, constant sea-level density is the default.
+- Aerodynamics are NOT computed from 3D geometry at runtime (that would be CFD).
+  3D models are visual only. Each vehicle carries precomputed coefficient models
+  (CD, CL, CY, Cl, Cm, Cn as functions of alpha, beta, Mach, control deflections),
+  from published data, DATCOM, XFLR5/AVL or offline CFD. Runtime: airspeed in body
+  axes (via quaternion) → alpha, beta → interpolate → forces/moments. Multirotors
+  use per-axis body drag + linear rotor drag.
 - Interceptor drones vs. ballistic projectiles is physically unrealistic; threats
   are drones and slow cruise missiles. Unwinnable engagements should be reported as
   such.
