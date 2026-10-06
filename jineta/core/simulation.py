@@ -7,7 +7,7 @@ import numpy as np
 from jineta.core.integrators import Derivative, rk4_step
 
 StopCondition = Callable[[float, np.ndarray], bool]
-
+PostStep = Callable[[np.ndarray], np.ndarray]
 
 def run(
     f: Derivative,
@@ -15,6 +15,7 @@ def run(
     dt: float,
     t_end: float,
     stop: StopCondition | None = None,
+    post_step: PostStep | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Integrate dy/dt = f(t, y) from t=0 with RK4.
 
@@ -27,7 +28,8 @@ def run(
     states[0] = y0
 
     for i in range(n_steps):
-        states[i + 1] = rk4_step(f, times[i], states[i], dt)
+        y_next = rk4_step(f, times[i], states[i], dt)
+        states[i + 1] = post_step(y_next) if post_step is not None else y_next
         times[i + 1] = times[i] + dt
         if stop is not None and stop(times[i + 1], states[i + 1]):
             return times[: i + 2], states[: i + 2]
