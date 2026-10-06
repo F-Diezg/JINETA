@@ -66,3 +66,14 @@ def test_thrust_follows_attitude(yaw_deg, expected_horizontal):
     accel = body.derivative(0.0, state)[3:6]
 
     assert np.allclose(accel, [*expected_horizontal, GRAVITY])
+
+def test_free_spin_does_not_affect_center_of_mass_fall():
+    """With no external force, spinning must not change how the body falls."""
+    body = RigidBody(mass=2.0, inertia=np.diag([1.0, 2.0, 3.0]))
+    still = np.array([0, 0, -100.0, 3.0, -2.0, 0.0, 1, 0, 0, 0, 0, 0, 0])
+    tumbling = np.array([0, 0, -100.0, 3.0, -2.0, 0.0, 1, 0, 0, 0, 0.3, 5.0, 0.4])
+
+    _, s_still = run(body.derivative, still, dt=0.01, t_end=5.0)
+    _, s_tumbling = run(body.derivative, tumbling, dt=0.01, t_end=5.0)
+
+    assert np.allclose(s_still[:, 0:6], s_tumbling[:, 0:6], atol=1e-9)
