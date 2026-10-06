@@ -5,6 +5,8 @@ import numpy as np
 from jineta.core.point_mass import GRAVITY
 from jineta.core.rigid_body import RigidBody , normalize_attitude
 from jineta.core.simulation import run
+from jineta.core import quaternion
+import pytest
 
 
 def test_no_forces_is_free_fall():
@@ -40,3 +42,27 @@ def test_post_step_none_changes_nothing():
     _, a = run(body.derivative, spinning_body_state(), dt=0.01, t_end=5.0)
     _, b = run(body.derivative, spinning_body_state(), dt=0.01, t_end=5.0, post_step=None)
     assert np.array_equal(a, b)   
+
+@pytest.mark.parametrize(
+    "yaw_deg, expected_horizontal",
+    [
+        (0.0, [5.0, 0.0]),      # nose North -> thrust North (+x)
+        (90.0, [0.0, 5.0]),     # nose East  -> thrust East  (+y)
+        (180.0, [-5.0, 0.0]),   # nose South -> thrust South (-x)
+    ],
+)
+def test_thrust_follows_attitude(yaw_deg, expected_horizontal):
+    """Body-axis thrust along +x_body must be rotated to NED by the attitude."""
+    mass = 2.0
+    thrust = 10.0  # [N] along +x_body
+
+    def force_moment(t, state):
+        return np.array([thrust, 0.0, 0.0]), np.zeros(3)
+
+    body = RigidBody(mass=mass, inertia=np.eye(3), force_moment=force_moment)
+    q = quaternion.from_axis_angle([0, 0, 1], np.radians(yaw_deg))
+    state = np.concatenate([np.zeros(3), np.zeros(3), q, np.zeros(3)])
+
+    accel = body.derivative(0.0, state)[3:6]
+
+    assert np.allclose(accel, [*expected_horizontal, GRAVITY])
