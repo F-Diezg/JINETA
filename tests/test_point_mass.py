@@ -48,7 +48,7 @@ def test_drag_reduces_range():
     _, s_drag = run(with_drag.derivative, y0, dt=0.01, t_end=60.0, stop=hit_ground)
 
     assert s_drag[-1, 0] < s_vacuum[-1, 0]
-    
+
 
 def test_thinner_air_at_altitude_increases_range():
     def exponential_density(altitude: float) -> float:

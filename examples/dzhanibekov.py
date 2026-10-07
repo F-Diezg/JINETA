@@ -11,8 +11,9 @@ y0 = np.array([1.0, 0, 0, 0, 0.01, 2.0, 0.01])  # spin about axis 2 + tiny pertu
 
 times, states = run(body.derivative, y0, dt=0.01, t_end=60.0)
 
-for i, label in enumerate(["p (axis 1, min inertia)", "q (axis 2, intermediate)",
-                           "r (axis 3, max inertia)"]):
+for i, label in enumerate(
+    ["p (axis 1, min inertia)", "q (axis 2, intermediate)", "r (axis 3, max inertia)"]
+):
     plt.plot(times, states[:, 4 + i], label=label)
 
 plt.xlabel("Time [s]")

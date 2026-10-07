@@ -9,6 +9,7 @@ from jineta.core.integrators import Derivative, rk4_step
 StopCondition = Callable[[float, np.ndarray], bool]
 PostStep = Callable[[np.ndarray], np.ndarray]
 
+
 def run(
     f: Derivative,
     y0: np.ndarray,

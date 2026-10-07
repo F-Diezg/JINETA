@@ -23,6 +23,7 @@ def zero_force_moment(t: float, state: np.ndarray) -> tuple[np.ndarray, np.ndarr
     """No external forces or moments (only gravity acts on the body)."""
     return np.zeros(3), np.zeros(3)
 
+
 def normalize_attitude(state: np.ndarray) -> np.ndarray:
     """Return a copy of the state with its quaternion renormalised to unit norm.
 
@@ -32,6 +33,7 @@ def normalize_attitude(state: np.ndarray) -> np.ndarray:
     state = state.copy()
     state[6:10] = quaternion.normalize(state[6:10])
     return state
+
 
 @dataclass
 class RigidBody:
@@ -60,6 +62,8 @@ class RigidBody:
 
         # Rotation: kinematics + Euler's equations (same as RotatingBody).
         q_dot = quaternion.derivative(q, omega)
-        omega_dot = self.inertia_inv @ (moment_body - np.cross(omega, self.inertia @ omega))
+        omega_dot = self.inertia_inv @ (
+            moment_body - np.cross(omega, self.inertia @ omega)
+        )
 
         return np.concatenate([velocity, acceleration, q_dot, omega_dot])

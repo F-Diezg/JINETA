@@ -26,7 +26,12 @@ def hit_ground(t, s):
 
 
 times, states = run(
-    body.derivative, y0, dt=0.01, t_end=60.0, stop=hit_ground, post_step=normalize_attitude
+    body.derivative,
+    y0,
+    dt=0.01,
+    t_end=60.0,
+    stop=hit_ground,
+    post_step=normalize_attitude,
 )
 
 # Reference: the parabola a point mass would follow in vacuum.
@@ -38,7 +43,9 @@ fig, (ax_path, ax_rates) = plt.subplots(1, 2, figsize=(13, 5))
 
 ax_path.plot(states[:, 0], -states[:, 2], label="Tumbling body")
 ax_path.plot(x_ref, -z_ref, "k--", label="Point-mass parabola")
-for i in range(0, len(times), 50):  # nose direction every 0.5 s (projected on x-z plane)
+for i in range(
+    0, len(times), 50
+):  # nose direction every 0.5 s (projected on x-z plane)
     nose = quaternion.to_matrix(states[i, 6:10]) @ np.array([1.0, 0.0, 0.0])
     start = np.array([states[i, 0], -states[i, 2]])
     end = start + (0.04 * states[:, 0].max() * np.array([nose[0], -nose[2]]))
