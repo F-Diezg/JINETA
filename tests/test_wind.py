@@ -3,7 +3,14 @@
 import numpy as np
 import pytest
 
-from jineta.campo.wind import ConstantWind, ProfileWind, meteorological_wind
+from jineta.campo.wind import (
+    CombinedWind,
+    ConstantWind,
+    DiscreteGust,
+    PowerLawWind,
+    ProfileWind,
+    meteorological_wind,
+)
 from jineta.core.point_mass import GRAVITY, PointMass
 
 
@@ -122,3 +129,121 @@ def test_profile_wind_rejects_wrong_velocity_shape():
 def test_constant_wind_rejects_wrong_vector_size():
     with pytest.raises(ValueError):
         ConstantWind(np.array([1.0, 2.0]))
+
+
+def test_power_law_wind_has_the_reference_speed_at_the_reference_height():
+    wind = PowerLawWind(reference_speed=6.0, direction_from_deg=270.0)
+    assert np.isclose(np.linalg.norm(wind(0.0, position_at(10.0))), 6.0)
+
+
+def test_power_law_wind_follows_the_exponent():
+    # With exponent 1/2, four times the reference height means twice the speed
+    wind = PowerLawWind(3.0, 0.0, reference_height=10.0, exponent=0.5)
+    assert np.isclose(np.linalg.norm(wind(0.0, position_at(40.0))), 6.0)
+
+
+def test_power_law_wind_blows_toward_the_opposite_of_its_direction():
+    wind = PowerLawWind(reference_speed=5.0, direction_from_deg=270.0)  # from the west
+    assert np.allclose(wind(0.0, position_at(10.0)), [0.0, 5.0, 0.0], atol=1e-12)
+
+
+def test_power_law_wind_is_zero_at_and_below_the_ground():
+    wind = PowerLawWind(5.0, 270.0)
+    for altitude in (0.0, -30.0):
+        assert np.array_equal(wind(0.0, position_at(altitude)), np.zeros(3))
+
+
+def test_power_law_wind_is_constant_above_the_gradient_height():
+    wind = PowerLawWind(5.0, 270.0, gradient_height=300.0)
+    at_gradient_height = wind(0.0, position_at(300.0))
+    assert np.array_equal(wind(0.0, position_at(5_000.0)), at_gradient_height)
+    expected_speed = 5.0 * (300.0 / 10.0) ** (1.0 / 7.0)
+    assert np.isclose(np.linalg.norm(at_gradient_height), expected_speed)
+
+
+def test_power_law_wind_with_zero_exponent_is_uniform():
+    wind = PowerLawWind(5.0, 90.0, exponent=0.0)
+    for altitude in (0.0, 50.0, 400.0):
+        assert np.isclose(np.linalg.norm(wind(0.0, position_at(altitude))), 5.0)
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        {"reference_speed": -1.0},
+        {"reference_height": 0.0},
+        {"exponent": -0.1},
+        {"gradient_height": 0.0},
+    ],
+)
+def test_power_law_wind_rejects_invalid_parameters(invalid):
+    parameters = {"reference_speed": 5.0, "direction_from_deg": 270.0}
+    with pytest.raises(ValueError):
+        PowerLawWind(**(parameters | invalid))
+
+
+def sample_gust() -> DiscreteGust:
+    """A 4 s gust that starts at t = 10 s and peaks at 8 m/s toward the east."""
+    return DiscreteGust(peak=np.array([0.0, 8.0, 0.0]), start_time=10.0, duration=4.0)
+
+
+def test_gust_is_zero_outside_its_duration():
+    gust = sample_gust()
+    for t in (0.0, 9.9, 14.1, 100.0):
+        assert np.array_equal(gust(t, position_at(0.0)), np.zeros(3))
+
+
+def test_gust_starts_and_ends_at_zero():
+    gust = sample_gust()
+    assert np.allclose(gust(10.0, position_at(0.0)), 0.0, atol=1e-12)
+    assert np.allclose(gust(14.0, position_at(0.0)), 0.0, atol=1e-12)
+
+
+def test_gust_reaches_the_peak_in_the_middle():
+    assert np.allclose(sample_gust()(12.0, position_at(0.0)), [0.0, 8.0, 0.0])
+
+
+def test_gust_is_half_the_peak_at_a_quarter_of_its_duration():
+    # 0.5 * (1 - cos(pi / 2)) = 0.5
+    assert np.allclose(sample_gust()(11.0, position_at(0.0)), [0.0, 4.0, 0.0])
+
+
+def test_gust_is_symmetric_in_time():
+    gust = sample_gust()
+    early = gust(10.0 + 1.3, position_at(0.0))
+    late = gust(14.0 - 1.3, position_at(0.0))
+    assert np.allclose(early, late)
+
+
+def test_gust_average_is_half_the_peak():
+    gust = sample_gust()
+    times = np.linspace(10.0, 14.0, 10_001)
+    mean = np.mean([gust(t, position_at(0.0)) for t in times], axis=0)
+    assert np.allclose(mean, [0.0, 4.0, 0.0], atol=1e-3)
+
+
+def test_gust_does_not_depend_on_position():
+    gust = sample_gust()
+    far_away = np.array([5_000.0, -8_000.0, -400.0])
+    assert np.array_equal(gust(12.0, far_away), gust(12.0, position_at(0.0)))
+
+
+def test_gust_rejects_non_positive_duration():
+    with pytest.raises(ValueError):
+        DiscreteGust(peak=np.array([0.0, 8.0, 0.0]), start_time=0.0, duration=0.0)
+
+
+def test_gust_rejects_wrong_peak_size():
+    with pytest.raises(ValueError):
+        DiscreteGust(peak=np.array([1.0, 2.0]), start_time=0.0, duration=1.0)
+
+
+def test_combined_wind_adds_its_components():
+    mean = ConstantWind(np.array([3.0, 1.0, 0.0]))
+    combined = CombinedWind([mean, sample_gust()])
+    assert np.allclose(combined(0.0, position_at(0.0)), [3.0, 1.0, 0.0])  # no gust yet
+    assert np.allclose(combined(12.0, position_at(0.0)), [3.0, 9.0, 0.0])  # gust peak
+
+
+def test_combined_wind_without_models_is_calm():
+    assert np.array_equal(CombinedWind([])(0.0, position_at(0.0)), np.zeros(3))
