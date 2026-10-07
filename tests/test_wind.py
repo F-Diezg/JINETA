@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from jineta.campo.wind import ConstantWind, ProfileWind, meteorological_wind
+from jineta.core.point_mass import GRAVITY, PointMass
 
 
 def position_at(altitude: float) -> np.ndarray:
@@ -32,7 +33,7 @@ def test_meteorological_wind_keeps_speed_and_has_no_vertical_part():
 
 
 def test_constant_wind_does_not_depend_on_time_or_position():
-    wind = ConstantWind([3.0, -4.0, 0.0])
+    wind = ConstantWind(np.array([3.0, -4.0, 0.0]))
     samples = [
         (0.0, position_at(-50.0)),
         (50.0, position_at(5_000.0)),
@@ -43,7 +44,7 @@ def test_constant_wind_does_not_depend_on_time_or_position():
 
 
 def test_constant_wind_returns_a_copy():
-    wind = ConstantWind([3.0, -4.0, 0.0])
+    wind = ConstantWind(np.array([3.0, -4.0, 0.0]))
     wind(0.0, position_at(0.0))[0] = 99.0  # modify the returned array
     assert np.array_equal(wind(0.0, position_at(0.0)), [3.0, -4.0, 0.0])
 
@@ -51,8 +52,8 @@ def test_constant_wind_returns_a_copy():
 def shear_wind() -> ProfileWind:
     """Wind table with easy numbers: calm at the ground, stronger and turning above."""
     return ProfileWind(
-        altitudes=[0.0, 100.0, 1_000.0],
-        velocities=[[0.0, 0.0, 0.0], [0.0, 5.0, 0.0], [-3.0, 10.0, 1.0]],
+        altitudes=np.array([0.0, 100.0, 1_000.0]),
+        velocities=np.array([[0.0, 0.0, 0.0], [0.0, 5.0, 0.0], [-3.0, 10.0, 1.0]]),
     )
 
 
@@ -85,24 +86,39 @@ def test_profile_wind_ignores_time_and_horizontal_position():
 def test_profile_wind_interpolates_components_not_angles():
     """Wind turning from 350 to 010 degrees must pass through north (0 degrees)."""
     wind = ProfileWind(
-        altitudes=[0.0, 100.0],
-        velocities=[meteorological_wind(10.0, 350.0), meteorological_wind(10.0, 10.0)],
+        altitudes=np.array([0.0, 100.0]),
+        velocities=np.array(
+            [meteorological_wind(10.0, 350.0), meteorological_wind(10.0, 10.0)]
+        ),
     )
     halfway = wind(0.0, position_at(50.0))
     assert np.isclose(halfway[1], 0.0, atol=1e-12)  # no east component
     assert np.isclose(halfway[0], -10.0 * np.cos(np.radians(10.0)))  # from the north
 
 
+def test_profile_wind_plugs_into_point_mass():
+    """PointMass reads the wind at altitude = -z: moving with that wind, no drag."""
+    wind = shear_wind()
+    altitude = 550.0
+    air_velocity = wind(0.0, position_at(altitude))  # [-1.5, 7.5, 0.5]
+    body = PointMass(mass=1.0, drag_area=0.05, wind=wind)
+    state = np.concatenate([position_at(altitude), air_velocity])
+
+    accel = body.derivative(0.0, state)[3:6]
+
+    assert np.allclose(accel, [0.0, 0.0, GRAVITY])
+
+
 def test_profile_wind_rejects_unsorted_altitudes():
     with pytest.raises(ValueError):
-        ProfileWind(altitudes=[0.0, 100.0, 50.0], velocities=np.zeros((3, 3)))
+        ProfileWind(altitudes=np.array([0.0, 100.0, 50.0]), velocities=np.zeros((3, 3)))
 
 
 def test_profile_wind_rejects_wrong_velocity_shape():
     with pytest.raises(ValueError):
-        ProfileWind(altitudes=[0.0, 100.0], velocities=np.zeros((2, 2)))
+        ProfileWind(altitudes=np.array([0.0, 100.0]), velocities=np.zeros((2, 2)))
 
 
 def test_constant_wind_rejects_wrong_vector_size():
     with pytest.raises(ValueError):
-        ConstantWind([1.0, 2.0])
+        ConstantWind(np.array([1.0, 2.0]))
