@@ -1,0 +1,14 @@
+# Tool configuration for the project. pytest and ruff read it automatically,
+# both from the terminal and from VS Code.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.ruff.lint]
+# E/F: errors and pyflakes (the default), I: import order, UP: modern syntax,
+# B: likely bugs, RUF: ruff's own checks
+select = ["E", "F", "I", "UP", "B", "RUF"]

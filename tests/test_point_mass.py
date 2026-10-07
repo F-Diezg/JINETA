@@ -3,7 +3,8 @@
 import numpy as np
 import pytest
 
-from jineta.core.point_mass import GRAVITY, PointMass
+from jineta.core.environment import GRAVITY
+from jineta.core.point_mass import PointMass
 from jineta.core.simulation import run
 
 
@@ -130,3 +131,16 @@ def test_wind_model_receives_time_and_position():
     t, position = calls[0]
     assert t == 3.0
     assert np.array_equal(position, [10.0, 20.0, -300.0])
+
+
+@pytest.mark.parametrize(
+    "mass, drag_area",
+    [
+        (0.0, 0.01),  # zero mass
+        (-1.0, 0.01),  # negative mass
+        (1.0, -0.01),  # negative drag area
+    ],
+)
+def test_point_mass_rejects_invalid_parameters(mass, drag_area):
+    with pytest.raises(ValueError):
+        PointMass(mass=mass, drag_area=drag_area)

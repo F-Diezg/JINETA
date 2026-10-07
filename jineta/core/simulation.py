@@ -18,10 +18,23 @@ def run(
     stop: StopCondition | None = None,
     post_step: PostStep | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Integrate dy/dt = f(t, y) from t=0 with RK4.
+    """Integrate dy/dt = f(t, y) from t=0 to t_end with fixed-step RK4.
 
-    Returns (times, states), where states[i] is the state at times[i].
-    Stops early if stop(t, y) returns True.
+    Args:
+        f: derivative function, f(t, y) -> dy/dt.
+        y0: initial state at t = 0.
+        dt: time step [s].
+        t_end: final time [s]; the number of steps is round(t_end / dt).
+        stop: optional condition stop(t, y) -> bool, checked after every step. When
+            it returns True the run ends and that step is the last one returned (it
+            is the first sample past the event, not the exact event).
+        post_step: optional correction post_step(y) -> y, applied to the new state
+            after every step and before `stop` is checked. Use it for constraints
+            the integrator does not keep by itself, for example
+            rigid_body.normalize_attitude to keep the quaternion at unit norm.
+
+    Returns:
+        (times, states), where states[i] is the state at times[i].
     """
     n_steps = round(t_end / dt)
     times = np.zeros(n_steps + 1)

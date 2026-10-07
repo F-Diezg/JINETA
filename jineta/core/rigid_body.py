@@ -12,7 +12,8 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from jineta.core import quaternion
-from jineta.core.point_mass import GRAVITY
+from jineta.core.environment import GRAVITY
+from jineta.core.inertia import inertia_tensor
 
 # (t, state) -> (force in body axes [N], moment in body axes [N·m]).
 # Gravity is NOT included: the body adds it itself.
@@ -45,7 +46,9 @@ class RigidBody:
     inertia_inv: np.ndarray = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        self.inertia = np.asarray(self.inertia, dtype=float)
+        if self.mass <= 0.0:
+            raise ValueError("mass must be > 0")
+        self.inertia = inertia_tensor(self.inertia)
         self.inertia_inv = np.linalg.inv(self.inertia)
 
     def derivative(self, t: float, state: np.ndarray) -> np.ndarray:

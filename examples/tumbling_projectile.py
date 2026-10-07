@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from jineta.core import quaternion
-from jineta.core.point_mass import GRAVITY
+from jineta.core.environment import GRAVITY
 from jineta.core.rigid_body import RigidBody, normalize_attitude
 from jineta.core.simulation import run
 
@@ -49,7 +49,7 @@ for i in range(
     nose = quaternion.to_matrix(states[i, 6:10]) @ np.array([1.0, 0.0, 0.0])
     start = np.array([states[i, 0], -states[i, 2]])
     end = start + (0.04 * states[:, 0].max() * np.array([nose[0], -nose[2]]))
-    ax_path.plot(*zip(start, end), color="tab:red", linewidth=1.5)
+    ax_path.plot(*zip(start, end, strict=True), color="tab:red", linewidth=1.5)
 ax_path.plot([], [], color="tab:red", label="Nose direction")
 ax_path.set_xlabel("Downrange distance [m]")
 ax_path.set_ylabel("Altitude [m]")

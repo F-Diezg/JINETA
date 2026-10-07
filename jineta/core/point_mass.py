@@ -4,28 +4,17 @@ Reference frame: NED (North-East-Down). z points DOWN, so altitude = -z
 and gravity acts in the +z direction.
 """
 
-from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
 
-GRAVITY = 9.80665  # standard gravity [m/s^2]
-
-# Air density model: altitude [m] -> density [kg/m^3]
-DensityModel = Callable[[float], float]
-
-# Wind model: (time [s], position NED [m]) -> wind velocity NED [m/s]
-WindModel = Callable[[float, np.ndarray], np.ndarray]
-
-
-def sea_level_density(altitude: float) -> float:
-    """Constant density (ISA sea level), the default. See campo.atmosphere for ISA."""
-    return 1.225
-
-
-def no_wind(t: float, position: np.ndarray) -> np.ndarray:
-    """Still air: zero wind at every time and place, the default."""
-    return np.zeros(3)
+from jineta.core.environment import (
+    GRAVITY,
+    DensityModel,
+    WindModel,
+    no_wind,
+    sea_level_density,
+)
 
 
 @dataclass
@@ -40,6 +29,12 @@ class PointMass:
     drag_area: float  # Cd * A [m^2]; 0 means no drag (vacuum)
     density: DensityModel = sea_level_density
     wind: WindModel = no_wind
+
+    def __post_init__(self) -> None:
+        if self.mass <= 0.0:
+            raise ValueError("mass must be > 0")
+        if self.drag_area < 0.0:
+            raise ValueError("drag_area must be >= 0")
 
     def derivative(self, t: float, state: np.ndarray) -> np.ndarray:
         """Return d(state)/dt = [velocity, acceleration]."""

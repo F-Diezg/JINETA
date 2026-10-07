@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from jineta.core import quaternion
+from jineta.core.inertia import inertia_tensor
 
 # Torque model: (t, state) -> torque in body axes [N·m]
 TorqueModel = Callable[[float, np.ndarray], np.ndarray]
@@ -30,7 +31,7 @@ class RotatingBody:
     inertia_inv: np.ndarray = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        self.inertia = np.asarray(self.inertia, dtype=float)
+        self.inertia = inertia_tensor(self.inertia)
         self.inertia_inv = np.linalg.inv(self.inertia)
 
     def derivative(self, t: float, state: np.ndarray) -> np.ndarray:

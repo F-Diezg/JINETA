@@ -4,7 +4,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from jineta.campo.atmosphere import isa_density
-from jineta.core.point_mass import PointMass, sea_level_density
+from jineta.core.environment import sea_level_density
+from jineta.core.point_mass import PointMass
 from jineta.core.simulation import run
 
 

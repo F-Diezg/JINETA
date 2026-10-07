@@ -11,7 +11,8 @@ from jineta.campo.wind import (
     ProfileWind,
     meteorological_wind,
 )
-from jineta.core.point_mass import GRAVITY, PointMass
+from jineta.core.environment import GRAVITY
+from jineta.core.point_mass import PointMass
 
 
 def position_at(altitude: float) -> np.ndarray:
@@ -66,7 +67,7 @@ def shear_wind() -> ProfileWind:
 
 def test_profile_wind_returns_table_values_at_table_altitudes():
     wind = shear_wind()
-    for altitude, velocity in zip(wind.altitudes, wind.velocities):
+    for altitude, velocity in zip(wind.altitudes, wind.velocities, strict=True):
         assert np.allclose(wind(0.0, position_at(altitude)), velocity)
 
 

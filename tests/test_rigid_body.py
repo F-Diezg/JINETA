@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from jineta.core import quaternion
-from jineta.core.point_mass import GRAVITY
+from jineta.core.environment import GRAVITY
 from jineta.core.rigid_body import RigidBody, normalize_attitude
 from jineta.core.simulation import run
 
@@ -87,3 +87,9 @@ def test_free_spin_does_not_affect_center_of_mass_fall():
     _, s_tumbling = run(body.derivative, tumbling, dt=0.01, t_end=5.0)
 
     assert np.allclose(s_still[:, 0:6], s_tumbling[:, 0:6], atol=1e-9)
+
+
+@pytest.mark.parametrize("mass", [0.0, -2.0])
+def test_rigid_body_rejects_non_positive_mass(mass):
+    with pytest.raises(ValueError):
+        RigidBody(mass=mass, inertia=np.eye(3))

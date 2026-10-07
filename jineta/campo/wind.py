@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from jineta.core.point_mass import WindModel
+from jineta.core.environment import WindModel
 
 
 def meteorological_wind(speed: float, direction_from_deg: float) -> np.ndarray:

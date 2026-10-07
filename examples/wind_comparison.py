@@ -24,7 +24,7 @@ directions = np.interp(heights, [0.0, 500.0], [240.0, 270.0])  # veering with he
 shear = ProfileWind(
     altitudes=heights,
     velocities=np.array(
-        [meteorological_wind(s, d) for s, d in zip(speeds, directions)]
+        [meteorological_wind(s, d) for s, d in zip(speeds, directions, strict=True)]
     ),
 )
 wind_aloft = shear(0.0, np.array([0.0, 0.0, -500.0]))  # wind at the release altitude

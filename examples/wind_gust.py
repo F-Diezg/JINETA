@@ -30,7 +30,7 @@ cases = [
 for label, wind in cases:
     body = PointMass(mass=1.0, drag_area=0.05, wind=wind)
     times, states = run(body.derivative, y0, dt=0.01, t_end=120.0, stop=hit_ground)
-    wind_east = [wind(t, s[0:3])[1] for t, s in zip(times, states)]
+    wind_east = [wind(t, s[0:3])[1] for t, s in zip(times, states, strict=True)]
     print(
         f"{label:22s} drift = {states[-1, 1]:6.1f} m   "
         f"peak east speed = {states[:, 4].max():5.2f} m/s   "
