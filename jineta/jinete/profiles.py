@@ -24,6 +24,11 @@ def flu_to_frd(vector: npt.ArrayLike) -> np.ndarray:
 # - Inertia: base_link only. The rotors would add 1-3 % (parallel-axis terms),
 #   below the uncertainty of the published values.
 # - Rotor order = PX4 motor numbering (motorNumber 0-3). Positions given in FLU.
+# - Rotor drag: rotorDragCoefficient of the same file.
+# - Body drag: the Gazebo model has none. CdA = mass / B with B = 100 kg/m^2, the
+#   default ballistic coefficient of the PX4 EKF2 drag model (EKF2_BCOEF_X/Y): a
+#   generic multirotor value, not measured on the Iris. There is no open value for
+#   the vertical axis; the same CdA is used as a placeholder.
 IRIS = MultirotorParams(
     mass=1.52,
     inertia=np.diag([0.029125, 0.029125, 0.055225]),
@@ -36,4 +41,6 @@ IRIS = MultirotorParams(
     thrust_coefficient=5.84e-6,
     moment_constant=0.06,
     max_rotor_speed=1100.0,
+    rotor_drag_coefficient=0.000175,
+    body_drag_area=np.full(3, 1.52 / 100.0),
 )
