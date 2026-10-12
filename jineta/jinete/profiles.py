@@ -8,6 +8,7 @@ from YAML files into the same dataclasses.
 import numpy as np
 import numpy.typing as npt
 
+from jineta.jinete.control import RateGains
 from jineta.jinete.multirotor import MultirotorParams, Rotor
 
 
@@ -43,4 +44,15 @@ IRIS = MultirotorParams(
     max_rotor_speed=1100.0,
     rotor_drag_coefficient=0.000175,
     body_drag_area=np.full(3, 1.52 / 100.0),
+)
+
+
+# Rate-loop gains for the Iris, chosen here (PX4 gains are in the normalised units of
+# its own mixer and do not transfer). Roll and pitch: time constant 1/kp = 50 ms and
+# a critically damped PI (ki = kp^2 / 4). Yaw: 1/kp = 0.2 s, because the reaction
+# torques give little yaw authority (about 0.8 N·m at hover thrust, ~15 rad/s^2).
+IRIS_RATE_GAINS = RateGains(
+    kp=[20.0, 20.0, 5.0],
+    ki=[100.0, 100.0, 6.25],
+    integral_limit=[10.0, 10.0, 2.0],
 )
