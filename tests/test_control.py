@@ -18,6 +18,13 @@ NO_ROTOR_DRAG = dataclasses.replace(IRIS, rotor_drag_coefficient=0.0)
 WEIGHT = IRIS.mass * GRAVITY
 DT = 0.004  # 250 Hz
 HOVER = np.array([0.0, 0.0, -100.0, 0, 0, 0, 1.0, 0, 0, 0, 0, 0, 0])
+# Critically damped PI (ki = kp^2 / 4): the integral tests check the mechanism, not
+# the tuning of the Iris profile.
+CRITICAL_PI = RateGains(
+    kp=IRIS_RATE_GAINS.kp,
+    ki=IRIS_RATE_GAINS.kp**2 / 4,
+    integral_limit=IRIS_RATE_GAINS.integral_limit,
+)
 
 
 def fly(controller, rate_command, t_end, quad=None):
@@ -95,7 +102,7 @@ def test_p_only_leaves_a_steady_error_under_a_disturbance():
 
 def test_integral_removes_the_steady_error():
     disturbance = np.array([0.05, 0.0, 0.0])
-    controller = RateController(NO_ROTOR_DRAG, IRIS_RATE_GAINS, DT)
+    controller = RateController(NO_ROTOR_DRAG, CRITICAL_PI, DT)
     _, states = fly(controller, np.zeros(3), 3.0, disturbed_quad(disturbance))
     assert abs(states[-1, 10]) < 1e-6
 

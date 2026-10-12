@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import numpy.typing as npt
 
+from jineta.core import quaternion
 from jineta.jinete.multirotor import MultirotorParams
 
 
@@ -85,3 +86,42 @@ class RateController:
         moment = inertia @ angular_acceleration + np.cross(omega, inertia @ omega)
         thrusts = self.params.rotor_thrusts([thrust_command, *moment])
         return self.params.rotor_speeds_for(thrusts)
+
+
+@dataclass(frozen=True)
+class AttitudeGains:
+    """Gains of the attitude loop, one value per axis [roll, pitch, yaw].
+
+    - kp [1/s]: rate command = -kp * attitude error (rotation vector). Over a rate
+      loop with P gain kp_rate, each axis follows s^2 + kp_rate s + kp_rate kp = 0;
+      kp = kp_rate / 4 gives critical damping.
+    - rate_limit [rad/s]: the rate command is clipped to +-this.
+    """
+
+    kp: np.ndarray
+    rate_limit: np.ndarray
+
+    def __post_init__(self) -> None:
+        for name in ("kp", "rate_limit"):
+            object.__setattr__(self, name, _axis_gains(getattr(self, name), name))
+
+
+@dataclass
+class AttitudeController:
+    """Attitude loop: commanded attitude quaternion -> body-rate command.
+
+    The error is q_err = conj(q_cmd) ⊗ q: the rotation that takes the commanded
+    attitude to the actual one, expressed in body axes. As a rotation vector theta
+    (the short way, < 180 degrees), the body rates change it at d(theta)/dt ~ omega,
+    so omega_cmd = -kp * theta turns the body back towards the command.
+    """
+
+    gains: AttitudeGains
+
+    def update(self, attitude_command: np.ndarray, state: np.ndarray) -> np.ndarray:
+        """Body-rate command [rad/s] for the commanded attitude (quaternion
+        BODY -> NED), given the 13-element state."""
+        error = quaternion.multiply(quaternion.conjugate(attitude_command), state[6:10])
+        rate_command = -self.gains.kp * quaternion.to_rotation_vector(error)
+        limit = self.gains.rate_limit
+        return np.clip(rate_command, -limit, limit)

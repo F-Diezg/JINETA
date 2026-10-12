@@ -8,7 +8,7 @@ from YAML files into the same dataclasses.
 import numpy as np
 import numpy.typing as npt
 
-from jineta.jinete.control import RateGains
+from jineta.jinete.control import AttitudeGains, RateGains
 from jineta.jinete.multirotor import MultirotorParams, Rotor
 
 
@@ -47,12 +47,28 @@ IRIS = MultirotorParams(
 )
 
 
-# Rate-loop gains for the Iris, chosen here (PX4 gains are in the normalised units of
-# its own mixer and do not transfer). Roll and pitch: time constant 1/kp = 50 ms and
-# a critically damped PI (ki = kp^2 / 4). Yaw: 1/kp = 0.2 s, because the reaction
-# torques give little yaw authority (about 0.8 N·m at hover thrust, ~15 rad/s^2).
+# Rate-loop gains for the Iris. kp chosen here (PX4 gains are in the normalised units
+# of its own mixer and do not transfer): roll and pitch time constant 1/kp = 50 ms;
+# yaw 1/kp = 0.2 s, because the reaction torques give little yaw authority (about
+# 0.8 N·m at hover thrust, ~15 rad/s^2). ki from the PX4 default ratios I/P, which
+# are unit-free in that sense and do transfer: MC_ROLLRATE_I / MC_ROLLRATE_P =
+# 0.2 / 0.15 and MC_YAWRATE_I / MC_YAWRATE_P = 0.1 / 0.2 [1/s]. A stronger integral
+# (critical damping of the rate loop alone, ki = kp^2 / 4) left a slow tail in the
+# attitude response once the loops were cascaded.
 IRIS_RATE_GAINS = RateGains(
     kp=[20.0, 20.0, 5.0],
-    ki=[100.0, 100.0, 6.25],
+    ki=[20.0 * 0.2 / 0.15, 20.0 * 0.2 / 0.15, 5.0 * 0.1 / 0.2],
     integral_limit=[10.0, 10.0, 2.0],
+)
+
+# Attitude-loop gains for the Iris: kp = kp_rate / 4 gives a critically damped
+# cascade (natural frequency kp_rate / 2: 10 rad/s roll and pitch, 2.5 rad/s yaw)
+# when the rate loop is P only; with the PI rate loop the tests still see no
+# overshoot in roll and pitch. Same order as the PX4 defaults, which are in the
+# same units (MC_ROLL_P = 4.0, MC_YAW_P = 2.8 [1/s]). Rate limits: 3.5 rad/s
+# (~200 deg/s; PX4 MC_ROLLRATE_MAX is 220 deg/s) on roll and pitch, 1.5 rad/s on
+# yaw (little yaw authority).
+IRIS_ATTITUDE_GAINS = AttitudeGains(
+    kp=[5.0, 5.0, 1.25],
+    rate_limit=[3.5, 3.5, 1.5],
 )

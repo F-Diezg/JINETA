@@ -31,6 +31,28 @@ def from_axis_angle(axis: npt.ArrayLike, angle: float) -> np.ndarray:
     return np.concatenate([[np.cos(half)], np.sin(half) * axis])
 
 
+def conjugate(q: np.ndarray) -> np.ndarray:
+    """Conjugate [w, -x, -y, -z]: for a unit quaternion, the inverse rotation."""
+    return np.array([q[0], -q[1], -q[2], -q[3]])
+
+
+def to_rotation_vector(q: np.ndarray) -> np.ndarray:
+    """Rotation vector angle * axis [rad] of a unit quaternion (inverse of
+    from_axis_angle), always the short way: angle in [0, pi].
+
+    q and -q describe the same attitude (the double cover). If w < 0, q is the
+    "long way round" (more than 180 degrees), so it is flipped to -q first.
+    """
+    if q[0] < 0.0:
+        q = -q
+    vector = q[1:4]
+    sin_half = np.linalg.norm(vector)
+    if sin_half < 1e-12:
+        return 2.0 * vector  # small angle: angle * axis ~ 2 * vector part
+    angle = 2.0 * np.arctan2(sin_half, q[0])
+    return angle * vector / sin_half
+
+
 def normalize(q: np.ndarray) -> np.ndarray:
     """Return q scaled to unit norm (removes numerical drift)."""
     return q / np.linalg.norm(q)
