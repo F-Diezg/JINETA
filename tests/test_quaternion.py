@@ -42,7 +42,6 @@ def test_rotation_vector_of_a_tiny_rotation():
     assert np.array_equal(quaternion.to_rotation_vector(IDENTITY), np.zeros(3))
 
 
-
 def test_from_matrix_round_trip():
     rng = np.random.default_rng(seed=0)
     for _ in range(100):

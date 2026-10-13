@@ -69,6 +69,7 @@ def to_matrix(q: np.ndarray) -> np.ndarray:
         ]
     )
 
+
 def from_matrix(R: np.ndarray) -> np.ndarray:
     """Unit quaternion (w >= 0) of a rotation matrix R (body -> NED); the inverse
     of to_matrix.
@@ -111,6 +112,7 @@ def from_matrix(R: np.ndarray) -> np.ndarray:
         ]
     q = normalize(np.array(q))
     return q if q[0] >= 0.0 else -q
+
 
 def derivative(q: np.ndarray, omega_body: np.ndarray) -> np.ndarray:
     """Time derivative of q given the angular velocity in body axes [rad/s]."""

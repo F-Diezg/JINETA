@@ -129,7 +129,6 @@ class AttitudeController:
         return np.clip(rate_command, -limit, limit)
 
 
-
 @dataclass(frozen=True)
 class VelocityGains:
     """Gains and limits of the velocity loop. Per-axis values are [north, east, down].
