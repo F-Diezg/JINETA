@@ -69,6 +69,48 @@ def to_matrix(q: np.ndarray) -> np.ndarray:
         ]
     )
 
+def from_matrix(R: np.ndarray) -> np.ndarray:
+    """Unit quaternion (w >= 0) of a rotation matrix R (body -> NED); the inverse
+    of to_matrix.
+
+    Uses the largest of w, x, y, z to divide by (Shepperd's method), so it stays
+    accurate for every rotation, including 180 degrees where w = 0.
+    """
+    trace = R[0, 0] + R[1, 1] + R[2, 2]
+    if trace > 0.0:
+        s = 2.0 * np.sqrt(1.0 + trace)  # s = 4w
+        q = [
+            s / 4,
+            (R[2, 1] - R[1, 2]) / s,
+            (R[0, 2] - R[2, 0]) / s,
+            (R[1, 0] - R[0, 1]) / s,
+        ]
+    elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
+        s = 2.0 * np.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2])  # s = 4x
+        q = [
+            (R[2, 1] - R[1, 2]) / s,
+            s / 4,
+            (R[0, 1] + R[1, 0]) / s,
+            (R[0, 2] + R[2, 0]) / s,
+        ]
+    elif R[1, 1] > R[2, 2]:
+        s = 2.0 * np.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2])  # s = 4y
+        q = [
+            (R[0, 2] - R[2, 0]) / s,
+            (R[0, 1] + R[1, 0]) / s,
+            s / 4,
+            (R[1, 2] + R[2, 1]) / s,
+        ]
+    else:
+        s = 2.0 * np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1])  # s = 4z
+        q = [
+            (R[1, 0] - R[0, 1]) / s,
+            (R[0, 2] + R[2, 0]) / s,
+            (R[1, 2] + R[2, 1]) / s,
+            s / 4,
+        ]
+    q = normalize(np.array(q))
+    return q if q[0] >= 0.0 else -q
 
 def derivative(q: np.ndarray, omega_body: np.ndarray) -> np.ndarray:
     """Time derivative of q given the angular velocity in body axes [rad/s]."""

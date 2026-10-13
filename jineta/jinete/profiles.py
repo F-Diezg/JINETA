@@ -8,7 +8,12 @@ from YAML files into the same dataclasses.
 import numpy as np
 import numpy.typing as npt
 
-from jineta.jinete.control import AttitudeGains, RateGains
+from jineta.jinete.control import (
+    AttitudeGains,
+    MultirotorGains,
+    RateGains,
+    VelocityGains,
+)
 from jineta.jinete.multirotor import MultirotorParams, Rotor
 
 
@@ -71,4 +76,24 @@ IRIS_RATE_GAINS = RateGains(
 IRIS_ATTITUDE_GAINS = AttitudeGains(
     kp=[5.0, 5.0, 1.25],
     rate_limit=[3.5, 3.5, 1.5],
+)
+
+
+# Velocity-loop gains for the Iris: the PX4 defaults, which use the same units
+# (acceleration per velocity error): MPC_XY_VEL_P_ACC = 1.8, MPC_XY_VEL_I_ACC = 0.4,
+# MPC_Z_VEL_P_ACC = 4.0, MPC_Z_VEL_I_ACC = 2.0, MPC_TILTMAX_AIR = 45 deg. The
+# derivative term of PX4 (MPC_XY_VEL_D_ACC) is left out. Integral limits chosen
+# here, 5 m/s^2: horizontally the drag at a 10 m/s cruise already needs ~3.6 m/s^2,
+# vertically the thrust lost at 3000 m (ISA density 74 % of sea level) ~3.4 m/s^2.
+IRIS_VELOCITY_GAINS = VelocityGains(
+    kp=[1.8, 1.8, 4.0],
+    ki=[0.4, 0.4, 2.0],
+    integral_limit=[5.0, 5.0, 5.0],
+    max_tilt=np.radians(45.0),
+)
+
+IRIS_GAINS = MultirotorGains(
+    rate=IRIS_RATE_GAINS,
+    attitude=IRIS_ATTITUDE_GAINS,
+    velocity=IRIS_VELOCITY_GAINS,
 )
