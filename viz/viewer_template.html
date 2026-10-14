@@ -1,0 +1,923 @@
+<title>Jineta Engagement Viewer</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Noto+Serif+JP:wght@900&display=swap">
+<style>
+/* Layout: full-bleed 3D scene; HUD panels pinned to the corners, timeline docked at the bottom.
+   Two deliberate dark looks (a cyan tactical display and an amber CRT), switched with the
+   Palette buttons; no light theme. Every colour comes from these tokens, the 3D scene too. */
+:root {
+  color-scheme: dark;
+  --bg: #04090f;          /* night sky of the display */
+  --panel: rgba(6, 18, 28, 0.78);
+  --line: #1d4a5c;        /* panel rules, grid */
+  --ink: #d3ecf5;         /* HUD text */
+  --dim: #6f93a3;         /* labels, secondary text */
+  --friendly: #46c2ff;    /* interceptor */
+  --hostile: #ff5b3d;     /* threat */
+  --event: #ffc24a;       /* closest approach, events */
+  --good: #63e6a4;        /* intercept */
+  --friendly-wash: rgba(70, 194, 255, 0.10);
+  --hostile-wash: rgba(255, 91, 61, 0.12);
+  --good-wash: rgba(99, 230, 164, 0.12);
+  --tag-bg: rgba(4, 9, 15, 0.55);
+  --scan: rgba(120, 200, 230, 0.035);
+  --vignette: linear-gradient(transparent, transparent);
+  --glow: none;
+  --font-title: "Chakra Petch", "Bahnschrift", "Arial Narrow", sans-serif;
+  --title-weight: 700;
+  --font-display: "Chakra Petch", "Bahnschrift", "Arial Narrow", sans-serif;
+  --font-data: "IBM Plex Mono", "Consolas", "Menlo", monospace;
+  --gutter-l: max(16px, env(safe-area-inset-left, 0px));
+  --gutter-r: max(16px, env(safe-area-inset-right, 0px));
+}
+/* Amber CRT: phosphor amber on warm black, alarm red for the threat, green for events. */
+:root[data-palette="amber"] {
+  --bg: #0b0603;
+  --panel: rgba(20, 9, 3, 0.84);
+  --line: #5c300c;
+  --ink: #ffb347;
+  --dim: #b0662a;
+  --friendly: #ffa21f;
+  --hostile: #ff3326;
+  --event: #c8ff6a;
+  --good: #6dff8e;
+  --friendly-wash: rgba(255, 162, 31, 0.13);
+  --hostile-wash: rgba(255, 51, 38, 0.16);
+  --good-wash: rgba(109, 255, 142, 0.12);
+  --tag-bg: rgba(11, 6, 3, 0.6);
+  --scan: rgba(255, 150, 40, 0.07);
+  --vignette: radial-gradient(ellipse at center, transparent 55%, rgba(0, 0, 0, 0.6) 100%);
+  --glow: 0 0 6px rgba(255, 150, 40, 0.45);
+  --font-title: "Noto Serif JP", "Yu Mincho", "Times New Roman", serif;
+  --title-weight: 900;
+}
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-data);
+  font-size: 13px;
+  text-shadow: var(--glow);
+  overflow: hidden;
+  padding-left: var(--gutter-l);
+  padding-right: var(--gutter-r);
+}
+#stage { position: fixed; inset: 0; }
+#stage canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+#tags { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+
+/* scanlines: a faint display texture over the scene */
+#stage::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: var(--vignette), repeating-linear-gradient(to bottom, var(--scan) 0 1px, transparent 1px 3px);
+}
+
+.hud {
+  position: fixed; z-index: 2;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  backdrop-filter: blur(3px);
+}
+.hud::before, .hud::after {   /* corner ticks of a display frame */
+  content: ""; position: absolute; width: 8px; height: 8px; border: 1px solid var(--friendly); opacity: 0.8;
+}
+.hud::before { top: -1px; left: -1px; border-right: 0; border-bottom: 0; }
+.hud::after { bottom: -1px; right: -1px; border-left: 0; border-top: 0; }
+
+.eyebrow {
+  font-family: var(--font-display); font-weight: 600; font-size: 11px;
+  letter-spacing: 0.22em; text-transform: uppercase; color: var(--dim);
+}
+
+/* --- top left: title, scenario selector, event log --- */
+#info {
+  top: calc(12px + env(safe-area-inset-top, 0px));
+  left: var(--gutter-l);
+  width: min(330px, calc(100vw - var(--gutter-l) - var(--gutter-r)));
+  padding: 14px 16px 12px;
+  display: grid; gap: 10px;
+}
+#info h1 {
+  margin: 0; font-family: var(--font-title); font-weight: var(--title-weight); font-size: 22px;
+  letter-spacing: 0.08em; text-transform: uppercase; line-height: 1.05; text-wrap: balance;
+}
+#info h1 span { color: var(--friendly); }
+.tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.tab {
+  font-family: var(--font-display); font-weight: 600; font-size: 12px; letter-spacing: 0.12em;
+  text-transform: uppercase; text-align: left;
+  color: var(--dim); background: transparent; border: 1px solid var(--line);
+  padding: 7px 9px 6px; cursor: pointer; display: grid; gap: 2px;
+}
+.tab small { font-family: var(--font-data); font-weight: 400; font-size: 10.5px; letter-spacing: 0; text-transform: none; }
+.tab[aria-selected="true"] { color: var(--ink); border-color: var(--friendly); background: var(--friendly-wash); }
+.tab:hover { color: var(--ink); }
+.tab:focus-visible, button:focus-visible, input:focus-visible { outline: 1px solid var(--event); outline-offset: 2px; }
+#summary { margin: 0; color: var(--ink); line-height: 1.5; font-size: 12px; }
+#summary b { color: var(--event); font-weight: 500; }
+#log { list-style: none; margin: 0; padding: 8px 0 0; border-top: 1px solid var(--line); display: grid; gap: 4px; }
+#log li { display: grid; grid-template-columns: 62px 1fr; gap: 8px; color: var(--dim); font-size: 11.5px; line-height: 1.35; transition: color 0.2s; }
+#log li.past { color: var(--ink); }
+#log li.past.key { color: var(--event); }
+#log li time { font-variant-numeric: tabular-nums; }
+
+/* --- top right: telemetry --- */
+#telemetry {
+  top: calc(12px + env(safe-area-inset-top, 0px));
+  right: var(--gutter-r);
+  width: 236px; padding: 12px 14px;
+  display: grid; gap: 8px;
+}
+#clock { font-family: var(--font-display); font-weight: 600; font-size: 30px; letter-spacing: 0.04em; line-height: 1; font-variant-numeric: tabular-nums; }
+#status {
+  font-family: var(--font-title); font-weight: var(--title-weight); font-size: 13px; letter-spacing: 0.2em;
+  padding: 4px 8px 3px; border: 1px solid currentColor; justify-self: start; color: var(--dim);
+}
+#status[data-state="standby"] { color: var(--event); }
+#status[data-state="closing"] { color: var(--friendly); }
+#status[data-state="opening"] { color: var(--hostile); }
+#status[data-state="intercept"] { color: var(--good); background: var(--good-wash); }
+#status[data-state="miss"] { color: var(--hostile); background: var(--hostile-wash); }
+dl { margin: 0; display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; }
+dt { color: var(--dim); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; align-self: baseline; }
+dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; font-size: 13px; align-self: baseline; }
+dd small { color: var(--dim); font-size: 10.5px; }
+dd.f { color: var(--friendly); } dd.h { color: var(--hostile); }
+.group { border-top: 1px solid var(--line); padding-top: 7px; }
+.group .eyebrow { margin-bottom: 4px; display: block; }
+
+/* --- bottom: timeline --- */
+#timeline {
+  left: var(--gutter-l); right: var(--gutter-r);
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  padding: 10px 14px 10px;
+  display: grid; gap: 8px;
+}
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.btns { display: flex; gap: 4px; }
+button.ctl {
+  font-family: var(--font-display); font-weight: 600; font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--ink); background: transparent; border: 1px solid var(--line);
+  min-width: 34px; height: 30px; padding: 0 9px; cursor: pointer;
+}
+button.ctl:hover { border-color: var(--friendly); }
+button.ctl[aria-pressed="true"] { border-color: var(--friendly); color: var(--friendly); background: var(--friendly-wash); }
+#play { min-width: 74px; color: var(--friendly); border-color: var(--friendly); }
+.spacer { flex: 1 1 auto; }
+#hint { color: var(--dim); font-size: 11px; }
+#track { position: relative; height: 76px; cursor: pointer; }
+#spark { position: absolute; inset: 0; width: 100%; height: 100%; }
+#scrub {
+  position: absolute; left: 0; right: 0; bottom: -4px; width: 100%; margin: 0;
+  appearance: none; -webkit-appearance: none; background: transparent; height: 16px; cursor: pointer;
+}
+#scrub::-webkit-slider-runnable-track { height: 2px; background: var(--line); }
+#scrub::-moz-range-track { height: 2px; background: var(--line); }
+#scrub::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; margin-top: -5px; background: var(--friendly); transform: rotate(45deg); border: 0; }
+#scrub::-moz-range-thumb { width: 10px; height: 10px; background: var(--friendly); transform: rotate(45deg); border: 0; border-radius: 0; }
+#note { color: var(--dim); font-size: 10.5px; }
+
+/* --- labels projected from the 3D scene --- */
+.tag {
+  position: absolute; left: 0; top: 0; white-space: nowrap;
+  font-family: var(--font-display); font-weight: 600; font-size: 11px; letter-spacing: 0.14em;
+  padding: 2px 6px 1px; border-left: 2px solid currentColor;
+  background: var(--tag-bg);
+  transform: translate(14px, -50%);
+  will-change: transform;
+}
+.tag small { display: block; font-family: var(--font-data); font-weight: 400; font-size: 10.5px; letter-spacing: 0; color: var(--ink); }
+.tag.f { color: var(--friendly); } .tag.h { color: var(--hostile); } .tag.e { color: var(--event); }
+.tag.n { color: var(--dim); border: 0; background: none; transform: translate(-50%, -50%); font-size: 14px; }
+.tag.los { color: var(--ink); border: 0; background: none; font-family: var(--font-data); font-weight: 400; letter-spacing: 0; opacity: 0.85; transform: translate(-50%, -140%); }
+
+#error { position: fixed; inset: 0; display: grid; place-items: center; padding: 24px; text-align: center; color: var(--dim); z-index: 5; }
+
+@media (max-width: 760px) {
+  #info { width: auto; right: var(--gutter-r); padding: 10px 12px; gap: 8px; }
+  #info h1 { font-size: 17px; }
+  #summary, #log { display: none; }
+  #telemetry {
+    top: auto; right: var(--gutter-r); left: var(--gutter-l); width: auto;
+    bottom: calc(225px + env(safe-area-inset-bottom, 0px));
+    grid-template-columns: auto 1fr; align-items: center; padding: 8px 12px; gap: 6px 12px;
+  }
+  #clock { font-size: 22px; }
+  #telemetry .group { display: none; }
+  #telemetry dl { grid-column: 1 / -1; grid-template-columns: repeat(2, auto 1fr); }
+  #hint, #note { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { #log li { transition: none; } }
+</style>
+
+<div id="stage" aria-label="3D view of the engagement. Drag to orbit, scroll to zoom, right-drag to pan."></div>
+<div id="tags"></div>
+
+<section id="info" class="hud" aria-label="Scenario">
+  <div class="eyebrow">Jineta · phase 7 MVP · pure pursuit</div>
+  <h1>Engagement <span>viewer</span></h1>
+  <div class="tabs" role="tablist" id="tabs"></div>
+  <p id="summary"></p>
+  <ol id="log"></ol>
+</section>
+
+<section id="telemetry" class="hud" aria-label="Telemetry" aria-live="off">
+  <div id="clock">T+00.00</div>
+  <div id="status" data-state="closing">CLOSING</div>
+  <dl>
+    <dt>Range</dt><dd id="range">—</dd>
+    <dt>Closure</dt><dd id="closure">—</dd>
+  </dl>
+  <div class="group">
+    <span class="eyebrow">Interceptor · Iris</span>
+    <dl>
+      <dt>Speed</dt><dd class="f" id="ispeed">—</dd>
+      <dt>Ordered</dt><dd id="icmd">—</dd>
+      <dt>Altitude</dt><dd id="ialt">—</dd>
+      <dt>Tilt</dt><dd id="itilt">—</dd>
+    </dl>
+  </div>
+  <div class="group">
+    <span class="eyebrow">Threat</span>
+    <dl>
+      <dt>Speed</dt><dd class="h" id="tspeed">—</dd>
+      <dt>Altitude</dt><dd id="talt">—</dd>
+    </dl>
+  </div>
+</section>
+
+<section id="timeline" class="hud" aria-label="Timeline">
+  <div class="row">
+    <div class="btns">
+      <button class="ctl" id="back" type="button" title="Back 1 s (←)" aria-label="Back one second">‹‹</button>
+      <button class="ctl" id="play" type="button" title="Play / pause (space)">Play</button>
+      <button class="ctl" id="fwd" type="button" title="Forward 1 s (→)" aria-label="Forward one second">››</button>
+    </div>
+    <div class="btns" role="group" aria-label="Playback speed" id="speeds"></div>
+    <div class="btns" role="group" aria-label="Camera">
+      <button class="ctl" id="cam-overview" type="button" title="Overview (O)">Overview</button>
+      <button class="ctl" id="cam-top" type="button" title="Top view (T)">Top</button>
+      <button class="ctl" id="cam-follow" type="button" aria-pressed="false" title="Follow the interceptor (F)">Follow</button>
+    </div>
+    <div class="btns" role="group" aria-label="Palette">
+      <button class="ctl" id="pal-tac" type="button" aria-pressed="true" title="Cyan tactical palette (P)">Tac</button>
+      <button class="ctl" id="pal-amber" type="button" aria-pressed="false" title="Amber CRT palette (P)">Amber</button>
+    </div>
+    <span class="spacer"></span>
+    <span id="hint">Drag: orbit · Wheel: zoom · Right-drag: pan · Space · ← → · P: palette</span>
+  </div>
+  <div id="track">
+    <canvas id="spark" aria-hidden="true"></canvas>
+    <input id="scrub" type="range" min="0" max="1000" step="1" value="0" aria-label="Engagement time">
+  </div>
+  <div id="note">Range, log scale. Vehicle icons are enlarged to stay visible; tracks, ranges and times are simulation output (6-DOF, 100 Hz, shown at 25 Hz and interpolated).</div>
+</section>
+
+<div id="error" hidden></div>
+
+<script type="application/json" id="engagement-data">"__ENGAGEMENT_DATA__"</script>
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { Line2 } from "three/addons/lines/Line2.js";
+import { LineMaterial } from "three/addons/lines/LineMaterial.js";
+import { LineGeometry } from "three/addons/lines/LineGeometry.js";
+
+const DATA = JSON.parse(document.getElementById("engagement-data").textContent);
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const readColors = () => ({
+  bg: css("--bg"), line: css("--line"), ink: css("--ink"), dim: css("--dim"),
+  friendly: css("--friendly"), hostile: css("--hostile"), event: css("--event"), good: css("--good"),
+});
+
+// Palette: the CSS tokens are the single source of colour. The 3D materials register
+// which token they use, so switching palettes recolours the scene without rebuilding it.
+let palette = "tac";
+try { if (localStorage.getItem("jineta-palette") === "amber") palette = "amber"; } catch (e) { /* storage off */ }
+document.documentElement.dataset.palette = palette;
+let COLOR = readColors();
+const paints = [];
+function tint(material, key) { paints.push([material, key]); material.color.set(COLOR[key]); return material; }
+
+// ---------------------------------------------------------------------------------
+// Frames. The data is NED (x North, y East, z Down). three.js is y-up and
+// right-handed, so a NED vector maps to (East, Up, -North) = C · ned, with
+//   C = [[0, 1, 0], [0, 0, -1], [-1, 0, 0]]   (det = +1, a proper rotation).
+// The vehicle models are built in body axes (x forward, y right, z down), so
+// body -> three is C · R(q_body->NED), i.e. the quaternion product qC ⊗ q.
+// ---------------------------------------------------------------------------------
+const toThree = (p) => new THREE.Vector3(p[1], -p[2], -p[0]);
+const qC = new THREE.Quaternion().setFromRotationMatrix(
+  new THREE.Matrix4().set(0, 1, 0, 0,  0, 0, -1, 0,  -1, 0, 0, 0,  0, 0, 0, 1)
+);
+const toThreeQuat = (q) => qC.clone().multiply(new THREE.Quaternion(q[1], q[2], q[3], q[0]));
+
+function prepare(s) {
+  const n = s.t.length;
+  const ip = s.interceptor.pos.map(toThree), tp = s.target.pos.map(toThree);
+  const iv = s.interceptor.vel.map(toThree), tv = s.target.vel.map(toThree);
+  const iq = s.interceptor.quat.map(toThreeQuat);
+  const range = ip.map((p, i) => p.distanceTo(tp[i]));
+  const ispeed = iv.map((v) => v.length());
+  let peak = 0; for (let i = 1; i < n; i++) if (ispeed[i] > ispeed[peak]) peak = i;
+  return { ...s, n, ip, tp, iv, tv, iq, range, ispeed, peak,
+    duration: s.t[n - 1],
+    caI: toThree(s.closest.interceptor), caT: toThree(s.closest.target),
+    launch: s.launch ? { ...s.launch, site: toThree(s.launch.site) } : null };
+}
+const SCEN = DATA.scenarios.map(prepare);
+
+// ---------------------------------------------------------------------------------
+// Renderer, scene, camera
+// ---------------------------------------------------------------------------------
+const stage = document.getElementById("stage");
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+} catch (e) {
+  const box = document.getElementById("error");
+  box.textContent = "This view needs WebGL, which this browser could not start.";
+  box.hidden = false;
+  throw e;
+}
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setClearColor(COLOR.bg);
+stage.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(COLOR.bg, 700, 2200);
+const camera = new THREE.PerspectiveCamera(42, 1, 1, 6000);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.maxPolarAngle = Math.PI * 0.495;
+controls.minDistance = 5;
+controls.maxDistance = 2500;
+
+const fatMaterials = [];
+function fatLine(points, color, width, opacity = 1, dashed = false) {
+  const geom = new LineGeometry();
+  geom.setPositions(points.flatMap((p) => [p.x, p.y, p.z]));
+  const mat = new LineMaterial({
+    color, linewidth: width, transparent: opacity < 1, opacity, dashed,
+    dashSize: 6, gapSize: 5, worldUnits: false,
+  });
+  fatMaterials.push(mat);
+  const line = new Line2(geom, mat);
+  if (dashed) line.computeLineDistances();
+  return line;
+}
+
+// ground: grid + range rings around the interceptor launch point + north arrow
+const ground = new THREE.Group();
+scene.add(ground);
+const gridPoints = [];
+for (let x = -2000; x <= 2000; x += 50) {
+  gridPoints.push(new THREE.Vector3(x, 0, -2000), new THREE.Vector3(x, 0, 2000),
+                  new THREE.Vector3(-2000, 0, x), new THREE.Vector3(2000, 0, x));
+}
+ground.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(gridPoints),
+  tint(new THREE.LineBasicMaterial({ transparent: true, opacity: 0.45 }), "line")));
+const ringMat = tint(new THREE.LineBasicMaterial({ transparent: true, opacity: 0.22 }), "friendly");
+for (const r of [100, 200, 300, 400]) {
+  const pts = [];
+  for (let k = 0; k <= 128; k++) { const a = (k / 128) * Math.PI * 2; pts.push(new THREE.Vector3(Math.cos(a) * r, 0.2, Math.sin(a) * r)); }
+  ground.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), ringMat));
+}
+const north = new THREE.Line(
+  new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0.3, 0), new THREE.Vector3(0, 0.3, -470)]),
+  tint(new THREE.LineBasicMaterial({ transparent: true, opacity: 0.6 }), "dim")
+);
+ground.add(north);
+
+// ---------------------------------------------------------------------------------
+// Vehicle models (icons). Interceptor in body axes: x forward, y right, z down.
+// ---------------------------------------------------------------------------------
+function quadModel(key) {
+  const g = new THREE.Group();
+  const edge = tint(new THREE.LineBasicMaterial(), key);
+  const arm = 0.26, rotor = 0.12;
+  const seg = [];
+  for (const [sx, sy] of [[1, 1], [-1, -1], [1, -1], [-1, 1]]) {
+    const c = new THREE.Vector3(sx * arm * Math.SQRT1_2, sy * arm * Math.SQRT1_2, -0.02);
+    seg.push(new THREE.Vector3(0, 0, 0), c);
+    for (let k = 0; k < 24; k++) {
+      const a0 = (k / 24) * Math.PI * 2, a1 = ((k + 1) / 24) * Math.PI * 2;
+      seg.push(c.clone().add(new THREE.Vector3(Math.cos(a0) * rotor, Math.sin(a0) * rotor, 0)),
+               c.clone().add(new THREE.Vector3(Math.cos(a1) * rotor, Math.sin(a1) * rotor, 0)));
+    }
+  }
+  // nose: a short tick forward, so heading and pitch read at a glance
+  seg.push(new THREE.Vector3(0, 0, 0), new THREE.Vector3(0.3, 0, 0));
+  g.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(seg), edge));
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.1, 0.05),
+    tint(new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.6 }), key));
+  g.add(body);
+  // rotor discs, faint
+  const disc = tint(new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false }), key);
+  for (const [sx, sy] of [[1, 1], [-1, -1], [1, -1], [-1, 1]]) {
+    const d = new THREE.Mesh(new THREE.CircleGeometry(rotor, 24), disc);
+    d.position.set(sx * arm * Math.SQRT1_2, sy * arm * Math.SQRT1_2, -0.02);
+    g.add(d);
+  }
+  return g;
+}
+// Threat: a generic dart, nose along +x of its own frame (three axes, y up).
+function dartModel(key) {
+  const g = new THREE.Group();
+  const nose = [0.55, 0, 0], tail = [-0.4, 0, 0], l = [-0.3, 0, 0.32], r = [-0.3, 0, -0.32], fin = [-0.38, 0.16, 0], belly = [-0.1, -0.06, 0];
+  const v = (a) => new THREE.Vector3(...a);
+  const segs = [nose, l, l, tail, tail, r, r, nose, nose, fin, fin, tail, nose, belly, belly, tail].map(v);
+  g.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(segs), tint(new THREE.LineBasicMaterial(), key)));
+  const wing = new THREE.BufferGeometry().setFromPoints([v(nose), v(l), v(tail), v(nose), v(tail), v(r)]);
+  g.add(new THREE.Mesh(wing, tint(new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false }), key)));
+  return g;
+}
+
+const iris = quadModel("friendly");
+const threat = dartModel("hostile");
+scene.add(iris, threat);
+
+// drop lines to the ground and ground dots, a tactical-map convention
+function dropLine(key) {
+  const geom = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+  const line = new THREE.Line(geom, tint(new THREE.LineDashedMaterial({ dashSize: 3, gapSize: 3, transparent: true, opacity: 0.5 }), key));
+  const dot = new THREE.Mesh(new THREE.RingGeometry(1.6, 2.4, 24), tint(new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.6, side: THREE.DoubleSide }), key));
+  dot.rotation.x = -Math.PI / 2;
+  scene.add(line, dot);
+  return { line, dot, set(p) {
+    const a = geom.attributes.position;
+    a.setXYZ(0, p.x, p.y, p.z); a.setXYZ(1, p.x, 0.4, p.z); a.needsUpdate = true;
+    line.computeLineDistances(); dot.position.set(p.x, 0.4, p.z);
+  } };
+}
+const irisDrop = dropLine("friendly"), threatDrop = dropLine("hostile");
+
+// line of sight: what pure pursuit steers along
+const losGeom = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+const los = new THREE.Line(losGeom, tint(new THREE.LineDashedMaterial({ dashSize: 4, gapSize: 4, transparent: true, opacity: 0.55 }), "ink"));
+scene.add(los);
+
+// velocity vectors: where each vehicle will be in 1 s
+const arrows = [];
+function velocityArrow(key) {
+  const a = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(), 1, COLOR[key], 3, 2);
+  a.line.material.transparent = true; a.line.material.opacity = 0.9;
+  scene.add(a);
+  arrows.push([a, key]);
+  return a;
+}
+const irisArrow = velocityArrow("friendly"), threatArrow = velocityArrow("hostile");
+
+// closest point of approach marker
+const cpa = new THREE.Group();
+const cpaMat = tint(new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthWrite: false }), "event");
+const cpaRing = new THREE.Mesh(new THREE.RingGeometry(3.2, 3.8, 4), cpaMat);
+cpa.add(cpaRing);
+scene.add(cpa);
+
+// alert dome: the launch range around the pad, as latitude rings and meridians
+function alertDome(site, range) {
+  const points = [];
+  const at = (azimuth, elevation) => new THREE.Vector3(
+    Math.cos(elevation) * Math.cos(azimuth) * range, Math.sin(elevation) * range,
+    Math.cos(elevation) * Math.sin(azimuth) * range);
+  const deg = Math.PI / 180;
+  for (const elevation of [0, 20, 40, 60, 80]) {
+    for (let k = 0; k < 96; k++) {
+      points.push(at((k / 96) * 2 * Math.PI, elevation * deg), at(((k + 1) / 96) * 2 * Math.PI, elevation * deg));
+    }
+  }
+  for (let m = 0; m < 12; m++) {
+    for (let k = 0; k < 24; k++) {
+      points.push(at(m * 30 * deg, (k / 24) * 90 * deg), at(m * 30 * deg, ((k + 1) / 24) * 90 * deg));
+    }
+  }
+  const dome = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(points),
+    new THREE.LineBasicMaterial({ color: COLOR.friendly, transparent: true, opacity: 0.16, depthWrite: false }));
+  dome.position.copy(site);
+  return dome;
+}
+
+// per-scenario objects (tracks, alert dome)
+let tracks = null;
+function buildTracks(s) {
+  if (tracks) {
+    for (const o of tracks.objects) {
+      scene.remove(o); o.geometry.dispose(); o.material.dispose();
+      const k = fatMaterials.indexOf(o.material);
+      if (k >= 0) fatMaterials.splice(k, 1);
+    }
+  }
+  const ground = (pts) => pts.map((p) => new THREE.Vector3(p.x, 0.5, p.z));
+  const objects = [
+    fatLine(s.ip, COLOR.friendly, 1.2, 0.28),
+    fatLine(s.tp, COLOR.hostile, 1.2, 0.28),
+    fatLine(ground(s.ip), COLOR.friendly, 1, 0.18, true),
+    fatLine(ground(s.tp), COLOR.hostile, 1, 0.18, true),
+  ];
+  const iDone = fatLine(s.ip, COLOR.friendly, 3);
+  const tDone = fatLine(s.tp, COLOR.hostile, 3);
+  objects.push(iDone, tDone);
+  if (s.launch) objects.push(alertDome(s.launch.site, s.launch.range));
+  scene.add(...objects);
+  tracks = { objects, iDone, tDone };
+  resize();
+}
+
+// ---------------------------------------------------------------------------------
+// Labels projected from 3D onto the page
+// ---------------------------------------------------------------------------------
+const tagLayer = document.getElementById("tags");
+function tag(cls, html) { const el = document.createElement("div"); el.className = "tag " + cls; el.innerHTML = html; tagLayer.appendChild(el); return el; }
+const irisTag = tag("f", "IRIS<small></small>");
+const threatTag = tag("h", "THREAT<small></small>");
+const cpaTag = tag("e", "CPA<small></small>");
+const losTag = tag("los", "");
+const alertTag = tag("e", "ALERT<small></small>");
+const northTag = tag("n", "N");
+const ringTags = [100, 200, 300, 400].map((r) => tag("n", `<small>${r} m</small>`));
+const v = new THREE.Vector3();
+function place(el, p, show = true) {
+  v.copy(p).project(camera);
+  const visible = show && v.z < 1 && Math.abs(v.x) < 1.2 && Math.abs(v.y) < 1.2;
+  el.hidden = !visible;
+  if (!visible) return;
+  const w = stage.clientWidth, h = stage.clientHeight;
+  el.style.transform = el.classList.contains("n") || el.classList.contains("los")
+    ? `translate(${(v.x * 0.5 + 0.5) * w}px, ${(-v.y * 0.5 + 0.5) * h}px) translate(-50%, ${el.classList.contains("los") ? "-140%" : "-50%"})`
+    : `translate(${(v.x * 0.5 + 0.5) * w}px, ${(-v.y * 0.5 + 0.5) * h}px) translate(14px, -50%)`;
+}
+
+// ---------------------------------------------------------------------------------
+// State, interpolation
+// ---------------------------------------------------------------------------------
+let S = SCEN[0], time = 0, playing = false, rate = 1, follow = false;
+function locate(t) {
+  const ts = S.t; let lo = 0, hi = S.n - 1;
+  if (t <= ts[0]) return [0, 0];
+  if (t >= ts[hi]) return [hi - 1, 1];
+  while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (ts[mid] <= t) lo = mid; else hi = mid; }
+  return [lo, (t - ts[lo]) / (ts[lo + 1] - ts[lo])];
+}
+const lerp = (arr, i, a) => arr[i].clone().lerp(arr[i + 1], a);
+const fmt = (x, d = 1) => x.toFixed(d);
+const fmtRange = (r) => (r < 10 ? r.toFixed(2) : r < 100 ? r.toFixed(1) : r.toFixed(0));
+const fmtT = (t) => "T+" + (t < 10 ? "0" : "") + t.toFixed(2);
+
+const el = (id) => document.getElementById(id);
+const ui = {
+  clock: el("clock"), status: el("status"), range: el("range"), closure: el("closure"),
+  ispeed: el("ispeed"), icmd: el("icmd"), ialt: el("ialt"), itilt: el("itilt"),
+  tspeed: el("tspeed"), talt: el("talt"), scrub: el("scrub"), play: el("play"),
+};
+
+const prevIris = new THREE.Vector3();
+function update() {
+  const [i, a] = locate(time);
+  const pI = lerp(S.ip, i, a), pT = lerp(S.tp, i, a);
+  const vI = lerp(S.iv, i, a), vT = lerp(S.tv, i, a);
+  const q = S.iq[i].clone().slerp(S.iq[i + 1], a);
+
+  if (follow) {  // carry the camera along with the interceptor, keeping the user's orbit
+    const d = pI.clone().sub(prevIris);
+    camera.position.add(d); controls.target.add(d);
+  }
+  prevIris.copy(pI);
+
+  iris.position.copy(pI); iris.quaternion.copy(q);
+  threat.position.copy(pT);
+  if (vT.lengthSq() > 1e-6) threat.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), vT.clone().normalize());
+  irisDrop.set(pI); threatDrop.set(pT);
+
+  const pa = losGeom.attributes.position;
+  pa.setXYZ(0, pI.x, pI.y, pI.z); pa.setXYZ(1, pT.x, pT.y, pT.z); pa.needsUpdate = true;
+  los.computeLineDistances();
+
+  for (const [arrow, p, vel] of [[irisArrow, pI, vI], [threatArrow, pT, vT]]) {
+    const len = vel.length();
+    arrow.visible = len > 0.3;
+    if (arrow.visible) { arrow.position.copy(p); arrow.setDirection(vel.clone().normalize()); arrow.setLength(len, Math.min(4, len * 0.35), Math.min(2.4, len * 0.2)); }
+  }
+
+  // traveled part of each track: segments up to sample i, plus the partial one
+  const seg = Math.max(0, Math.min(S.n - 1, i + (a > 0 ? 1 : 0)));
+  tracks.iDone.geometry.instanceCount = seg;
+  tracks.tDone.geometry.instanceCount = seg;
+
+  // telemetry
+  const r = pI.distanceTo(pT);
+  const rel = pT.clone().sub(pI), vrel = vT.clone().sub(vI);
+  const closure = r > 1e-6 ? -rel.dot(vrel) / r : 0;
+  const passed = time >= S.closest.time;
+  const tilt = THREE.MathUtils.radToDeg(Math.acos(Math.min(1, Math.max(-1,
+    new THREE.Vector3(0, 0, -1).applyQuaternion(q).y))));   // body "up" (-z) against world up
+
+  ui.clock.textContent = fmtT(time);
+  ui.range.innerHTML = `${fmtRange(r)} <small>m</small>`;
+  ui.closure.innerHTML = `${closure >= 0 ? "+" : "−"}${fmt(Math.abs(closure))} <small>m/s</small>`;
+  ui.ispeed.innerHTML = `${fmt(vI.length())} <small>m/s</small>`;
+  ui.icmd.innerHTML = `${fmt(S.commanded_speed, 0)} <small>m/s</small>`;
+  ui.ialt.innerHTML = `${fmt(pI.y)} <small>m</small>`;
+  ui.itilt.innerHTML = `${fmt(tilt)} <small>deg</small>`;
+  ui.tspeed.innerHTML = `${fmt(vT.length())} <small>m/s</small>`;
+  ui.talt.innerHTML = `${fmt(pT.y)} <small>m</small>`;
+
+  let state, label;
+  if (S.launch && time < S.launch.time) { state = "standby"; label = "STANDBY · ON THE PAD"; }
+  else if (passed && S.captured) { state = "intercept"; label = "INTERCEPT"; }
+  else if (passed) { state = "miss"; label = "MISS · TARGET ESCAPING"; }
+  else if (closure >= 0) { state = "closing"; label = "CLOSING"; }
+  else { state = "opening"; label = "OPENING"; }
+  ui.status.dataset.state = state; ui.status.textContent = label;
+
+  cpa.visible = passed;
+  irisTag.querySelector("small").textContent = `${fmt(vI.length())} m/s`;
+  threatTag.querySelector("small").textContent = `${fmt(vT.length())} m/s`;
+  losTag.textContent = `LOS ${fmtRange(r)} m`;
+
+  for (const li of logItems) li.el.classList.toggle("past", time >= li.t - 1e-9);
+  if (!scrubbing) ui.scrub.value = Math.round((time / S.duration) * 1000);
+  drawSpark();
+}
+
+function placeTags() {
+  const camDist = (p) => camera.position.distanceTo(p);
+  // icons keep a readable size on screen; never smaller than true size
+  iris.scale.setScalar(Math.max(1, camDist(iris.position) * 0.05));
+  threat.scale.setScalar(Math.max(1, camDist(threat.position) * 0.05));
+  cpa.position.copy(S.caI.clone().add(S.caT).multiplyScalar(0.5));
+  cpa.quaternion.copy(camera.quaternion);
+  cpa.scale.setScalar(Math.max(0.3, camDist(cpa.position) * 0.006));
+  place(irisTag, iris.position);
+  place(threatTag, threat.position);
+  place(cpaTag, cpa.position, cpa.visible);
+  place(losTag, iris.position.clone().lerp(threat.position, 0.5), iris.position.distanceTo(threat.position) > 25);
+  place(northTag, new THREE.Vector3(0, 0, -490));
+  if (S.launch) place(alertTag, S.launch.site.clone().add(new THREE.Vector3(0, S.launch.range, 0)));
+  else alertTag.hidden = true;
+  [100, 200, 300, 400].forEach((r, k) => place(ringTags[k], new THREE.Vector3(r * Math.SQRT1_2, 0, r * Math.SQRT1_2)));
+}
+
+// ---------------------------------------------------------------------------------
+// Separation sparkline (log scale) behind the scrubber
+// ---------------------------------------------------------------------------------
+const spark = el("spark"), sctx = spark.getContext("2d");
+function drawSpark() {
+  const dpr = Math.min(window.devicePixelRatio, 2);
+  const w = spark.clientWidth, h = spark.clientHeight;
+  if (spark.width !== Math.round(w * dpr)) { spark.width = Math.round(w * dpr); spark.height = Math.round(h * dpr); }
+  sctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  sctx.clearRect(0, 0, w, h);
+  const top = 4, bottom = h - 12;
+  const lo = Math.log10(0.2), hi = Math.log10(Math.max(...S.range) * 1.3);
+  const X = (t) => (t / S.duration) * w;
+  const Y = (r) => bottom - ((Math.log10(Math.max(r, 0.2)) - lo) / (hi - lo)) * (bottom - top);
+
+  sctx.font = `10px ${css("--font-data")}`;
+  sctx.textBaseline = "middle";
+  for (const r of [1, 10, 100]) {
+    if (Y(r) < top) continue;
+    sctx.strokeStyle = COLOR.line; sctx.globalAlpha = 0.6; sctx.lineWidth = 1;
+    sctx.beginPath(); sctx.moveTo(0, Y(r)); sctx.lineTo(w, Y(r)); sctx.stroke();
+    sctx.globalAlpha = 1; sctx.fillStyle = COLOR.dim; sctx.fillText(`${r} m`, 4, Y(r) - 6);
+  }
+  // capture radius
+  sctx.setLineDash([4, 4]); sctx.strokeStyle = COLOR.good; sctx.globalAlpha = 0.8;
+  sctx.beginPath(); sctx.moveTo(0, Y(DATA.meta.capture_radius)); sctx.lineTo(w, Y(DATA.meta.capture_radius)); sctx.stroke();
+  sctx.setLineDash([]); sctx.globalAlpha = 1;
+  sctx.fillStyle = COLOR.good; sctx.textAlign = "right";
+  sctx.fillText(`capture ${DATA.meta.capture_radius} m`, w - 4, Y(DATA.meta.capture_radius) - 7);
+  sctx.textAlign = "left";
+
+  // whole curve dim, traveled part bright, with a soft area under it
+  const path = () => { sctx.beginPath(); S.t.forEach((t, k) => (k ? sctx.lineTo(X(t), Y(S.range[k])) : sctx.moveTo(X(t), Y(S.range[k])))); };
+  sctx.strokeStyle = COLOR.friendly; sctx.globalAlpha = 0.3; sctx.lineWidth = 1.2; path(); sctx.stroke();
+  sctx.save(); sctx.beginPath(); sctx.rect(0, 0, X(time), h); sctx.clip();
+  sctx.globalAlpha = 0.12; path(); sctx.lineTo(X(S.duration), bottom); sctx.lineTo(0, bottom); sctx.closePath(); sctx.fillStyle = COLOR.friendly; sctx.fill();
+  sctx.globalAlpha = 1; sctx.lineWidth = 1.8; path(); sctx.stroke();
+  sctx.restore();
+
+  // closest approach
+  const cx = X(S.closest.time), cy = Y(S.closest.distance);
+  sctx.fillStyle = COLOR.event;
+  sctx.beginPath(); sctx.moveTo(cx, cy - 5); sctx.lineTo(cx + 5, cy); sctx.lineTo(cx, cy + 5); sctx.lineTo(cx - 5, cy); sctx.closePath(); sctx.fill();
+  // launch
+  if (S.launch) {
+    const lx = X(S.launch.time);
+    sctx.setLineDash([3, 3]); sctx.strokeStyle = COLOR.event; sctx.globalAlpha = 0.9; sctx.lineWidth = 1;
+    sctx.beginPath(); sctx.moveTo(lx, 0); sctx.lineTo(lx, bottom); sctx.stroke();
+    sctx.setLineDash([]); sctx.globalAlpha = 1;
+    sctx.fillStyle = COLOR.event; sctx.fillText("launch", lx + 4, top + 6);
+  }
+  // playhead
+  sctx.strokeStyle = COLOR.ink; sctx.globalAlpha = 0.8; sctx.lineWidth = 1;
+  sctx.beginPath(); sctx.moveTo(X(time), 0); sctx.lineTo(X(time), bottom + 4); sctx.stroke();
+  sctx.globalAlpha = 1;
+}
+
+// ---------------------------------------------------------------------------------
+// Scenario: tabs, summary, event log, camera framing
+// ---------------------------------------------------------------------------------
+let logItems = [];
+function describe(s) {
+  const top = s.ispeed[s.peak];
+  const cpaText = `<b>${s.closest.distance.toFixed(2)} m at T+${s.closest.time.toFixed(2)}</b>`;
+  if (s.launch) {
+    const intro = `The Iris waits on the pad at rest, rotors stopped. The threat comes within ${s.launch.range} m ` +
+      `at T+${s.launch.time.toFixed(2)}: the Iris launches and flies pure pursuit, ordered to ` +
+      `${s.commanded_speed} m/s against a ${s.target_speed} m/s threat. `;
+    return intro + (s.captured
+      ? `It climbs to the threat and catches it: ${cpaText}.`
+      : `The threat is past before the Iris gets up to it: it misses by ${cpaText}, ` +
+        `keeps chasing and falls behind until the threat leaves the ${s.launch.range} m dome.`);
+  }
+  if (s.captured) {
+    return `Pure pursuit: every step the Iris is ordered to fly at ${s.commanded_speed} m/s straight at where the threat is now. ` +
+      `Twice as fast as its ${s.target_speed} m/s target, it closes from ${fmtRange(s.range[0])} m to <b>${s.closest.distance.toFixed(2)} m at T+${s.closest.time.toFixed(2)}</b>.`;
+  }
+  return `Ordered to ${s.commanded_speed} m/s against a ${s.target_speed} m/s threat, the Iris tops out at ${top.toFixed(1)} m/s. ` +
+    `It crosses the threat nearly head-on, misses by <b>${s.closest.distance.toFixed(2)} m at T+${s.closest.time.toFixed(2)}</b>, and has to turn around behind a faster target.`;
+}
+function buildLog(s) {
+  const events = s.launch ? [
+    { t: 0, text: `On the pad, rotors stopped. Threat at ${fmtRange(s.range[0])} m` },
+    { t: s.launch.time, key: true, text: `Threat inside ${s.launch.range} m: launch` },
+  ] : [
+    { t: 0, text: `Launch from hover. Range ${fmtRange(s.range[0])} m` },
+  ];
+  events.push(
+    { t: s.t[s.peak], text: `Peak interceptor speed ${s.ispeed[s.peak].toFixed(1)} m/s` },
+    { t: s.closest.time, key: true, text: s.captured
+        ? `Intercept: CPA ${s.closest.distance.toFixed(2)} m (< ${DATA.meta.capture_radius} m)`
+        : `Closest approach ${s.closest.distance.toFixed(2)} m. Miss` },
+  );
+  if (!s.captured) {
+    events.push({ t: s.duration, text: s.launch
+      ? `Threat outside ${s.launch.range} m: run stopped`
+      : "Range opening: run stopped" });
+  }
+  events.sort((a, b) => a.t - b.t);
+  const ol = el("log"); ol.innerHTML = "";
+  logItems = events.map((e) => {
+    const li = document.createElement("li");
+    if (e.key) li.classList.add("key");
+    li.innerHTML = `<time>${fmtT(e.t)}</time><span>${e.text}</span>`;
+    li.style.cursor = "pointer";
+    li.addEventListener("click", () => seek(e.t));
+    ol.appendChild(li);
+    return { t: e.t, el: li };
+  });
+}
+function bounds(s) {
+  const box = new THREE.Box3();
+  for (const p of s.ip) box.expandByPoint(p);
+  for (const p of s.tp) box.expandByPoint(p);
+  return box;
+}
+function overview() {
+  const box = bounds(S), c = box.getCenter(new THREE.Vector3()), size = box.getSize(new THREE.Vector3()).length();
+  controls.target.copy(c).setY(c.y * 0.5);
+  camera.position.copy(c).add(new THREE.Vector3(-0.55, 0.42, 0.75).normalize().multiplyScalar(size * 0.95 + 120));
+  setFollow(false);
+}
+function topView() {
+  const box = bounds(S), c = box.getCenter(new THREE.Vector3()), size = box.getSize(new THREE.Vector3()).length();
+  controls.target.copy(c);
+  camera.position.copy(c).add(new THREE.Vector3(0, size * 1.05 + 120, 0.01));
+  setFollow(false);
+}
+function setFollow(on) {
+  follow = on;
+  el("cam-follow").setAttribute("aria-pressed", String(on));
+  if (on) {
+    const [i, a] = locate(time); const p = lerp(S.ip, i, a);
+    controls.target.copy(p);
+    camera.position.copy(p).add(new THREE.Vector3(-40, 22, 45));
+    prevIris.copy(p);
+  }
+}
+
+const tabs = el("tabs");
+SCEN.forEach((s, k) => {
+  const b = document.createElement("button");
+  b.className = "tab"; b.type = "button"; b.setAttribute("role", "tab"); b.id = "tab-" + s.id;
+  b.innerHTML = `${s.name}<small>${s.detail} · ${s.captured ? "captured" : "missed"}</small>`;
+  b.addEventListener("click", () => selectScenario(k));
+  tabs.appendChild(b);
+});
+function selectScenario(k) {
+  S = SCEN[k];
+  [...tabs.children].forEach((b, j) => b.setAttribute("aria-selected", String(j === k)));
+  el("summary").innerHTML = describe(S);
+  alertTag.querySelector("small").textContent = S.launch ? `${S.launch.range} m` : "";
+  buildLog(S);
+  buildTracks(S);
+  time = 0; playing = false; ui.play.textContent = "Play";
+  overview();
+  update();
+}
+
+// ---------------------------------------------------------------------------------
+// Controls: play, seek, speed, keyboard
+// ---------------------------------------------------------------------------------
+function seek(t) { time = Math.min(S.duration, Math.max(0, t)); update(); }
+function togglePlay() {
+  if (!playing && time >= S.duration - 1e-6) time = 0;
+  playing = !playing; ui.play.textContent = playing ? "Pause" : "Play";
+}
+ui.play.addEventListener("click", togglePlay);
+el("back").addEventListener("click", () => seek(time - 1));
+el("fwd").addEventListener("click", () => seek(time + 1));
+el("cam-overview").addEventListener("click", overview);
+el("cam-top").addEventListener("click", topView);
+el("cam-follow").addEventListener("click", () => setFollow(!follow));
+
+function applyPalette(name) {
+  palette = name;
+  document.documentElement.dataset.palette = name;
+  COLOR = readColors();
+  for (const [material, key] of paints) material.color.set(COLOR[key]);
+  for (const [arrow, key] of arrows) arrow.setColor(COLOR[key]);
+  renderer.setClearColor(COLOR.bg);
+  scene.fog.color.set(COLOR.bg);
+  el("pal-tac").setAttribute("aria-pressed", String(name === "tac"));
+  el("pal-amber").setAttribute("aria-pressed", String(name === "amber"));
+  try { localStorage.setItem("jineta-palette", name); } catch (e) { /* storage off */ }
+  buildTracks(S);   // the fat track lines take their colour when built
+  update();
+}
+el("pal-tac").addEventListener("click", () => applyPalette("tac"));
+el("pal-amber").addEventListener("click", () => applyPalette("amber"));
+
+const speeds = el("speeds");
+for (const r of [0.25, 0.5, 1, 2, 4]) {
+  const b = document.createElement("button");
+  b.className = "ctl"; b.type = "button"; b.textContent = `${r}×`; b.setAttribute("aria-pressed", String(r === rate));
+  b.addEventListener("click", () => { rate = r; [...speeds.children].forEach((c) => c.setAttribute("aria-pressed", String(c === b))); });
+  speeds.appendChild(b);
+}
+
+let scrubbing = false;
+ui.scrub.addEventListener("input", () => { scrubbing = true; seek((ui.scrub.value / 1000) * S.duration); scrubbing = false; });
+el("track").addEventListener("pointerdown", (e) => {
+  if (e.target === ui.scrub) return;
+  const r = spark.getBoundingClientRect();
+  seek(((e.clientX - r.left) / r.width) * S.duration);
+});
+
+window.addEventListener("keydown", (e) => {
+  if (e.target.closest && e.target.closest("input")) { if (e.key !== " ") return; }
+  const step = e.shiftKey ? DATA.meta.dt : 1;
+  if (e.key === " ") { e.preventDefault(); togglePlay(); }
+  else if (e.key === "ArrowLeft") { e.preventDefault(); seek(time - step); }
+  else if (e.key === "ArrowRight") { e.preventDefault(); seek(time + step); }
+  else if (e.key === "Home") seek(0);
+  else if (e.key === "End") seek(S.duration);
+  else if (e.key === "f" || e.key === "F") setFollow(!follow);
+  else if (e.key === "o" || e.key === "O") overview();
+  else if (e.key === "t" || e.key === "T") topView();
+  else if (e.key === "1" || e.key === "2") selectScenario(Number(e.key) - 1);
+  else if (e.key === "p" || e.key === "P") applyPalette(palette === "tac" ? "amber" : "tac");
+});
+
+function resize() {
+  const w = stage.clientWidth, h = stage.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+  for (const m of fatMaterials) m.resolution.set(w, h);
+  drawSpark();
+}
+window.addEventListener("resize", resize);
+
+// ---------------------------------------------------------------------------------
+// Loop
+// ---------------------------------------------------------------------------------
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  if (playing) {
+    time += dt * rate;
+    if (time >= S.duration) { time = S.duration; playing = false; ui.play.textContent = "Replay"; }
+    update();
+  }
+  controls.update();
+  placeTags();
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+
+selectScenario(0);
+applyPalette(palette);
+resize();
+requestAnimationFrame(frame);
+</script>

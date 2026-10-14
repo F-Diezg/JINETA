@@ -38,8 +38,10 @@ code should be clear and every concept explained before it is used.
   newline and fixes blank lines that are easy to lose when pasting code. In VS
   Code, "Files: Insert Final Newline" and format-on-save with the Ruff formatter
   do the same automatically.
-- The full test run takes ~20 s: the closed-loop control tests simulate up to 30 s
-  of flight each.
+- The full test run takes ~20 s (227 tests; 19.5 s in Claude's workspace at the end
+  of phase 7): the closed-loop control and engagement tests fly up to 30 s each.
+- The interactive viewers (`docs/*_viewer.html`) open from disk in any modern
+  browser but need internet: three.js and the fonts come from CDNs.
 - Regenerate dependencies as UTF-8 (PowerShell's `>` writes UTF-16):
   `pip freeze | Out-File -Encoding utf8 requirements.txt`
 
@@ -106,6 +108,21 @@ code should be clear and every concept explained before it is used.
 - **Autopilot interface:** `Autopilot(vehicle, gains, dt)` is a callable; pass it
   as `pre_step`. Whoever guides the vehicle sets `autopilot.velocity_command`
   (NED [m/s]) and `autopilot.yaw_command` ([rad]).
+- **Target track interface:** a target is any callable
+  `track(t) -> (position NED [m], velocity NED [m/s])` (`TargetTrack` in
+  `jinete/targets.py`). Scripted targets are closed-form, so they hold no state and
+  are not integrated. `track_positions(track, times)` samples one as an (n, 3) array.
+- **Guidance interface:** a guidance law maps positions (later also velocities and
+  estimates) to a NED velocity command; it meets the autopilot only through
+  `autopilot.velocity_command`, so changing the law never touches the control loops.
+- **Relative position** between two tracks is always `r = r_target − r_pursuer`.
+- **Engagement result:** `engage(...)` returns an `Engagement` with `times`,
+  `states` (interceptor), `target_positions`, `closest` (`ClosestApproach`: `time`,
+  `distance`, `step`), `captured` and `pursuit_feasible`. `captured` means the
+  closest approach fell inside the capture radius (default 0.5 m).
+- **Viewers read exported data in the simulator's conventions** (NED, quaternion
+  body → NED, SI). Any change of axes happens inside the viewer, never in the
+  export: the three.js viewer maps NED to (East, Up, −North).
 - Parameter classes validate their inputs in `__post_init__` and raise
   `ValueError` with a clear message. Inertia tensors go through
   `core.inertia.inertia_tensor` (symmetric, positive definite, triangle inequality)
@@ -126,16 +143,23 @@ jineta/
 ├── jineta/
 │   ├── core/       # physics engine: integrators, point mass, rigid body
 │   ├── campo/      # environment: atmosphere.py (ISA), wind.py; later terrain
-│   ├── jinete/     # vehicles: aero, multirotor, control (autopilot), profiles
+│   ├── jinete/     # vehicles: aero, multirotor, control (autopilot), profiles,
+│   │               #   guidance, scripted targets
 │   ├── atalaya/    # sensors (radar, EO, IMU) + Kalman filtering
 │   ├── capitan/    # target assignment / threat prioritisation
-│   └── escuadron/  # inter-unit coordination and communications
+│   ├── escuadron/  # inter-unit coordination and communications
+│   └── engagement.py  # one interceptor vs one target (composes the layers)
 ├── tests/
 ├── scenarios/      # mission definitions (YAML)
 ├── examples/       # runnable demo scripts
+├── viz/            # visualisation layer: viewer.py (export) + viewer_template.html
+├── docs/           # generated figures and viewer pages (committed, for the README)
 ├── pyproject.toml  # pytest + ruff configuration
 └── DESIGN.md
 ```
+
+`engagement.py` sits at the top of the package because it uses `core`, `jinete`
+and (soon) `campo`; inside any of them the dependency arrows would point upwards.
 
 Simulation flow: `atalaya` detects → `capitan` decides → `escuadron` coordinates →
 each `jinete` flies using `core` inside the `campo`.
@@ -143,10 +167,12 @@ each `jinete` flies using `core` inside the `campo`.
 **The simulator never draws.** It produces data (states + events over time).
 Visualisation is a separate layer that reads that data:
 
-1. Now: matplotlib, for debugging and analysis plots.
-2. Multi-drone scenarios: export to **CesiumJS** (CZML) for a web 3D globe with real
-   terrain and satellite imagery — the showcase/demo view.
-3. Optional: Godot real-time viewer.
+1. matplotlib, for debugging and analysis plots.
+2. Since phase 7: a standalone **three.js engagement viewer** (one HTML file, data
+   embedded) to replay one engagement in 3D: orbit, zoom, timeline, telemetry.
+3. Multi-drone scenarios: export to **CesiumJS** (CZML) for a web 3D globe with real
+   terrain and satellite imagery — the showcase/demo view (phase 12).
+4. Optional: Godot real-time viewer.
 
 ## 5. Roadmap
 
@@ -158,8 +184,8 @@ Visualisation is a separate layer that reads that data:
 | 4 | Full 6-DOF rigid body | ✅ Done |
 | 5 | Environment: ISA atmosphere, wind | ✅ Done |
 | 6a | Quadrotor (Iris profile) + cascaded attitude/velocity control | ✅ Done |
-| 7 | **End-to-end MVP:** one interceptor vs one target, simple guidance | 🔄 Next |
-| 6b | Generic fixed-wing threat model (aero coefficient tables) | ⏳ after 7 |
+| 7 | **End-to-end MVP:** one interceptor vs one target, simple guidance | ✅ Done |
+| 6b | Generic fixed-wing threat model (aero coefficient tables) | 🔄 Next |
 | 8 | Scenarios in YAML, multiple entities | ⏳ |
 | 9 | Sensors + Kalman filter | ⏳ |
 | 10 | Guidance (proportional navigation) | ⏳ |
@@ -175,21 +201,32 @@ airspeed in body axes; rotors, mixer and Iris profile; multirotor force model;
 `pre_step` hook (discrete control, zero-order hold); rate loop (PI); attitude loop
 (quaternion error); velocity loop + `Autopilot` + example; this document.
 
-**Phase 7 — end-to-end MVP.** The first time every layer works together, kept
-deliberately small and ugly-but-honest:
-- One interceptor (the phase 6a quadrotor, full 6-DOF in ISA + wind) against one
-  target flying a simple path (straight line or gentle turn) as a scripted
-  trajectory; the fixed-wing model of phase 6b replaces it afterwards.
-- Perfect information (true target state, no sensors yet) and the simplest guidance
-  that works (pure pursuit): `autopilot.velocity_command = v_max · unit(r_target −
-  r_interceptor)`, recomputed every step from `pre_step`.
-- Outputs: closest-approach (miss) distance and time, with the event time
-  interpolated between steps (not just the first sample past it); a 3D plot of both
-  trajectories; a pass/fail criterion (e.g. miss < 1 m).
-- Goals: prove the architecture fits end to end before scaling up, find interface
-  problems early, and produce the first figure for the README.
-- Out of scope: YAML scenarios, sensors, proportional navigation, several agents —
-  each later phase replaces one simplified piece of the MVP.
+**Phase 7 — done**, in 6 steps (tests green and ruff clean at each; steps 1 and 2
+committed on their own, 3–6 together): scripted targets + closest approach interpolated
+inside a step; pure pursuit + engagement loop; MVP example with figure, pass/fail
+verdict and the first real README; interactive 3D viewer; scramble example (launch
+on alert from the ground); this document. Every
+layer worked together for the first time and the interfaces held (autopilot
+`velocity_command`, `pre_step`, `stop`). Result: the Iris catches a slow target
+(0.49 m at T+21.1 s) and cannot catch a fast one (miss 10.8 m): it was ordered to
+30 m/s and never flew faster than 22.0 m/s.
+
+**Phase 6b — generic fixed-wing threat (next).** A 6-DOF fixed-wing model driven
+by aerodynamic coefficients, to replace the scripted target. Proposed steps:
+1. Angle of attack and sideslip from the body airspeed (`body_airspeed` exists).
+2. Force and moment model with linear stability and control derivatives (CL, CD,
+   CY, Cl, Cm, Cn as functions of α, β, rates and surface deflections), in a
+   frozen parameter dataclass like `MultirotorParams`. Generic small-UAV numbers
+   from open sources (e.g. the Aerosonde-class data published in Beard & McLain,
+   *Small Unmanned Aircraft*), presented as a generic class, not a real weapon.
+3. Propeller thrust from throttle (simple model, ρ-scaled like the multirotor).
+4. Trim: find α, elevator and throttle for level flight at a given speed; test
+   that the trimmed state stays steady.
+5. Dynamic modes as tests: short period and phugoid against the classic
+   approximations (e.g. phugoid ω ≈ √2·g/V).
+6. A simple autopilot (heading and altitude hold) so the threat can follow a path.
+7. Fly it as the target of `engage`: this needs both bodies in one run (see loose
+   end 19).
 
 ## 6. Decision log
 
@@ -373,6 +410,97 @@ Phase 6a (control):
   validated. The PX4 SITL Iris weighs 1.52 kg; the real Iris+ is listed at
   1.282 kg (iFixit): the model is the SITL vehicle, not the retail one.
 
+Phase 7 (MVP):
+- **Scripted targets are closed-form tracks**, not integrated: exact at any time,
+  cheap, and with no state, so the engagement evaluates them in `pre_step` at the
+  time of each step. `TurningTarget` is a level circle of signed radius `V/ω`
+  (centre to the right for ω > 0); ω = 0 falls back to a straight line.
+- **Closest approach interpolated inside the step** (`core/events.py`): inside each
+  step the relative motion is taken as a straight line, `r(s) = r_i + s·Δr`,
+  minimised at `s* = −r_i·Δr / Δr·Δr` clipped to [0, 1]. Exact for constant
+  relative velocity, O(dt²) otherwise; the nearest sample alone can be off by up to
+  `v_rel·dt/2`. Resolves loose end 1 for the miss distance.
+- **Pure pursuit** `v_cmd = speed · (r_t − r_p)/|r_t − r_p|`, zero below 1e-6 m
+  (line of sight undefined). Tested against Bouguer's closed-form pursuit curve:
+  the invariant `C = 2r / (s^(k−1)(1 + s²))`, `s = tan(φ/2)`, stays constant
+  (1e-5), the capture time `T = r0 (k + cos φ0) / (Vt (k² − 1))` (to 0.02 s), and
+  for k < 1 the minimum separation `r_min = C s*^(k−1)/(1 + k)`. The guidance tests
+  fly an ideal point pursuer through the same RK4 loop, so they test the law, not
+  the vehicle.
+- **The real vehicle can only be later than the ideal pursuer**: its velocity lags
+  the command. The closed-loop Iris test checks the capture time between `T` and
+  `T + 3 s` (the margin is empirical, not derived; ~1.8 s was seen).
+- **`engage` runs the interceptor only**; the guidance writes the velocity command
+  in `pre_step` and then calls the autopilot. Step = `autopilot.dt`, so control and
+  simulation cannot disagree. The loop integrators are reset at the start, so one
+  autopilot can fly several engagements with identical results.
+- **Stop condition with memory** (`EndOfPursuit`): stop on capture (inside the
+  radius) or on a pass (the separation has grown `margin` above the smallest seen,
+  default 10 m). Both are needed: after a capture the separation never grows, after
+  a miss it never gets inside the radius. A pass only counts once the interceptor
+  has closed in at least once: taking off from rest behind a fleeing target, the
+  separation grows for a few seconds first (regression test).
+- **Capture radius 0.5 m** (chosen; the plan said "e.g. 1 m"): about the
+  motor-to-motor diagonal of the Iris (0.49 m). With a capture the run stops at the
+  first sample inside, so the reported distance says "it got there", not how close.
+- **`pursuit_feasible = speed > target speed`** (target speed at t = 0): pure
+  pursuit cannot catch a target at least as fast. It only looks at the commanded
+  speed; whether the airframe can fly it is not checked (loose end 14).
+- **The MVP verdict comes from two engagements** (`examples/iris_pursuit.py`):
+  slow threat (8 m/s, turning 2 deg/s; Iris ordered to 16 m/s) captured at 0.49 m,
+  T+21.12 s; fast threat (25 m/s straight; Iris ordered to 30 m/s) missed by
+  10.83 m at T+9.45 s. The fast case is kept on purpose: an unwinnable engagement
+  is reported as such. Its 22.0 m/s peak is a transient above the 20.7 m/s steady
+  top speed (velocity integral charged), not the top speed of the model.
+- **Figures are committed** in `docs/` (the README shows them); examples write them
+  there and create the folder if needed. Regenerating them is one command.
+- **Interactive viewer** = data export + standalone page. `iris_pursuit_viewer.py`
+  runs the engagements and writes their data (25 Hz, every 4th sample) as JSON
+  inside `viz/viewer_template.html`, producing one self-contained file: a page
+  opened from disk (`file://`) cannot fetch a separate data file. three.js 0.160.0
+  from jsDelivr, pinned. The viewer interpolates positions linearly and attitudes
+  with slerp, enlarges the vehicle icons with distance (tracks and numbers stay
+  true), and has two palettes (cyan tactical, amber CRT) defined only as CSS
+  tokens; the 3D materials register the token they use and are recoloured live. It
+  complements Cesium (phase 12): one engagement in detail versus many agents over
+  real terrain.
+- **Lesson from the viewer:** an author rule `display: grid` beats the browser's
+  `[hidden] { display: none }`, so a "hidden" full-screen error box was invisible
+  but swallowed every click in the local file. The artifact host adds its own
+  `[hidden]` rule, which masked the bug there. The page now carries
+  `[hidden] { display: none !important }`. Test a page the way the user opens it.
+- **Shared viewer export** (`viz/viewer.py`: `scenario_data`, `write_viewer`), so
+  every example writes the viewer the same way. `viz/` is a small Python package
+  outside `jineta`: it reads results, it never runs physics. The refactor of
+  `iris_pursuit_viewer.py` onto it produced a byte-identical page.
+- **Scramble = launch on alert, with no new physics** (`examples/iris_scramble.py`):
+  - No ground model, so a vehicle cannot rest on the ground inside the simulation.
+    Before the launch the Iris is simply not integrated: it stays at rest on the
+    pad (z = 0), which is what a vehicle with its motors off on the ground does.
+  - The alert is checked once per control step: launch at the first `t = k·dt` at
+    which the threat is within 400 m of the pad (slant range, as a radar measures).
+  - `engage` starts its own clock at 0, so it is given the threat as seen from the
+    launch, `t -> target(t + t_launch)`, and its times are shifted back. The standby
+    samples and the pursuit are joined into one `Engagement` on one time axis.
+  - Instant launch: no reaction time, no motor spin-up. The Iris rises from the
+    first step (0.35 mm after 10 ms) and never goes below the pad.
+  - Results: A (8 m/s threat, gentle left turn, 110 m) launch T+13.14 s, capture
+    0.48 m at T+36.87 s; B (25 m/s straight, 120 m) launch T+12.87 s, miss 31.11 m
+    at T+23.00 s.
+- **The top speed depends on the flight path.** In case B the Iris reached
+  28.6 m/s (26.0 horizontal, 11.9 climbing), well above the 20.7 m/s level-flight
+  top speed. In level flight at the 45° tilt limit the thrust is only what holds the
+  altitude (mg/cos 45° = 21.1 N); in a climb the velocity loop (vertical first) asks
+  for up to 90 % of the maximum (25.5 N), and the same tilt then gives more
+  horizontal force. Part of the peak is transient (velocity integral charged). So
+  "top speed" is not one number for a multirotor (see loose end 14).
+- **Viewer support for launch on alert** (optional `launch` block in the data:
+  time, range, site): alert dome (latitude rings and meridians), STANDBY status
+  before the launch, launch in the event log and on the range plot. Without the
+  block the viewer is unchanged. Fixed on the way: removing a non-fat-line object
+  called `splice(indexOf(...) = −1, 1)`, which would have dropped the last fat-line
+  material from the resize list.
+
 ## 7. Current state
 
 - `jineta/core/integrators.py` — `euler_step`, `rk4_step`, `Derivative` type alias.
@@ -441,7 +569,24 @@ Phase 6a (control):
 - `jineta/jinete/profiles.py` — `flu_to_frd(vector)`, `IRIS` (PX4 SITL Iris, sources
   in the comments), `IRIS_RATE_GAINS`, `IRIS_ATTITUDE_GAINS`, `IRIS_VELOCITY_GAINS`,
   `IRIS_GAINS`.
-- Tests (180 passing, ruff check + ruff format clean):
+- `jineta/core/events.py` — `ClosestApproach(time, distance, step)` and
+  `closest_approach(times, relative_positions)`: smallest separation with the time
+  interpolated inside its step (validated input: n ≥ 2 samples, (n, 3) array).
+- `jineta/jinete/targets.py` — `TargetTrack` alias, `StraightLineTarget(start,
+  velocity)`, `TurningTarget(start, speed, heading, turn_rate)` (frozen, validated,
+  arrays read-only), `track_positions(track, times)`.
+- `jineta/jinete/guidance.py` — `pure_pursuit_velocity(pursuer_position,
+  target_position, speed, min_distance=1e-6)`.
+- `jineta/engagement.py` — `Engagement` (result), `EndOfPursuit(target,
+  capture_radius, margin, initial_distance)` (stop condition with memory, validated)
+  and `engage(autopilot, target, initial_state, speed, t_end, capture_radius=0.5,
+  margin=10.0)`.
+- `viz/viewer.py` — `scenario_data(result, target, every=4, launch=None, **info)`
+  (one engagement, downsampled, NED) and `write_viewer(scenarios, path, dt,
+  capture_radius)` (fills the template, writes one self-contained HTML file).
+- `viz/viewer_template.html` — the three.js engagement viewer; `write_viewer`
+  replaces the `"__ENGAGEMENT_DATA__"` placeholder with the data.
+- Tests (227 passing, ruff check + ruff format clean):
   - integrators (2); rotation (5) — as in phases 1–3.
   - rigid body (10): the 8 of phase 4 + rejects mass ≤ 0 (2 cases).
   - inertia (10): read-only copy, accepts lists and products of inertia, accepts
@@ -508,6 +653,29 @@ Phase 6a (control):
     (behaviour: no overshoot, altitude within 0.5 m); holding still in a 10 m/s wind
     tilts into it by `atan(D/mg)` (1e-5 rad); at 3000 m the rotor speed settles at
     `Ω₀·√(ρ₀/ρ)` (0.1 %).
+  - targets (10): straight line; a turn keeps speed and altitude; a turn is a circle
+    of radius V/|ω| with the centre on the correct side (right and left — 2 cases);
+    a full turn comes back to the start; velocity = derivative of the position
+    (central differences); ω = 0 is a straight line; rejects invalid targets
+    (3 cases).
+  - events (9): straight fly-by exact between samples (1e-12); interpolation beats
+    the nearest sample; closest at the ends (moving apart, still closing — 2 cases);
+    0.5 m pass on a curved path found within 0.1 mm and 10 µs while the nearest
+    sample is > 0.1 m off; no relative motion; rejects invalid input (3 cases).
+  - guidance (16): command points at the target with the given speed (3-4-5);
+    speed independent of the distance (3 cases); zero command when the positions
+    coincide; rejects invalid input (3 cases); pursuit-curve invariant constant
+    (3 geometries, one with vertical motion); capture time matches the closed form
+    (3 geometries); a faster crossing target is never caught and the minimum
+    separation matches the closed form (~87.7 m); a faster receding target is never
+    closer than at the start.
+  - engagement (12): stop inside the capture radius; stop only after growing by the
+    margin over the smallest; growing before closing in is not a pass; rejects
+    invalid stop parameters (3 cases); the Iris catches a slower target in 3D later
+    than the ideal pursuer but within 3 s; catches a fleeing target it starts behind
+    (regression); a faster target is reported infeasible and never approached; a
+    pass without capture ends the run after the closest approach; the same
+    autopilot gives identical results twice; negative speed rejected.
 - Examples (all run, `python -m examples.<name>`):
   - `projectile_drag.py` — vacuum vs drag.
   - `density_comparison.py` — constant vs exponential vs ISA density (~1.7 km apogee:
@@ -522,6 +690,19 @@ Phase 6a (control):
   - `wind_gust.py` — power-law mean wind + 1-cosine gust: the body lags the wind.
   - `iris_velocity_step.py` — Iris under the autopilot: 10 m/s North, then stop
     (speed, pitch, rotor speeds, altitude), plus the top speed (20.7 m/s at 45°).
+  - `iris_pursuit.py` — the MVP: slow and fast threat, PASS/FAIL verdict per
+    engagement, 3D intercept plus separation vs time (log scale); saves
+    `docs/iris_pursuit.png` (the README figure).
+  - `iris_pursuit_viewer.py` — same two engagements exported into the viewer:
+    writes `docs/iris_pursuit_viewer.html` (~149 KB). Orbit / zoom / pan, timeline
+    with range sparkline, 0.25–4× playback, overview / top / follow cameras,
+    telemetry, event log, line of sight and velocity vectors, cyan or amber palette
+    (keys: space, ← →, O, T, F, P, 1, 2).
+  - `iris_scramble.py` — the Iris waits on the pad at rest and launches when the
+    threat comes within 400 m; case A captured, case B missed. Prints both
+    verdicts, plots range and altitude against time, and writes
+    `docs/iris_scramble_viewer.html` (~225 KB) with the alert dome and the standby
+    phase.
 - Physics note (intermediate-axis instability, torque-free): spin Ω about the
   intermediate axis grows any tiny perturbation at rate
   `λ = Ω·sqrt((I2−I1)(I3−I2)/(I1·I3))`. The example perturbation (0.01 rad/s on p
@@ -534,15 +715,17 @@ Phase 6a (control):
   rules), `run` docstring documents `stop` and `post_step`, input validation of
   `PointMass`, `RigidBody` and `RotatingBody` (`core/inertia.py`), shared
   interfaces moved to `core/environment.py`, `pyproject.toml` added.
+- Loose end resolved in phase 7: the first real `README.md` (MVP figure, what works,
+  how to run it, conventions, roadmap); the final one comes in phase 13.
 - Still open, on purpose (each has its moment):
   1. After `stop` fires, the last sample overshoots the event (e.g. ~v·dt below
-     ground). Event-time interpolation is part of phase 7 (miss distance).
+     ground). Resolved for the miss distance (`closest_approach`); other events
+     (ground impact) still read the last sample.
   2. The ISA functions are scalar-only (`if` on the altitude, `math`). Vectorise
      with `np.where` only if profiling shows a need (Monte Carlo, many agents).
   3. `RotatingBody` and `RigidBody` still duplicate Euler's equations (inertia
      validation is already shared). Revisit when a vehicle needs attitude-only runs.
-  4. `README.md` stays minimal until there is something to show: the first real
-     version comes with the phase 7 MVP figure, the final one in phase 13.
+  4. (Resolved in phase 7: README.)
   5. Mixer saturation is plain clipping. It already happens for an instant at every
      velocity step (one rotor at 0, another at the maximum). A smarter strategy
      (give up yaw before roll and pitch, as PX4 does) when it starts to matter.
@@ -555,7 +738,8 @@ Phase 6a (control):
      moments; rotor inertia (1–3 %) left out of the Iris inertia.
   9. Controllers run at the simulation rate (1/dt).
   10. An interceptor-class multirotor profile (higher thrust-to-weight), as data
-      with open sources.
+      with open sources. The MVP fast-threat case is the evidence: ordered to
+      30 m/s, the Iris never exceeded 22.0 m/s.
   11. No position loop: the velocity loop holds vertical speed, not altitude (the
       Iris climbs ~0.6 m during a 10 m/s cruise). Add one if a scenario needs to
       hold a point.
@@ -565,19 +749,40 @@ Phase 6a (control):
   13. With the slow PX4 horizontal integral, braking leaves a small velocity tail
       while the drag compensation unwinds (a few tenths of m/s for a few seconds).
       PX4 reduces this with feedforward from its trajectory generator.
-- Next: phase 7, the end-to-end MVP (new chat: "Seguimos con Jineta, fase 7: MVP").
-  Proposed steps:
-  - A scripted target: a small class with the same kind of interface as a vehicle
-    (state over time) flying a straight line or a gentle turn at constant speed.
-  - Pure-pursuit guidance in `pre_step`: velocity command towards the target at the
-    interceptor's chosen speed, both vehicles advanced by the same `run`.
-  - Closest approach with the time interpolated inside the step (relative motion
-    taken as straight within one step: minimise |r + v τ| for τ in [0, dt]); this
-    also resolves loose end 1 for this use.
-  - A runnable example with a 3D plot of both trajectories and a pass/fail line
-    (e.g. miss < 1 m); the figure goes into the first real README.
-  - Expect the Iris to be too slow against fast targets: that is a result, and the
-    reason for the interceptor profile (loose end 10).
+  14. `pursuit_feasible` compares the commanded speed with the target speed at
+      t = 0. It knows neither what the airframe can fly nor a target whose speed
+      changes. Better: the achievable speed as a property of the vehicle model
+      (from the tilt limit, the thrust and the drag), so `engage` can warn when
+      `speed` exceeds it. It depends on the flight path (20.7 m/s level, 28.6 m/s
+      peak seen while climbing), so it is a function, not one number.
+  15. Yaw is never commanded during an engagement (`yaw_command` stays 0): the Iris
+      flies the whole pursuit nose North. Harmless for the physics now; it matters
+      in phase 9, when a sensor with a field of view has to point at the target.
+  16. Wind and ISA density are never exercised in `engage` (tests and example use
+      sea-level density and no wind, although the phase 7 plan said "ISA + wind").
+      The `Multirotor` already accepts both; add an engagement test in wind.
+  17. A capture stops the run at the first sample inside the radius, so the
+      reported distance is "inside", not the impact precision. Comparing strategies
+      by precision would need running past the capture or a smaller radius.
+  18. `engagement.py` lives at the top of the package. Review in phase 8: it may
+      move to `jinete/engagement.py` or to a `jineta/scenario/` package next to the
+      YAML loading.
+  19. Only the interceptor is integrated; the target is a closed-form track. A
+      simulated target (phase 6b) needs both bodies in one run: stacked states in
+      one `run`, or a multi-entity loop (phase 8 needs that anyway).
+  20. The two MVP scenarios are written twice (`iris_pursuit.py` and
+      `iris_pursuit_viewer.py`). The YAML scenarios of phase 8 remove the copy.
+  21. The viewer needs internet (three.js and fonts from CDNs). If offline use ever
+      matters, ship a copy of three.js next to the template.
+  22. Launch on alert lives in an example (`iris_scramble.py`), with an instant
+      launch (no reaction time, no spin-up) and perfect detection at 400 m. Move it
+      into the scenario logic of phase 8; in phase 9 the alert becomes a sensor
+      detection.
+  23. No ground: once flying, nothing stops a vehicle from going below z = 0 (it
+      does not happen in any current example). Terrain comes in phase 12; a flat
+      ground check could come earlier if a scenario needs it.
+- Next: phase 6b, the generic fixed-wing threat (new chat: "Seguimos con Jineta,
+  fase 6b: amenaza de ala fija"). Proposed steps in section 5.
 
 ## 8. Working with Claude
 
@@ -597,6 +802,10 @@ Phase 6a (control):
   commits. When a change touches several places of one file, Claude gives the whole
   file: partial insertions were the source of the errors in phase 6a (a lost
   import, a missing block).
+- Claude's workspace cannot reach CDNs either, so it cannot render browser pages
+  that load three.js. When the chat is linked to the author's computer, Claude can
+  test such a page in the desktop app's built-in browser (console errors, clicks,
+  screenshots); otherwise it says the page was not rendered.
 - **End of each phase:** update this document (roadmap, conventions, decision log,
   current state) and hand it over to be committed.
 - **Session hygiene:** Claude must tell the author when to start a new chat —
