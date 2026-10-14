@@ -9,10 +9,11 @@ through Monte Carlo analysis.
 The name comes from the *jineta*, the historical Spanish light cavalry: small, agile
 units that coordinated hit-and-run attacks.
 
-> **Status: end-to-end MVP (phase 7 of 13).** One interceptor, one scripted target,
-> perfect information, the simplest guidance law that works. Sensors, several agents,
-> real terrain and the coordination strategies — the actual point of the project — come
-> later. See [`DESIGN.md`](DESIGN.md) for the full roadmap and decision log.
+> **Status: end-to-end MVP done (phase 7); generic fixed-wing threat in progress
+> (phase 6b).** One interceptor, one scripted target, perfect information, the
+> simplest guidance law that works. Sensors, several agents, real terrain and the
+> coordination strategies — the actual point of the project — come later. See
+> [`DESIGN.md`](DESIGN.md) for the full roadmap and decision log.
 
 ## The MVP
 
@@ -48,8 +49,7 @@ python -m examples.iris_pursuit
 The same two engagements can be replayed in 3D in the browser:
 
 ```powershell
-python -m examples.iris_pursuit_viewer   # writes docs\iris_pursuit_viewer.html
-start docs\iris_pursuit_viewer.html
+python -m examples.iris_pursuit_viewer   # writes docs\iris_pursuit_viewer.html and opens it
 ```
 
 Drag to orbit, scroll to zoom, right-drag to pan, and scrub or play the timeline
@@ -57,6 +57,11 @@ Drag to orbit, scroll to zoom, right-drag to pan, and scrub or play the timeline
 speed, tilt), the line of sight the guidance steers along, velocity vectors, an
 event log and the closest point of approach; cameras for overview, top view or
 following the interceptor; and a cyan tactical or amber CRT palette (key **P**).
+
+The viewer opens in its own window when `pywebview` is installed
+(`pip install pywebview`), and in the browser otherwise. `python -m viz.app
+docs\iris_scramble_viewer.html` reopens a page without simulating again, and
+`--no-window` makes an example only write its files.
 
 The viewer only replays data: the Python script runs the simulation and embeds the
 results, in the simulator's own conventions, into one self-contained HTML file. It
@@ -71,11 +76,12 @@ distance, as a radar would measure it). Then it climbs and flies pure pursuit.
 - **A slow threat** (8 m/s, gentle turn, 110 m up) comes within range at T+13.1 s;
   the Iris climbs to it and catches it at T+36.9 s (0.48 m).
 - **A fast threat** (25 m/s, straight, 120 m up) comes within range at T+12.9 s and
-  is past before the Iris gets up to it: miss by 31.1 m at T+23.0 s.
+  is past before the Iris gets up to it: miss by 31.1 m at T+23.0 s. The Iris keeps
+  chasing at its level top speed (20.7 m/s) and is 164 m behind when the threat
+  leaves the dome at T+41.9 s, where the run ends.
 
 ```powershell
-python -m examples.iris_scramble   # verdicts, range/altitude plot, docs\iris_scramble_viewer.html
-start docs\iris_scramble_viewer.html
+python -m examples.iris_scramble   # verdicts, range/altitude plot, then the viewer
 ```
 
 The same viewer adds the alert dome around the pad, a standby phase before the
@@ -87,7 +93,7 @@ launch and the launch time on the timeline.
 |---|---|---|
 | Physics engine | `jineta/core` | RK4 and Euler integrators, point mass with quadratic drag, quaternion algebra, Euler's equations, full 13-element 6-DOF rigid body, fixed-step simulation loop with pre/post-step hooks, closest-approach interpolation |
 | Environment | `jineta/campo` | ISA atmosphere 0–20 km, wind models (constant, altitude profile, power-law boundary layer, 1-cosine gust, sums of models) |
-| Vehicles | `jineta/jinete` | Airspeed in body axes, multirotor force model (thrust, reaction torques, rotor drag, body drag), rotor mixer built from the geometry, cascaded autopilot, vehicle profiles as data, pure pursuit guidance, scripted targets |
+| Vehicles | `jineta/jinete` | Airspeed in body axes, multirotor force model (thrust, reaction torques, rotor drag, body drag), rotor mixer built from the geometry, cascaded autopilot, vehicle profiles as data, pure pursuit guidance, scripted targets; fixed-wing air data (V, α, β) and aerodynamics (stability derivatives, stall, drag polar) for a generic small UAV |
 | Engagement | `jineta/engagement.py` | One interceptor against one target: runs the loop, stops on capture or on a miss, reports the miss distance and time |
 | Visualisation | `examples/`, `viz/` | matplotlib figures, and a standalone three.js viewer that replays engagements (`viz/viewer.py` exports them) |
 | Sensors, assignment, coordination | `jineta/atalaya`, `capitan`, `escuadron` | Empty: phases 9–11 |
@@ -146,10 +152,11 @@ coordination analysis, not weapon data.
 ## Roadmap
 
 Phases 1–6a and 7 are done: integrators, point mass, rotation, 6-DOF rigid body,
-atmosphere and wind, the Iris quadrotor with its control cascade, and this MVP. Next
-come a generic fixed-wing threat model, YAML scenarios with several entities, sensors
-and a Kalman filter, proportional navigation, the coordination strategies, real terrain
-with Cesium, and a Monte Carlo study. The table in
+atmosphere and wind, the Iris quadrotor with its control cascade, and this MVP. In
+progress: a generic fixed-wing threat model (its aerodynamics are done; thrust,
+trim, dynamic modes and an autopilot come next). Then YAML scenarios with several
+entities, sensors and a Kalman filter, proportional navigation, the coordination
+strategies, real terrain with Cesium, and a Monte Carlo study. The table in
 [`DESIGN.md`](DESIGN.md#5-roadmap) tracks them.
 
 ## Licence
