@@ -1,9 +1,12 @@
 """Interactive 3D viewer of the MVP engagements, as a single HTML file.
 
-Runs the same two engagements as `iris_pursuit.py` and writes them into the viewer
-(`viz/viewer.py`), producing `docs/iris_pursuit_viewer.html`. Open that file in a
-browser: drag to orbit, scroll to zoom, right-drag to pan, and use the timeline to
-play, pause and scrub.
+Runs the same two engagements as `iris_pursuit.py`, writes them into the viewer
+(`viz/viewer.py`), producing `docs/iris_pursuit_viewer.html`, and opens it in its own
+window (`viz/app.py`; the browser if pywebview is not installed). Drag to orbit,
+scroll to zoom, right-drag to pan, and use the timeline to play, pause and scrub.
+
+    python -m examples.iris_pursuit_viewer               # simulate, write, open
+    python -m examples.iris_pursuit_viewer --no-window   # only write the page
 
 The simulator still never draws: this script runs it and exports the results.
 """
@@ -17,6 +20,7 @@ from jineta.jinete.control import Autopilot
 from jineta.jinete.multirotor import Multirotor
 from jineta.jinete.profiles import IRIS, IRIS_GAINS
 from jineta.jinete.targets import StraightLineTarget, TurningTarget
+from viz.app import show, window_requested
 from viz.viewer import scenario_data, write_viewer
 
 DT = 0.01  # simulation and control step [s]
@@ -92,3 +96,6 @@ for s in scenarios:
         f"at t = {s['closest']['time']:.2f} s, {len(s['t'])} frames"
     )
 print(f"Viewer written to {OUTPUT} ({OUTPUT.stat().st_size / 1024:.0f} KB)")
+
+if window_requested():
+    show(OUTPUT)

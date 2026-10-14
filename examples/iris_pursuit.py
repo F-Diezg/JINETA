@@ -31,6 +31,7 @@ from jineta.jinete.control import Autopilot
 from jineta.jinete.multirotor import Multirotor
 from jineta.jinete.profiles import IRIS, IRIS_GAINS
 from jineta.jinete.targets import StraightLineTarget, TurningTarget
+from viz.app import window_requested
 
 DT = 0.01  # simulation and control step [s], 100 Hz
 CAPTURE_RADIUS = 0.5  # separation that counts as an interception [m]
@@ -187,4 +188,5 @@ fig.tight_layout()
 FIGURE_PATH.parent.mkdir(parents=True, exist_ok=True)
 fig.savefig(FIGURE_PATH, dpi=150)
 print(f"\nFigure saved to {FIGURE_PATH}")
-plt.show()
+if window_requested():  # --no-window: only save the figure
+    plt.show()

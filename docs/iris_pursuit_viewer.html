@@ -143,6 +143,7 @@ body {
   font-family: var(--font-title); font-weight: var(--title-weight); font-size: 13px; letter-spacing: 0.2em;
   padding: 4px 8px 3px; border: 1px solid currentColor; justify-self: start; color: var(--dim);
 }
+#status[data-state="standby"] { color: var(--event); }
 #status[data-state="closing"] { color: var(--friendly); }
 #status[data-state="opening"] { color: var(--hostile); }
 #status[data-state="intercept"] { color: var(--good); background: var(--good-wash); }
@@ -337,7 +338,8 @@ function prepare(s) {
   let peak = 0; for (let i = 1; i < n; i++) if (ispeed[i] > ispeed[peak]) peak = i;
   return { ...s, n, ip, tp, iv, tv, iq, range, ispeed, peak,
     duration: s.t[n - 1],
-    caI: toThree(s.closest.interceptor), caT: toThree(s.closest.target) };
+    caI: toThree(s.closest.interceptor), caT: toThree(s.closest.target),
+    launch: s.launch ? { ...s.launch, site: toThree(s.launch.site) } : null };
 }
 const SCEN = DATA.scenarios.map(prepare);
 
@@ -490,13 +492,37 @@ const cpaRing = new THREE.Mesh(new THREE.RingGeometry(3.2, 3.8, 4), cpaMat);
 cpa.add(cpaRing);
 scene.add(cpa);
 
-// per-scenario objects (tracks)
+// alert dome: the launch range around the pad, as latitude rings and meridians
+function alertDome(site, range) {
+  const points = [];
+  const at = (azimuth, elevation) => new THREE.Vector3(
+    Math.cos(elevation) * Math.cos(azimuth) * range, Math.sin(elevation) * range,
+    Math.cos(elevation) * Math.sin(azimuth) * range);
+  const deg = Math.PI / 180;
+  for (const elevation of [0, 20, 40, 60, 80]) {
+    for (let k = 0; k < 96; k++) {
+      points.push(at((k / 96) * 2 * Math.PI, elevation * deg), at(((k + 1) / 96) * 2 * Math.PI, elevation * deg));
+    }
+  }
+  for (let m = 0; m < 12; m++) {
+    for (let k = 0; k < 24; k++) {
+      points.push(at(m * 30 * deg, (k / 24) * 90 * deg), at(m * 30 * deg, ((k + 1) / 24) * 90 * deg));
+    }
+  }
+  const dome = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(points),
+    new THREE.LineBasicMaterial({ color: COLOR.friendly, transparent: true, opacity: 0.16, depthWrite: false }));
+  dome.position.copy(site);
+  return dome;
+}
+
+// per-scenario objects (tracks, alert dome)
 let tracks = null;
 function buildTracks(s) {
   if (tracks) {
     for (const o of tracks.objects) {
       scene.remove(o); o.geometry.dispose(); o.material.dispose();
-      fatMaterials.splice(fatMaterials.indexOf(o.material), 1);
+      const k = fatMaterials.indexOf(o.material);
+      if (k >= 0) fatMaterials.splice(k, 1);
     }
   }
   const ground = (pts) => pts.map((p) => new THREE.Vector3(p.x, 0.5, p.z));
@@ -509,6 +535,7 @@ function buildTracks(s) {
   const iDone = fatLine(s.ip, COLOR.friendly, 3);
   const tDone = fatLine(s.tp, COLOR.hostile, 3);
   objects.push(iDone, tDone);
+  if (s.launch) objects.push(alertDome(s.launch.site, s.launch.range));
   scene.add(...objects);
   tracks = { objects, iDone, tDone };
   resize();
@@ -523,6 +550,7 @@ const irisTag = tag("f", "IRIS<small></small>");
 const threatTag = tag("h", "THREAT<small></small>");
 const cpaTag = tag("e", "CPA<small></small>");
 const losTag = tag("los", "");
+const alertTag = tag("e", "ALERT<small></small>");
 const northTag = tag("n", "N");
 const ringTags = [100, 200, 300, 400].map((r) => tag("n", `<small>${r} m</small>`));
 const v = new THREE.Vector3();
@@ -612,7 +640,8 @@ function update() {
   ui.talt.innerHTML = `${fmt(pT.y)} <small>m</small>`;
 
   let state, label;
-  if (passed && S.captured) { state = "intercept"; label = "INTERCEPT"; }
+  if (S.launch && time < S.launch.time) { state = "standby"; label = "STANDBY · ON THE PAD"; }
+  else if (passed && S.captured) { state = "intercept"; label = "INTERCEPT"; }
   else if (passed) { state = "miss"; label = "MISS · TARGET ESCAPING"; }
   else if (closure >= 0) { state = "closing"; label = "CLOSING"; }
   else { state = "opening"; label = "OPENING"; }
@@ -641,6 +670,8 @@ function placeTags() {
   place(cpaTag, cpa.position, cpa.visible);
   place(losTag, iris.position.clone().lerp(threat.position, 0.5), iris.position.distanceTo(threat.position) > 25);
   place(northTag, new THREE.Vector3(0, 0, -490));
+  if (S.launch) place(alertTag, S.launch.site.clone().add(new THREE.Vector3(0, S.launch.range, 0)));
+  else alertTag.hidden = true;
   [100, 200, 300, 400].forEach((r, k) => place(ringTags[k], new THREE.Vector3(r * Math.SQRT1_2, 0, r * Math.SQRT1_2)));
 }
 
@@ -687,6 +718,14 @@ function drawSpark() {
   const cx = X(S.closest.time), cy = Y(S.closest.distance);
   sctx.fillStyle = COLOR.event;
   sctx.beginPath(); sctx.moveTo(cx, cy - 5); sctx.lineTo(cx + 5, cy); sctx.lineTo(cx, cy + 5); sctx.lineTo(cx - 5, cy); sctx.closePath(); sctx.fill();
+  // launch
+  if (S.launch) {
+    const lx = X(S.launch.time);
+    sctx.setLineDash([3, 3]); sctx.strokeStyle = COLOR.event; sctx.globalAlpha = 0.9; sctx.lineWidth = 1;
+    sctx.beginPath(); sctx.moveTo(lx, 0); sctx.lineTo(lx, bottom); sctx.stroke();
+    sctx.setLineDash([]); sctx.globalAlpha = 1;
+    sctx.fillStyle = COLOR.event; sctx.fillText("launch", lx + 4, top + 6);
+  }
   // playhead
   sctx.strokeStyle = COLOR.ink; sctx.globalAlpha = 0.8; sctx.lineWidth = 1;
   sctx.beginPath(); sctx.moveTo(X(time), 0); sctx.lineTo(X(time), bottom + 4); sctx.stroke();
@@ -699,6 +738,16 @@ function drawSpark() {
 let logItems = [];
 function describe(s) {
   const top = s.ispeed[s.peak];
+  const cpaText = `<b>${s.closest.distance.toFixed(2)} m at T+${s.closest.time.toFixed(2)}</b>`;
+  if (s.launch) {
+    const intro = `The Iris waits on the pad at rest, rotors stopped. The threat comes within ${s.launch.range} m ` +
+      `at T+${s.launch.time.toFixed(2)}: the Iris launches and flies pure pursuit, ordered to ` +
+      `${s.commanded_speed} m/s against a ${s.target_speed} m/s threat. `;
+    return intro + (s.captured
+      ? `It climbs to the threat and catches it: ${cpaText}.`
+      : `The threat is past before the Iris gets up to it: it misses by ${cpaText}, ` +
+        `keeps chasing and falls behind until the threat leaves the ${s.launch.range} m dome.`);
+  }
   if (s.captured) {
     return `Pure pursuit: every step the Iris is ordered to fly at ${s.commanded_speed} m/s straight at where the threat is now. ` +
       `Twice as fast as its ${s.target_speed} m/s target, it closes from ${fmtRange(s.range[0])} m to <b>${s.closest.distance.toFixed(2)} m at T+${s.closest.time.toFixed(2)}</b>.`;
@@ -707,14 +756,23 @@ function describe(s) {
     `It crosses the threat nearly head-on, misses by <b>${s.closest.distance.toFixed(2)} m at T+${s.closest.time.toFixed(2)}</b>, and has to turn around behind a faster target.`;
 }
 function buildLog(s) {
-  const events = [
+  const events = s.launch ? [
+    { t: 0, text: `On the pad, rotors stopped. Threat at ${fmtRange(s.range[0])} m` },
+    { t: s.launch.time, key: true, text: `Threat inside ${s.launch.range} m: launch` },
+  ] : [
     { t: 0, text: `Launch from hover. Range ${fmtRange(s.range[0])} m` },
+  ];
+  events.push(
     { t: s.t[s.peak], text: `Peak interceptor speed ${s.ispeed[s.peak].toFixed(1)} m/s` },
     { t: s.closest.time, key: true, text: s.captured
         ? `Intercept: CPA ${s.closest.distance.toFixed(2)} m (< ${DATA.meta.capture_radius} m)`
         : `Closest approach ${s.closest.distance.toFixed(2)} m. Miss` },
-  ];
-  if (!s.captured) events.push({ t: s.duration, text: "Range opening: run stopped" });
+  );
+  if (!s.captured) {
+    events.push({ t: s.duration, text: s.launch
+      ? `Threat outside ${s.launch.range} m: run stopped`
+      : "Range opening: run stopped" });
+  }
   events.sort((a, b) => a.t - b.t);
   const ol = el("log"); ol.innerHTML = "";
   logItems = events.map((e) => {
@@ -768,6 +826,7 @@ function selectScenario(k) {
   S = SCEN[k];
   [...tabs.children].forEach((b, j) => b.setAttribute("aria-selected", String(j === k)));
   el("summary").innerHTML = describe(S);
+  alertTag.querySelector("small").textContent = S.launch ? `${S.launch.range} m` : "";
   buildLog(S);
   buildTracks(S);
   time = 0; playing = false; ui.play.textContent = "Play";

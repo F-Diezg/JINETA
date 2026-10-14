@@ -26,7 +26,8 @@ How the launch is simulated, with no new physics:
     its duration, with an infinite margin so that a pass never stops it earlier.
 
 Writes `docs/iris_scramble_viewer.html` (the same viewer as the MVP, which adds the
-alert dome and a standby phase) and shows range and altitude against time.
+alert dome and a standby phase), shows range and altitude against time and then
+opens the viewer in its own window. `--no-window` only writes the page.
 """
 
 from pathlib import Path
@@ -40,6 +41,7 @@ from jineta.jinete.control import Autopilot
 from jineta.jinete.multirotor import Multirotor
 from jineta.jinete.profiles import IRIS, IRIS_GAINS
 from jineta.jinete.targets import StraightLineTarget, TurningTarget, track_positions
+from viz.app import show, window_requested
 from viz.viewer import scenario_data, write_viewer
 
 DT = 0.01  # simulation and control step [s]
@@ -224,4 +226,6 @@ for ax in (ax_range, ax_alt):
     ax.grid(True, which="both", alpha=0.3)
 fig.suptitle("Scramble: launch on alert, then pure pursuit")
 fig.tight_layout()
-plt.show()
+if window_requested():
+    plt.show()  # close the plot to open the viewer
+    show(VIEWER_PATH)

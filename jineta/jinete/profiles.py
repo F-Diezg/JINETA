@@ -14,6 +14,7 @@ from jineta.jinete.control import (
     RateGains,
     VelocityGains,
 )
+from jineta.jinete.fixed_wing import FixedWingParams
 from jineta.jinete.multirotor import MultirotorParams, Rotor
 
 
@@ -96,4 +97,57 @@ IRIS_GAINS = MultirotorGains(
     rate=IRIS_RATE_GAINS,
     attitude=IRIS_ATTITUDE_GAINS,
     velocity=IRIS_VELOCITY_GAINS,
+)
+
+
+# Generic small fixed-wing UAV (the threat class of phase 6b): Aerosonde-class numbers
+# from the open-source simulator of Beard & McLain, Small Unmanned Aircraft (2012),
+# mavsim_public (github.com/byu-magicc/mavsim_public),
+# mavsim_python/parameters/aerosonde_parameters.py. The Aerosonde is a civilian
+# weather-reconnaissance UAV; its data stand here for "a small fixed-wing drone",
+# not for any particular vehicle.
+# - Inertia: J_x, J_y, J_z and the product J_xz of the source; the tensor carries
+#   -J_xz off the diagonal (the plane of symmetry is x-z, so J_xy = J_yz = 0).
+# - Drag: the source lists two drag models; this uses its polar (C_D_p, e, AR).
+#   C_D_0 = 0.0424 and C_D_alpha = 0.132 of the linear model are not used.
+# - The source's own density (1.2682 kg/m^3) is not part of the profile: the density
+#   comes from the environment (ISA).
+SMALL_FIXED_WING = FixedWingParams(
+    mass=11.0,
+    inertia=[[0.8244, 0.0, -0.1204], [0.0, 1.135, 0.0], [-0.1204, 0.0, 1.759]],
+    wing_area=0.55,
+    span=2.8956,
+    chord=0.18994,
+    oswald=0.9,
+    c_lift_0=0.23,
+    c_lift_alpha=5.61,
+    c_lift_q=7.95,
+    c_lift_elevator=0.13,
+    stall_sharpness=50.0,
+    stall_angle=0.47,
+    c_drag_p=0.043,
+    c_drag_q=0.0,
+    c_drag_elevator=0.0135,
+    c_m_0=0.0135,
+    c_m_alpha=-2.74,
+    c_m_q=-38.21,
+    c_m_elevator=-0.99,
+    c_y_0=0.0,
+    c_y_beta=-0.98,
+    c_y_p=0.0,
+    c_y_r=0.0,
+    c_y_aileron=0.075,
+    c_y_rudder=0.19,
+    c_ell_0=0.0,
+    c_ell_beta=-0.13,
+    c_ell_p=-0.51,
+    c_ell_r=0.25,
+    c_ell_aileron=0.17,
+    c_ell_rudder=0.0024,
+    c_n_0=0.0,
+    c_n_beta=0.073,
+    c_n_p=0.069,
+    c_n_r=-0.095,
+    c_n_aileron=-0.011,
+    c_n_rudder=-0.069,
 )
