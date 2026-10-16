@@ -1,4 +1,4 @@
-﻿bottle==0.13.4
+bottle==0.13.4
 cffi==2.1.1
 clr_loader==0.3.1
 colorama==0.4.6

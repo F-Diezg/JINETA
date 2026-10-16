@@ -16,6 +16,7 @@ from jineta.jinete.control import (
 )
 from jineta.jinete.fixed_wing import FixedWingParams
 from jineta.jinete.multirotor import MultirotorParams, Rotor
+from jineta.jinete.propulsion import PropulsionParams
 
 
 def flu_to_frd(vector: npt.ArrayLike) -> np.ndarray:
@@ -150,4 +151,23 @@ SMALL_FIXED_WING = FixedWingParams(
     c_n_r=-0.095,
     c_n_aileron=-0.011,
     c_n_rudder=-0.069,
+)
+
+
+# Propulsion of the generic small fixed-wing UAV: electric motor + fixed-pitch
+# propeller, from the same source file (aerosonde_parameters.py, "Propeller thrust /
+# torque parameters", propulsion addendum by McLain). Static thrust at full throttle
+# and sea level is ~82 N (thrust-to-weight ~0.76).
+# - Propeller: D = 20 in; C_T(J), C_Q(J) quadratic fits of measured data.
+# - Motor: KV = 145 RPM/V, so K = 60 / (2 pi 145) = 0.06586 V·s/rad (the source
+#   uses the same value for the torque constant KQ); R = 0.042 ohm; i0 = 1.5 A.
+# - Battery: 12 cells x 3.7 V = 44.4 V at full throttle.
+SMALL_FIXED_WING_PROPULSION = PropulsionParams(
+    diameter=20 * 0.0254,
+    motor_constant=60.0 / (2.0 * np.pi * 145.0),
+    resistance=0.042,
+    no_load_current=1.5,
+    max_voltage=12 * 3.7,
+    c_thrust=(0.09357, -0.06044, -0.1079),
+    c_torque=(0.005230, 0.004970, -0.01664),
 )
