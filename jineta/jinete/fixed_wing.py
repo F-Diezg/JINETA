@@ -23,15 +23,21 @@ Model and equations as in Beard & McLain, Small Unmanned Aircraft (2012), ch. 4:
 linear derivatives, a parabolic drag polar, and a smooth blend from the linear lift
 curve to a flat plate past the stall. Side force and the moments use the sideslip
 directly in body axes (good for small beta, as the source).
+
+`FixedWing` is the vehicle: the aerodynamics plus an electric propeller (see
+`propulsion`) acting on a `RigidBody`.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import numpy.typing as npt
 
+from jineta.core.environment import DensityModel, WindModel, no_wind, sea_level_density
 from jineta.core.inertia import inertia_tensor
-from jineta.jinete.aero import air_data
+from jineta.core.rigid_body import RigidBody
+from jineta.jinete.aero import air_data, body_airspeed
+from jineta.jinete.propulsion import PropulsionParams, propeller_thrust_torque
 
 
 @dataclass(frozen=True)
@@ -242,3 +248,61 @@ def aero_force_moment(
         )
     )
     return force, np.array([roll, pitch, yaw])
+
+
+@dataclass
+class FixedWing:
+    """A fixed-wing aircraft in the environment: the force/moment model of a RigidBody.
+
+    Inputs, held between updates (set them in `pre_step`, as a controller would):
+    - `surfaces`: control surface deflections [rad] (`ControlSurfaces`, starts at 0);
+    - `throttle`: in [0, 1], clipped (starts at 0).
+
+    Forces and moments in body axes (gravity is added by the RigidBody):
+    - aerodynamics (`aero_force_moment`) with the airspeed v - wind and the density
+      at the current altitude;
+    - propeller thrust along the body x axis, through the centre of mass, from the
+      axial airspeed u; its torque Q reacts on the airframe as a rolling moment -Q
+      (the propeller turns clockwise seen from behind, as in the source).
+    Without `propulsion` the aircraft is a glider: no thrust and no torque. That is
+    "engine off"; throttle 0 with a propeller is not (the windmilling propeller
+    brakes, see `propulsion`).
+    """
+
+    params: FixedWingParams
+    propulsion: PropulsionParams | None = None
+    density: DensityModel = sea_level_density
+    wind: WindModel = no_wind
+    surfaces: ControlSurfaces = field(init=False)
+    throttle: float = field(init=False)
+    body: RigidBody = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.surfaces = ControlSurfaces()
+        self.throttle = 0.0
+        self.body = RigidBody(
+            mass=self.params.mass,
+            inertia=self.params.inertia,
+            force_moment=self.force_moment,
+        )
+
+    def derivative(self, t: float, state: np.ndarray) -> np.ndarray:
+        """Return d(state)/dt for the 13-element rigid-body state."""
+        return self.body.derivative(t, state)
+
+    def force_moment(
+        self, t: float, state: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Aerodynamic and propeller force and moment in body axes (no gravity)."""
+        airspeed = body_airspeed(t, state, self.wind)
+        rho = self.density(-state[2])
+        force, moment = aero_force_moment(
+            self.params, airspeed, state[10:13], self.surfaces, rho
+        )
+        if self.propulsion is not None:
+            prop = propeller_thrust_torque(
+                self.propulsion, airspeed[0], self.throttle, rho
+            )
+            force = force + np.array([prop.thrust, 0.0, 0.0])
+            moment = moment + np.array([-prop.torque, 0.0, 0.0])
+        return force, moment
