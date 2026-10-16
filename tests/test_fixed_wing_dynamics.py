@@ -7,15 +7,29 @@ ours do not, so it is added here). The other tests check how the vehicle compose
 its parts: thrust along the body x axis, the propeller torque as a rolling moment,
 the airspeed relative to the wind, the density at the current altitude, and the
 commands read when the forces are evaluated.
+
+The first dynamic test is a power-off glide. In a steady straight glide nothing
+changes, so the forces balance: lift L = W cos(gamma) across the flight path, drag
+D = -W sin(gamma) along it, hence tan(gamma) = -D/L = -C_D/C_L. With no rotation
+the pitching moment must vanish too, which fixes alpha for a given elevator.
 """
 
 import numpy as np
+import pytest
 
 from jineta.campo.atmosphere import isa_density
 from jineta.core import quaternion
 from jineta.core.environment import GRAVITY, sea_level_density
-from jineta.jinete.aero import body_airspeed
-from jineta.jinete.fixed_wing import ControlSurfaces, FixedWing, aero_force_moment
+from jineta.core.rigid_body import normalize_attitude
+from jineta.core.simulation import run
+from jineta.jinete.aero import air_data, body_airspeed
+from jineta.jinete.fixed_wing import (
+    ControlSurfaces,
+    FixedWing,
+    aero_force_moment,
+    drag_coefficient,
+    lift_coefficient,
+)
 from jineta.jinete.profiles import SMALL_FIXED_WING, SMALL_FIXED_WING_PROPULSION
 from jineta.jinete.propulsion import propeller_thrust_torque
 
@@ -210,3 +224,77 @@ def test_commands_are_read_when_the_forces_are_evaluated():
     aircraft.surfaces = ControlSurfaces(elevator=0.1)  # trailing edge down
     after = aircraft.force_moment(0.0, state)[1][1]
     assert after < before  # nose-down pitching moment
+
+
+def glide_equilibrium(elevator, density=RHO):
+    """Steady power-off glide of the profile for a fixed elevator.
+
+    Returns (alpha, gamma, speed): alpha from C_m = 0 (no rotation, so no rate
+    terms), gamma = -atan(C_D / C_L), speed from L = W cos(gamma).
+    """
+    alpha = -(P.c_m_0 + P.c_m_elevator * elevator) / P.c_m_alpha
+    c_lift = lift_coefficient(P, alpha) + P.c_lift_elevator * elevator
+    c_drag = drag_coefficient(P, alpha) + P.c_drag_elevator * elevator
+    gamma = -np.arctan(c_drag / c_lift)
+    weight = P.mass * GRAVITY
+    speed = np.sqrt(2 * weight * np.cos(gamma) / (density * P.wing_area * c_lift))
+    return alpha, gamma, speed
+
+
+def glide_state(alpha, gamma, speed, altitude=1000.0):
+    """Wings level, heading North, descending along gamma with the nose at
+    theta = gamma + alpha (the flight path plus the angle of attack)."""
+    velocity = speed * np.array([np.cos(gamma), 0.0, -np.sin(gamma)])
+    attitude = quaternion.from_axis_angle([0, 1, 0], gamma + alpha)
+    return np.concatenate([[0.0, 0.0, -altitude], velocity, attitude, np.zeros(3)])
+
+
+def flight_path_angle(state):
+    """gamma > 0 climbing: the angle of the ground velocity above the horizon."""
+    velocity = state[3:6]
+    return -np.arcsin(velocity[2] / np.linalg.norm(velocity))
+
+
+@pytest.mark.parametrize("elevator", [0.0, -0.05, -0.1, -0.15])
+def test_the_analytic_glide_is_an_equilibrium(elevator):
+    # Every derivative vanishes except the position, which moves along the path.
+    alpha, gamma, speed = glide_equilibrium(elevator)
+    glider = FixedWing(P)
+    glider.surfaces = ControlSurfaces(elevator=elevator)
+    state = glide_state(alpha, gamma, speed)
+    derivative = glider.derivative(0.0, state)
+    assert np.allclose(derivative[0:3], state[3:6], atol=1e-12)
+    assert np.allclose(derivative[3:13], 0.0, atol=1e-12)
+
+
+def test_glide_angle_is_the_drag_to_lift_ratio():
+    # Elevator -0.1: alpha 2.35 deg, L/D 9.6, gamma -5.94 deg, V 26.68 m/s.
+    alpha, gamma, speed = glide_equilibrium(-0.1)
+    assert np.isclose(np.degrees(alpha), 2.3525, atol=1e-4)
+    assert np.isclose(np.degrees(gamma), -5.9429, atol=1e-4)
+    assert np.isclose(speed, 26.683, atol=1e-3)
+
+
+def test_released_glider_settles_into_the_analytic_glide():
+    # Released wings level, nose on the horizon at the glide alpha, but 20 % too
+    # slow and flying level: the phugoid (a slow exchange of height and speed,
+    # period ~12 s) dies out and the glider ends on the analytic glide path.
+    elevator = -0.1
+    alpha, gamma, speed = glide_equilibrium(elevator)
+    glider = FixedWing(P)
+    glider.surfaces = ControlSurfaces(elevator=elevator)
+    start = glide_state(alpha, 0.0, 0.8 * speed)
+    # dt = 0.05 s: halving it changes the final velocity and attitude by < 1e-9
+    # (the position by < 1e-6 m after ~4 km).
+    times, states = run(
+        glider.derivative, start, 0.05, 150.0, post_step=normalize_attitude
+    )
+    final = states[-1]
+    air = air_data(body_airspeed(times[-1], final))
+    assert abs(flight_path_angle(start) - gamma) > np.radians(5.0)  # far at first
+    assert np.isclose(np.linalg.norm(final[3:6]), speed, atol=0.01)
+    assert np.isclose(flight_path_angle(final), gamma, atol=np.radians(0.02))
+    assert np.isclose(air.alpha, alpha, atol=np.radians(0.01))
+    assert np.allclose(final[10:13], 0.0, atol=1e-3)
+    # Straight ahead: the motion stayed in the vertical plane of the start.
+    assert np.allclose(states[:, 1], 0.0, atol=1e-9)
