@@ -105,6 +105,13 @@ body {
   letter-spacing: 0.08em; text-transform: uppercase; line-height: 1.05; text-wrap: balance;
 }
 #info h1 span { color: var(--friendly); }
+a.ctl {   /* a link that looks like the control buttons */
+  font-family: var(--font-display); font-weight: 600; font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--ink); border: 1px solid var(--line); height: 30px; padding: 0 10px; text-decoration: none;
+  display: inline-flex; align-items: center; white-space: nowrap;
+}
+a.ctl:hover { border-color: var(--friendly); color: var(--friendly); }
+a.ctl:focus-visible { outline: 1px solid var(--event); outline-offset: 2px; }
 .tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .tab {
   font-family: var(--font-display); font-weight: 600; font-size: 12px; letter-spacing: 0.12em;
@@ -217,7 +224,7 @@ button.ctl[aria-pressed="true"] { border-color: var(--friendly); color: var(--fr
 <div id="tags"></div>
 
 <section id="info" class="hud" aria-label="Scenario">
-  <div class="eyebrow">Jineta · phase 7 MVP · pure pursuit</div>
+  <div class="eyebrow" id="eyebrow">Jineta · phase 7 MVP · pure pursuit</div>
   <h1>Engagement <span>viewer</span></h1>
   <div class="tabs" role="tablist" id="tabs"></div>
   <p id="summary"></p>
@@ -241,16 +248,18 @@ button.ctl[aria-pressed="true"] { border-color: var(--friendly); color: var(--fr
     </dl>
   </div>
   <div class="group">
-    <span class="eyebrow">Threat</span>
+    <span class="eyebrow" id="tkind">Threat</span>
     <dl>
       <dt>Speed</dt><dd class="h" id="tspeed">—</dd>
       <dt>Altitude</dt><dd id="talt">—</dd>
+      <dt id="tbank-label" hidden>Bank</dt><dd id="tbank" hidden>—</dd>
     </dl>
   </div>
 </section>
 
 <section id="timeline" class="hud" aria-label="Timeline">
   <div class="row">
+    <a class="ctl" id="menu" href="index.html" hidden title="Back to the scenario menu (M)">‹ Menu</a>
     <div class="btns">
       <button class="ctl" id="back" type="button" title="Back 1 s (←)" aria-label="Back one second">‹‹</button>
       <button class="ctl" id="play" type="button" title="Play / pause (space)">Play</button>
@@ -267,7 +276,7 @@ button.ctl[aria-pressed="true"] { border-color: var(--friendly); color: var(--fr
       <button class="ctl" id="pal-amber" type="button" aria-pressed="false" title="Amber CRT palette (P)">Amber</button>
     </div>
     <span class="spacer"></span>
-    <span id="hint">Drag: orbit · Wheel: zoom · Right-drag: pan · Space · ← → · P: palette</span>
+    <span id="hint">Drag: orbit · Wheel: zoom · Right-drag: pan · Space · ← → · P: palette<span id="hint-menu" hidden> · M: menu</span></span>
   </div>
   <div id="track">
     <canvas id="spark" aria-hidden="true"></canvas>
@@ -326,15 +335,24 @@ function prepare(s) {
   const ip = s.interceptor.pos.map(toThree), tp = s.target.pos.map(toThree);
   const iv = s.interceptor.vel.map(toThree), tv = s.target.vel.map(toThree);
   const iq = s.interceptor.quat.map(toThreeQuat);
+  // A simulated threat (fixed wing) carries its attitude; a scripted one only a path.
+  const tq = s.target.quat ? s.target.quat.map(toThreeQuat) : null;
+  const tbank = s.target.quat ? s.target.quat.map(([w, x, y, z]) =>
+    THREE.MathUtils.radToDeg(Math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y)))) : null;
   const range = ip.map((p, i) => p.distanceTo(tp[i]));
   const ispeed = iv.map((v) => v.length());
   let peak = 0; for (let i = 1; i < n; i++) if (ispeed[i] > ispeed[peak]) peak = i;
-  return { ...s, n, ip, tp, iv, tv, iq, range, ispeed, peak,
+  return { ...s, n, ip, tp, iv, tv, iq, tq, tbank, range, ispeed, peak,
     duration: s.t[n - 1],
     caI: toThree(s.closest.interceptor), caT: toThree(s.closest.target),
     launch: s.launch ? { ...s.launch, site: toThree(s.launch.site) } : null };
 }
 const SCEN = DATA.scenarios.map(prepare);
+if (DATA.meta.subtitle) document.getElementById("eyebrow").textContent = `Jineta · ${DATA.meta.subtitle}`;
+if (DATA.meta.menu) {
+  const m = document.getElementById("menu"); m.href = DATA.meta.menu; m.hidden = false;
+  document.getElementById("hint-menu").hidden = false;
+}
 
 // ---------------------------------------------------------------------------------
 // Renderer, scene, camera
@@ -443,8 +461,34 @@ function dartModel(key) {
   return g;
 }
 
+// Fixed-wing threat in body axes (x forward, y right wing, z down), like the Iris:
+// fuselage, high-aspect-ratio wing, tailplane and a fin pointing up (-z).
+function planeModel(key) {
+  const g = new THREE.Group();
+  const v = (x, y, z) => new THREE.Vector3(x, y, z);
+  const nose = v(0.5, 0, 0), tail = v(-0.5, 0, 0);
+  const wingL = v(0.05, -0.75, 0), wingR = v(0.05, 0.75, 0), wingLb = v(-0.07, -0.72, 0), wingRb = v(-0.07, 0.72, 0);
+  const rootF = v(0.1, 0, 0), rootB = v(-0.08, 0, 0);
+  const stabL = v(-0.42, -0.24, 0), stabR = v(-0.42, 0.24, 0), stabLb = v(-0.5, -0.22, 0), stabRb = v(-0.5, 0.22, 0);
+  const finTop = v(-0.5, 0, -0.2), finFront = v(-0.36, 0, 0);
+  const segs = [nose, tail,
+    rootF, wingL, wingL, wingLb, wingLb, rootB, rootF, wingR, wingR, wingRb, wingRb, rootB,
+    v(-0.38, 0, 0), stabL, stabL, stabLb, stabLb, tail, v(-0.38, 0, 0), stabR, stabR, stabRb, stabRb, tail,
+    finFront, finTop, finTop, tail];
+  g.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(segs), tint(new THREE.LineBasicMaterial(), key)));
+  const skin = tint(new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false }), key);
+  const surfaces = new THREE.BufferGeometry().setFromPoints([
+    rootF, wingL, wingLb, rootF, wingLb, rootB, rootF, wingR, wingRb, rootF, wingRb, rootB,
+    v(-0.38, 0, 0), stabL, stabLb, v(-0.38, 0, 0), stabLb, tail, v(-0.38, 0, 0), stabR, stabRb, v(-0.38, 0, 0), stabRb, tail,
+    finFront, finTop, tail]);
+  g.add(new THREE.Mesh(surfaces, skin));
+  return g;
+}
+
 const iris = quadModel("friendly");
-const threat = dartModel("hostile");
+const dart = dartModel("hostile"), plane = planeModel("hostile");
+const threat = new THREE.Group();
+threat.add(dart, plane);
 scene.add(iris, threat);
 
 // drop lines to the ground and ground dots, a tactical-map convention
@@ -578,7 +622,7 @@ const el = (id) => document.getElementById(id);
 const ui = {
   clock: el("clock"), status: el("status"), range: el("range"), closure: el("closure"),
   ispeed: el("ispeed"), icmd: el("icmd"), ialt: el("ialt"), itilt: el("itilt"),
-  tspeed: el("tspeed"), talt: el("talt"), scrub: el("scrub"), play: el("play"),
+  tspeed: el("tspeed"), talt: el("talt"), tbank: el("tbank"), scrub: el("scrub"), play: el("play"),
 };
 
 const prevIris = new THREE.Vector3();
@@ -596,7 +640,8 @@ function update() {
 
   iris.position.copy(pI); iris.quaternion.copy(q);
   threat.position.copy(pT);
-  if (vT.lengthSq() > 1e-6) threat.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), vT.clone().normalize());
+  if (S.tq) threat.quaternion.copy(S.tq[i].clone().slerp(S.tq[i + 1], a));
+  else if (vT.lengthSq() > 1e-6) threat.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), vT.clone().normalize());
   irisDrop.set(pI); threatDrop.set(pT);
 
   const pa = losGeom.attributes.position;
@@ -631,6 +676,10 @@ function update() {
   ui.itilt.innerHTML = `${fmt(tilt)} <small>deg</small>`;
   ui.tspeed.innerHTML = `${fmt(vT.length())} <small>m/s</small>`;
   ui.talt.innerHTML = `${fmt(pT.y)} <small>m</small>`;
+  if (S.tbank) {
+    const bank = S.tbank[i] + (S.tbank[i + 1] - S.tbank[i]) * a;
+    ui.tbank.innerHTML = `${fmt(Math.abs(bank) < 0.05 ? 0 : bank)} <small>deg</small>`;  // no "-0.0"
+  }
 
   let state, label;
   if (S.launch && time < S.launch.time) { state = "standby"; label = "STANDBY · ON THE PAD"; }
@@ -733,13 +782,13 @@ function describe(s) {
   const top = s.ispeed[s.peak];
   const cpaText = `<b>${s.closest.distance.toFixed(2)} m at T+${s.closest.time.toFixed(2)}</b>`;
   if (s.launch) {
-    const intro = `The Iris waits on the pad at rest, rotors stopped. The threat comes within ${s.launch.range} m ` +
+    const intro = `The Iris waits on the pad at rest, rotors stopped. The ${s.threat_label || "threat"} comes within ${s.launch.range} m ` +
       `at T+${s.launch.time.toFixed(2)}: the Iris launches and flies pure pursuit, ordered to ` +
-      `${s.commanded_speed} m/s against a ${s.target_speed} m/s threat. `;
+      `${s.commanded_speed} m/s against a ${s.target_speed} m/s ${s.threat_label || "threat"}. `;
     return intro + (s.captured
       ? `It climbs to the threat and catches it: ${cpaText}.`
-      : `The threat is past before the Iris gets up to it: it misses by ${cpaText}, ` +
-        `keeps chasing and falls behind until the threat leaves the ${s.launch.range} m dome.`);
+      : `The ${s.threat_label || "threat"} is past before the Iris can catch it: it misses by ${cpaText}, ` +
+        `keeps chasing and falls behind until the ${s.threat_label || "threat"} leaves the ${s.launch.range} m dome.`);
   }
   if (s.captured) {
     return `Pure pursuit: every step the Iris is ordered to fly at ${s.commanded_speed} m/s straight at where the threat is now. ` +
@@ -818,6 +867,11 @@ SCEN.forEach((s, k) => {
 function selectScenario(k) {
   S = SCEN[k];
   [...tabs.children].forEach((b, j) => b.setAttribute("aria-selected", String(j === k)));
+  dart.visible = !S.tq; plane.visible = !!S.tq;
+  const kind = S.target_kind === "fixed_wing" ? "Fixed wing" : "Threat";
+  el("tkind").textContent = kind;
+  threatTag.firstChild.textContent = kind.toUpperCase();
+  for (const id of ["tbank", "tbank-label"]) el(id).hidden = !S.tbank;
   el("summary").innerHTML = describe(S);
   alertTag.querySelector("small").textContent = S.launch ? `${S.launch.range} m` : "";
   buildLog(S);
@@ -888,6 +942,7 @@ window.addEventListener("keydown", (e) => {
   else if (e.key === "t" || e.key === "T") topView();
   else if (e.key === "1" || e.key === "2") selectScenario(Number(e.key) - 1);
   else if (e.key === "p" || e.key === "P") applyPalette(palette === "tac" ? "amber" : "tac");
+  else if ((e.key === "m" || e.key === "M") && DATA.meta.menu) window.location.href = DATA.meta.menu;
 });
 
 function resize() {

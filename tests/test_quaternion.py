@@ -57,3 +57,26 @@ def test_from_matrix_half_turns(axis):
     q = quaternion.from_matrix(R)
     assert np.allclose(quaternion.to_matrix(q), R)
     assert np.isclose(np.linalg.norm(q), 1.0)
+
+
+def test_euler_round_trip():
+    rng = np.random.default_rng(11)
+    for _ in range(100):
+        roll, yaw = rng.uniform(-np.pi + 0.01, np.pi - 0.01, size=2)
+        pitch = rng.uniform(-np.pi / 2 + 0.01, np.pi / 2 - 0.01)
+        q = quaternion.from_euler(roll, pitch, yaw)
+        assert np.allclose(quaternion.to_euler(q), (roll, pitch, yaw), atol=1e-12)
+
+
+def test_euler_angles_of_simple_attitudes():
+    # Nose 30 deg up: the body x axis points North and up (negative down).
+    q = quaternion.from_euler(0.0, np.radians(30.0), 0.0)
+    nose = quaternion.to_matrix(q) @ [1.0, 0.0, 0.0]
+    assert np.allclose(nose, [np.cos(np.radians(30.0)), 0.0, -0.5])
+    # Right wing down 20 deg: the body y axis points East and down.
+    q = quaternion.from_euler(np.radians(20.0), 0.0, 0.0)
+    wing = quaternion.to_matrix(q) @ [0.0, 1.0, 0.0]
+    assert np.allclose(wing, [0.0, np.cos(np.radians(20.0)), np.sin(np.radians(20.0))])
+    # Heading East: the nose points East.
+    q = quaternion.from_euler(0.0, 0.0, np.pi / 2)
+    assert np.allclose(quaternion.to_matrix(q) @ [1.0, 0.0, 0.0], [0.0, 1.0, 0.0])

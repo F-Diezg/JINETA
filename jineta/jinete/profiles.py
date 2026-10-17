@@ -15,6 +15,7 @@ from jineta.jinete.control import (
     VelocityGains,
 )
 from jineta.jinete.fixed_wing import FixedWingParams
+from jineta.jinete.fixed_wing_control import AutopilotDesign
 from jineta.jinete.multirotor import MultirotorParams, Rotor
 from jineta.jinete.propulsion import PropulsionParams
 
@@ -170,4 +171,33 @@ SMALL_FIXED_WING_PROPULSION = PropulsionParams(
     max_voltage=12 * 3.7,
     c_thrust=(0.09357, -0.06044, -0.1079),
     c_torque=(0.005230, 0.004970, -0.01664),
+)
+
+# Autopilot design of the generic small fixed wing (successive loop closure, Beard &
+# McLain ch. 6). Chosen here and checked in simulation (tests/test_fixed_wing_control):
+# - surfaces +-30 deg, a typical servo throw for a small UAV (the source suggests
+#   up to 45 deg for the aileron; 30 is more conservative);
+# - bank limit 35 deg: at 18 m/s and 45 deg the elevator saturated and the aircraft
+#   lost 12 m in a 90 deg turn;
+# - pitch limit 20 deg;
+# - roll and pitch saturate their surface at 15 deg of error (the source's rule);
+# - outer loops 8 (course) and 15 (altitude) times slower than their inner loop:
+#   with 12 the altitude loop kept a slow oscillation going after a 20 m step;
+# - damping ratios 0.7-1, airspeed loop 0.8 rad/s, sideslip loop 2 rad/s.
+SMALL_FIXED_WING_AUTOPILOT = AutopilotDesign(
+    surface_limit=np.radians(30.0),
+    max_bank=np.radians(35.0),
+    max_pitch=np.radians(20.0),
+    roll_error_at_saturation=np.radians(15.0),
+    roll_damping=0.9,
+    course_separation=8.0,
+    course_damping=1.0,
+    pitch_error_at_saturation=np.radians(15.0),
+    pitch_damping=0.7,
+    altitude_separation=15.0,
+    altitude_damping=1.0,
+    airspeed_frequency=0.8,
+    airspeed_damping=1.0,
+    sideslip_frequency=2.0,
+    sideslip_damping=1.0,
 )

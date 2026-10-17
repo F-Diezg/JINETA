@@ -43,6 +43,8 @@ def scenario_data(
     target: TargetTrack,
     every: int = 4,
     launch: dict | None = None,
+    target_kind: str = "generic",
+    target_attitudes: npt.ArrayLike | None = None,
     **info,
 ) -> dict:
     """The data of one engagement that the viewer needs, downsampled.
@@ -54,9 +56,16 @@ def scenario_data(
         launch: optional launch on alert, `{"time": [s], "range": [m],
             "site": NED [m]}`. The viewer then shows the alert range and a
             standby phase before the launch.
+        target_kind: "generic" (a scripted path, drawn as a dart along its
+            velocity) or "fixed_wing" (a simulated aircraft).
+        target_attitudes: optional (n, 4) quaternions of the target (body -> NED),
+            one per sample of `result`; the viewer then draws the target with its
+            real attitude (bank included) and shows its bank angle.
         **info: labels shown by the viewer (`id`, `name`, `detail`,
-            `target_speed`, `commanded_speed`).
+            `target_speed`, `commanded_speed`, `threat_label`).
     """
+    if target_kind not in ("generic", "fixed_wing"):
+        raise ValueError(f"unknown target kind {target_kind!r}")
     n = len(result.times)
     keep = np.arange(0, n, every)
     if keep[-1] != n - 1:
@@ -74,6 +83,7 @@ def scenario_data(
 
     data = {
         **info,
+        "target_kind": target_kind,
         "captured": bool(result.captured),
         "pursuit_feasible": bool(result.pursuit_feasible),
         "closest": {
@@ -93,6 +103,11 @@ def scenario_data(
             "vel": rounded(target_velocities, 3),
         },
     }
+    if target_attitudes is not None:
+        attitudes = np.asarray(target_attitudes, dtype=float)
+        if attitudes.shape != (n, 4):
+            raise ValueError(f"target_attitudes must have shape ({n}, 4)")
+        data["target"]["quat"] = rounded(attitudes[keep], 5)
     if launch is not None:
         data["launch"] = {
             "time": round(float(launch["time"]), 4),
@@ -103,7 +118,12 @@ def scenario_data(
 
 
 def write_viewer(
-    scenarios: list[dict], path: Path, dt: float, capture_radius: float
+    scenarios: list[dict],
+    path: Path,
+    dt: float,
+    capture_radius: float,
+    subtitle: str = "phase 7 MVP · pure pursuit",
+    menu: str | None = None,
 ) -> Path:
     """Write the viewer page with these scenarios (from `scenario_data`) to `path`.
 
@@ -112,6 +132,9 @@ def write_viewer(
         path: the HTML file to write; its folder is created if needed.
         dt: time between the samples kept [s] (the viewer's frame-by-frame step).
         capture_radius: drawn on the range plot [m].
+        subtitle: the line above the viewer's title ("Jineta · <subtitle>").
+        menu: page the viewer's "Menu" link opens, relative to `path` (None: no
+            link). The menu page is written by `viz.menu.write_menu`.
     """
     data = {
         "meta": {
@@ -121,6 +144,8 @@ def write_viewer(
             "capture_radius": capture_radius,
             "interceptor": "Iris quadrotor (PX4 SITL profile)",
             "guidance": "pure pursuit",
+            "subtitle": subtitle,
+            "menu": menu,
         },
         "scenarios": scenarios,
     }

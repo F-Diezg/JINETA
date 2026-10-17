@@ -13,7 +13,12 @@ from jineta.engagement import EndOfPursuit, engage
 from jineta.jinete.control import Autopilot
 from jineta.jinete.multirotor import Multirotor
 from jineta.jinete.profiles import IRIS, IRIS_GAINS
-from jineta.jinete.targets import StraightLineTarget
+from jineta.jinete.targets import (
+    RecordedTrack,
+    StraightLineTarget,
+    TurningTarget,
+    track_positions,
+)
 
 DT = 0.01  # control and simulation step [s]
 STILL_TARGET = StraightLineTarget(start=[0.0, 0.0, 0.0], velocity=[0.0, 0.0, 0.0])
@@ -156,3 +161,21 @@ def test_negative_speed_is_rejected():
     target = StraightLineTarget(start=[10.0, 0.0, -100.0], velocity=[0.0, 0.0, 0.0])
     with pytest.raises(ValueError):
         fly(target, start=[0.0, 0.0, -100.0], speed=-1.0, t_end=1.0)
+
+
+def test_a_recorded_target_gives_the_same_engagement():
+    # A simulated threat (e.g. the fixed wing) is flown first, recorded at the step
+    # rate and replayed through `RecordedTrack`. Replaying a recorded turn must give
+    # the engagement of the turn itself: the samples fall on the step grid.
+    turn = TurningTarget(
+        start=[30.0, 30.0, -110.0], speed=5.0, heading=1.0, turn_rate=0.1
+    )
+    times = DT * np.arange(round(40.0 / DT) + 1)
+    velocities = np.array([turn(t)[1] for t in times])
+    recorded = RecordedTrack(times, track_positions(turn, times), velocities)
+    start = [0.0, 0.0, -100.0]
+    original = fly(turn, start=start, speed=10.0, t_end=30.0)
+    replayed = fly(recorded, start=start, speed=10.0, t_end=30.0)
+    assert original.captured and replayed.captured
+    assert np.allclose(replayed.states, original.states, atol=1e-9)
+    assert np.isclose(replayed.closest.time, original.closest.time, atol=1e-9)

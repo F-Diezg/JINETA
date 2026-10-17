@@ -114,6 +114,31 @@ def from_matrix(R: np.ndarray) -> np.ndarray:
     return q if q[0] >= 0.0 else -q
 
 
+def from_euler(roll: float, pitch: float, yaw: float) -> np.ndarray:
+    """Quaternion of the Euler angles (ZYX order: yaw psi about z, then pitch theta
+    about the new y, then roll phi about the new x) [rad]. For input and display
+    only: the state never stores Euler angles."""
+    return multiply(
+        multiply(
+            from_axis_angle([0.0, 0.0, 1.0], yaw),
+            from_axis_angle([0.0, 1.0, 0.0], pitch),
+        ),
+        from_axis_angle([1.0, 0.0, 0.0], roll),
+    )
+
+
+def to_euler(q: np.ndarray) -> tuple[float, float, float]:
+    """Euler angles (roll phi, pitch theta, yaw psi) [rad] of q, ZYX order; the
+    inverse of from_euler. Pitch is in [-pi/2, pi/2]; at exactly +-90 deg roll and
+    yaw are not separable (gimbal lock), one of the reasons the state is a
+    quaternion."""
+    w, x, y, z = q
+    roll = np.arctan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x**2 + y**2))
+    pitch = np.arcsin(np.clip(2.0 * (w * y - x * z), -1.0, 1.0))
+    yaw = np.arctan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y**2 + z**2))
+    return float(roll), float(pitch), float(yaw)
+
+
 def derivative(q: np.ndarray, omega_body: np.ndarray) -> np.ndarray:
     """Time derivative of q given the angular velocity in body axes [rad/s]."""
     return 0.5 * multiply(q, np.concatenate([[0.0], omega_body]))

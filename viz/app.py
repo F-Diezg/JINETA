@@ -7,8 +7,10 @@ the system's web engine (on Windows, the Edge engine that ships with Windows 10/
 
 pywebview is optional. Without it, the page opens in the default browser as before.
 
-Open an existing page without running the simulation again:
+Open the start menu (the scenario pages written so far), or one page, without
+running the simulation again:
 
+    python -m viz.app
     python -m viz.app docs/iris_scramble_viewer.html
 """
 
@@ -18,6 +20,7 @@ import webbrowser
 from pathlib import Path
 
 TITLE = "Jineta · Engagement Viewer"
+MENU = Path(__file__).resolve().parents[1] / "docs" / "index.html"  # start menu
 BACKGROUND = "#04090f"  # the viewer's own background, shown while the page loads
 
 
@@ -61,7 +64,13 @@ def window_requested(argv: list[str] | None = None) -> bool:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Open a Jineta viewer page.")
-    parser.add_argument("page", type=Path, help="viewer HTML file, e.g. docs/...html")
+    parser.add_argument(
+        "page",
+        type=Path,
+        nargs="?",
+        default=MENU,
+        help="viewer HTML file (default: the start menu, docs/index.html)",
+    )
     show(parser.parse_args(argv).page)
 
 

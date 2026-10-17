@@ -38,13 +38,17 @@ code should be clear and every concept explained before it is used.
   newline and fixes blank lines that are easy to lose when pasting code. In VS
   Code, "Files: Insert Final Newline" and format-on-save with the Ruff formatter
   do the same automatically.
-- The full test run takes ~20 s (227 tests; 19.5 s in Claude's workspace at the end
-  of phase 7): the closed-loop control and engagement tests fly up to 30 s each.
+- The full test run takes ~40 s (395 tests; 39.9 s in Claude's workspace at the end
+  of phase 6b): the closed-loop tests fly up to 120 s each at 100 Hz, and the
+  fixed-wing ones are ~20 s of the total.
 - The interactive viewers (`docs/*_viewer.html`) open in their own desktop window
   with `pywebview` (optional: `pip install pywebview`; without it they open in the
   browser). They need internet: three.js and the fonts come from CDNs.
-  `python -m viz.app <page>` reopens a page without simulating again; the examples
-  take `--no-window` to only write their files (e.g. to regenerate `docs/`).
+  `python -m viz.app` opens the start menu (`docs/index.html`, the scenario pages by
+  type of threat); `python -m viz.app <page>` reopens one page without simulating
+  again; the examples take `--no-window` to only write their files (e.g. to
+  regenerate `docs/`).
+- `scipy` is used since phase 6b (trim: `scipy.optimize.root`).
 - Regenerate dependencies as UTF-8 (PowerShell's `>` writes UTF-16):
   `pip freeze | Out-File -Encoding utf8 requirements.txt`
 
@@ -118,11 +122,39 @@ code should be clear and every concept explained before it is used.
 - **Guidance interface:** a guidance law maps positions (later also velocities and
   estimates) to a NED velocity command; it meets the autopilot only through
   `autopilot.velocity_command`, so changing the law never touches the control loops.
+- **Recorded targets:** a vehicle that does not react to anyone can be flown first
+  and replayed as a target: `RecordedTrack(times, positions, velocities)` (cubic
+  Hermite between samples, no extrapolation) is a `TargetTrack` like the scripted
+  ones.
+- **Fixed-wing vehicle interface:** `FixedWing(params, propulsion=None,
+  density, wind)`, built like `Multirotor` (holds a `RigidBody`, `derivative(t,
+  state)`). Commanded through `surfaces` (`ControlSurfaces`, frozen: assign a new
+  one) and `throttle` in [0, 1], both starting at neutral / 0. `propulsion=None` is
+  a glider, i.e. "engine off" (throttle 0 with a propeller is not: it windmills and
+  brakes). Signs as in the source: elevator > 0 trailing edge down (nose down),
+  aileron > 0 rolls right, rudder > 0 yaws the nose left.
+- **Trim:** `trim_level_flight(aircraft, speed, altitude, course)` returns a
+  `Trim(state, surfaces, throttle, alpha, beta)` for wings-level flight (φ = 0) at
+  that airspeed, and leaves the aircraft commanded with it.
+- **Fixed-wing autopilot interface:** `FixedWingAutopilot(vehicle, trim, design,
+  dt)` is a callable; pass it as `pre_step`. Whoever guides the aircraft sets
+  `course_command` (direction of the ground velocity, clockwise from North [rad]),
+  `altitude_command` [m] and `airspeed_command` [m/s]; they start at the trim. The
+  design choices (limits, bandwidths, damping) are profile data
+  (`SMALL_FIXED_WING_AUTOPILOT`, an `AutopilotDesign`); the gains are computed from
+  them at the trim by `design_gains`. It runs at 100 Hz like the Iris.
+- **Euler angles** for input, display and the controllers' angle errors only:
+  `quaternion.from_euler(roll, pitch, yaw)` and `quaternion.to_euler(q)` (ZYX).
 - **Relative position** between two tracks is always `r = r_target − r_pursuer`.
 - **Engagement result:** `engage(...)` returns an `Engagement` with `times`,
   `states` (interceptor), `target_positions`, `closest` (`ClosestApproach`: `time`,
   `distance`, `step`), `captured` and `pursuit_feasible`. `captured` means the
   closest approach fell inside the capture radius (default 0.5 m).
+- **Viewer pages and the start menu:** `docs/index.html` (written by
+  `viz.menu.write_menu`) lists the scenario pages by type of threat ("Generic
+  target", "Fixed wing"), never by phase number; the scenario viewers link back to it
+  (`write_viewer(..., menu="index.html")`). The export says what the target is
+  (`target_kind`: "generic" or "fixed_wing") and may carry its attitude.
 - **Viewers read exported data in the simulator's conventions** (NED, quaternion
   body → NED, SI). Any change of axes happens inside the viewer, never in the
   export: the three.js viewer maps NED to (East, Up, −North).
@@ -146,8 +178,9 @@ jineta/
 ├── jineta/
 │   ├── core/       # physics engine: integrators, point mass, rigid body
 │   ├── campo/      # environment: atmosphere.py (ISA), wind.py; later terrain
-│   ├── jinete/     # vehicles: aero, multirotor, control (autopilot), profiles,
-│   │               #   guidance, scripted targets
+│   ├── jinete/     # vehicles: aero, multirotor, control (multirotor autopilot),
+│   │               #   fixed_wing, propulsion, trim, stability, fixed_wing_control,
+│   │               #   profiles, guidance, targets
 │   ├── atalaya/    # sensors (radar, EO, IMU) + Kalman filtering
 │   ├── capitan/    # target assignment / threat prioritisation
 │   ├── escuadron/  # inter-unit coordination and communications
@@ -156,7 +189,7 @@ jineta/
 ├── scenarios/      # mission definitions (YAML)
 ├── examples/       # runnable demo scripts
 ├── viz/            # visualisation layer: viewer.py (export), viewer_template.html,
-│                   #   app.py (desktop window)
+│                   #   menu.py + menu_template.html (start menu), app.py (window)
 ├── docs/           # generated figures and viewer pages (committed, for the README)
 ├── pyproject.toml  # pytest + ruff configuration
 └── DESIGN.md
@@ -189,7 +222,7 @@ Visualisation is a separate layer that reads that data:
 | 5 | Environment: ISA atmosphere, wind | ✅ Done |
 | 6a | Quadrotor (Iris profile) + cascaded attitude/velocity control | ✅ Done |
 | 7 | **End-to-end MVP:** one interceptor vs one target, simple guidance | ✅ Done |
-| 6b | Generic fixed-wing threat model (aero coefficient tables) | 🔄 Steps 1–2 of 8 done |
+| 6b | Generic fixed-wing threat model (aero coefficient tables) | ✅ Done |
 | 8 | Scenarios in YAML, multiple entities | ⏳ |
 | 9 | Sensors + Kalman filter | ⏳ |
 | 10 | Guidance (proportional navigation) | ⏳ |
@@ -215,38 +248,32 @@ layer worked together for the first time and the interfaces held (autopilot
 (0.49 m at T+21.1 s) and cannot catch a fast one (miss 10.8 m): it was ordered to
 30 m/s and never flew faster than 22.0 m/s.
 
-**Phase 6b — generic fixed-wing threat (in progress).** A 6-DOF fixed-wing model
-driven by aerodynamic coefficients, to replace the scripted target. This step list is
-the plan of the phase: a new chat continues it from the first step not done, it does
-not draw up a new one. Each step ends with tests green, ruff clean, commit + push.
-1. ✅ **Air data**: V, α, β from the body airspeed and the inverse
-   (`aero.air_data`, `aero.airspeed_from_air_data`).
-2. ✅ **Aerodynamic forces and moments**: stability and control derivatives, stall
-   blend, drag polar (`jinete/fixed_wing.py`: `FixedWingParams`,
-   `aero_force_moment`); generic small-UAV profile `SMALL_FIXED_WING`
-   (Aerosonde-class open data, Beard & McLain).
-3. ⏳ **Next — propeller thrust and the `FixedWing` vehicle.** Thrust from the
-   throttle, ρ-scaled like the multirotor. Decide first between the source's
-   motor + propeller model (C_T(J), C_Q(J), KV, R, V_max: all in
-   `aerosonde_parameters.py`) and a simpler throttle → thrust law. Then the vehicle,
-   like `Multirotor`: holds a `RigidBody`, `force_moment` = aero + thrust,
-   `derivative(t, state)`, inputs (surfaces + throttle) set in `pre_step`, density
-   and wind models. First dynamic test: power-off glide, steady glide angle
-   tan γ = −C_D/C_L at the glide α.
-4. **Trim**: α, elevator and throttle for straight and level flight at a given speed
-   (force and pitching-moment balance; scipy or Newton). Test: the trimmed state
-   stays steady (altitude, speed, attitude) for tens of seconds.
-5. **Dynamic modes as tests**: perturb the trim; phugoid against Lanchester
-   (ω ≈ √2·g/V, period ≈ π√2·V/g) and short period against its classic
-   approximation (frequency and damping). Possibly the Dutch roll.
-6. **Autopilot** by successive loop closure (Beard & McLain ch. 6): roll and pitch
-   hold → course and altitude hold, airspeed with the throttle. Tests: steps in
-   course, altitude and airspeed settle without overshooting the limits.
-7. **The fixed wing as the threat of `engage`**: both bodies integrated in one run
-   (stacked state or a multi-entity loop, loose end 19), an example Iris vs fixed
-   wing, and the viewer showing it.
-8. **Close the phase**: this document (conventions, decisions, state, loose ends)
-   and the README.
+**Phase 6b — done**, in 8 steps (tests green and ruff clean at each; committed as
+1–2, 3 in three parts, 4–5, 6, 7 and 8). A 6-DOF fixed-wing drone driven by
+aerodynamic coefficients and an electric propeller, flown by its own autopilot,
+replaces the scripted target. The plan was kept; step 7 was made more concrete
+with the author during step 4 (see the decision log).
+1. ✅ **Air data**: V, α, β from the body airspeed and the inverse.
+2. ✅ **Aerodynamic forces and moments** (`fixed_wing.py`) and the generic small-UAV
+   profile `SMALL_FIXED_WING` (Aerosonde-class open data, Beard & McLain).
+3. ✅ **Propeller and vehicle**: electric motor + propeller model (`propulsion.py`),
+   the `FixedWing` vehicle, both checked against the source's reference values;
+   power-off glide test (tan γ = −C_D/C_L).
+4. ✅ **Trim** (`trim.py`): wings-level flight from 12 to 32.45 m/s at 100 m.
+5. ✅ **Dynamic modes** (`stability.py`): the five modes of the linearised model
+   against the classic approximations; phugoid and spiral also in simulation.
+6. ✅ **Autopilot** (`fixed_wing_control.py`): course, altitude and airspeed hold by
+   successive loop closure; orbit guidance.
+7. ✅ **The fixed wing as the threat**: recorded and replayed as the target of
+   `engage`; example `fixed_wing_scramble.py` (launch on alert, as the phase 7
+   scramble) with a captured and a missed case; the viewer draws an aircraft with
+   its attitude; start menu with both scenario pages.
+8. ✅ **Close the phase**: this document and the README.
+
+Result: the Iris launches from its pad when the fixed wing comes within 400 m. A,
+loitering at 18 m/s on a 150 m orbit: launch T+20.71 s, capture 0.49 m at
+T+63.32 s. B, passing straight at 30 m/s: launch T+10.72 s, miss 49.74 m at
+T+20.39 s; the run ends when it leaves the dome at T+34.93 s.
 
 ## 6. Decision log
 
@@ -533,7 +560,7 @@ Phase 7 (MVP):
   called `splice(indexOf(...) = −1, 1)`, which would have dropped the last fat-line
   material from the resize list.
 
-Phase 6b (fixed-wing threat), in progress:
+Phase 6b (fixed-wing threat):
 - **Air data** (`aero.air_data`): V, α = atan2(w, u) (keeps the quadrant: tail first
   is 180°), β = asin(v/V) in [−90°, 90°]; α > 0 air from below the nose, β > 0 air
   from the right. Below `min_speed` the angles are 0, never NaN. The inverse
@@ -554,6 +581,107 @@ Phase 6b (fixed-wing threat), in progress:
   nose down; aileron > 0 rolls right; rudder > 0 yaws the nose left.
 - c_ell is the rolling-moment coefficient (C_l in most books), renamed so it cannot
   be read as lift.
+- **Propulsion: the source's motor + propeller model**, chosen over a simple throttle
+  → thrust law (the source no longer lists the constants of the simple law, and that
+  law gives ~790 N of static thrust, 7 times the weight). The throttle sets the motor
+  voltage; the rotor speed is where motor torque K(i − i0) equals propeller torque
+  ρn²D⁵C_Q(J): a quadratic in Ω. Thrust ρn²D⁴C_T(J). Written multiplied out (no
+  division by n), so it also holds for a stopped propeller. Density enters through the
+  physics, with no extra factor. Static thrust at full throttle ~82 N (thrust-to-weight
+  0.76). Checked against the reference values of the source's chapter 4 check script
+  (T = −12.4307 N at 25 m/s and throttle 0.5) to 1e-12.
+- **The motor is stiff** (K²/R large): Ω ≈ throttle · V_max / K almost whatever the
+  load. The throttle sets the rotor speed; the airspeed decides what the propeller
+  does with it (+30 N at rest, −5 N at 25 m/s, both at throttle 0.6).
+- **Throttle 0 is not "engine off"**: with no voltage the motor is a shorted
+  generator and the windmilling propeller brakes (−21.9 N at 25 m/s, twice the
+  airframe's drag). A glider is `FixedWing(params)` with no propulsion.
+- **The propeller sees the axial airspeed u**, not V (the advance ratio is defined
+  with the axial inflow; the source uses V). Reverse flow (u < 0) is taken as 0: the
+  fits have no data there. Ω is clipped at 0 (below the no-load voltage the motor
+  cannot turn the propeller; the root would spin it backwards).
+- **Thrust along body x through the CoM; the propeller torque rolls the airframe
+  with −Q** (sign confirmed by the source's case 1). Not modelled: P-factor,
+  slipstream on the tail, gyroscopic moment of the propeller, motor lag.
+- **Vehicle checked against the source** (`chap4_check.py`): case 1 (level, 25 m/s)
+  exact to 1e-9 in forces, moments and angular accelerations; case 3 (any attitude,
+  rotating, gust) to 1e-6 once the u-versus-V difference of the propeller is undone,
+  except F_y, 0.0015 N off (3e-5), not explained (loose end 28). The source's case 2
+  is not used: its script computes it with the airspeed of case 1.
+- **Glide test**: for a fixed elevator, C_m = 0 gives α, tan γ = −C_D/C_L and
+  L = W cos γ give γ and V (elevator −0.1: α 2.35°, L/D 9.6, γ −5.94°, V 26.68 m/s).
+  The analytic state is an equilibrium to 1e-12, and a glider released level and
+  20 % slow settles on it after the phugoid dies out.
+- **Trim as a 6×6 root problem**: three forces and three moments zero; unknowns α, β,
+  elevator, aileron, rudder, throttle; φ = 0 fixed (wings level; seven unknowns for
+  six equations). `scipy.optimize.root` (Powell hybrid). Lateral trim is not zero: the
+  aileron holds the propeller torque (+0.36° at 25 m/s, β 0.02°).
+- **The trim starts from a textbook estimate** (lift = weight and C_m = 0, linear in α
+  and elevator; then the throttle with thrust = drag). From a fixed guess the solver
+  jumped past full throttle, where the clipped thrust has no slope, and failed at some
+  speeds that do trim (32.05 m/s); with the estimate it trims at every speed from
+  12 to 32.45 m/s at 100 m. Top level speed ~32.5 m/s.
+- **Linearisation by central differences** of the full 13-state derivative at the
+  trim; eigenvalues give the modes; the zero ones (position, heading, quaternion
+  norm) are left out; a mode is lateral or longitudinal by its eigenvector. At
+  25 m/s: short period ωn 10.80 rad/s ζ 0.438; phugoid ωn 0.500 rad/s (13.1 s)
+  ζ 0.276; roll −21.7 1/s; Dutch roll ωn 4.71 ζ 0.236; spiral +0.090 1/s.
+- **Lanchester overestimates the phugoid frequency by ~10 %**: it holds α constant.
+  Letting the short period settle quasi-statically, ωn = √2 g/V · √(−M_α/ω_sp²),
+  matches to < 1 %. **The phugoid is damped mostly by the propeller**: its thrust
+  falls with speed, so ζ is 3–4 times the constant-thrust value.
+- **The profile is spirally unstable** (C_lβ C_nr < C_lr C_nβ: −0.0059): a bank of
+  0.5° grows to ~7° in 30 s (doubling ~7.7 s at 25 m/s). Common in small UAVs; the
+  autopilot holds the roll.
+- **Autopilot by successive loop closure** (Beard & McLain ch. 6): course → roll →
+  aileron; altitude → pitch → elevator; airspeed → throttle; sideslip → rudder (PI to
+  β = 0). Gains from second-order models of each axis at the trim.
+- **Roll and pitch gains from the surface authority** (the source's rule: kp = surface
+  limit / error that saturates it), not from a chosen natural frequency. With a
+  chosen ω the pitch gain at 30 m/s came out almost zero (the static stability alone
+  already gave ~11.8 rad/s), the aircraft barely followed the pitch command and a
+  descending reversal ended 117 m lower (regression test). A slow inner pitch loop
+  (6 rad/s, below the short period) was unstable: Beard's pitch model ignores the α
+  dynamics.
+- **Trim feedforward** in the autopilot: the elevator, throttle and pitch of the trim
+  are added to the loop outputs. Without it the slow altitude integrator had to
+  build the trim elevator alone and the pitch oscillated for tens of seconds.
+- **Design choices** (`SMALL_FIXED_WING_AUTOPILOT`): surfaces ±30° (only the
+  autopilot clips, loose end 27); bank ≤ 35° (at 18 m/s and 45° the elevator
+  saturated and a 90° turn lost 12 m); pitch ≤ 20°; course loop 8 and altitude loop
+  15 times slower than their inner loops (12 left a slow oscillation after a 20 m
+  step); airspeed 0.8 rad/s; sideslip 2 rad/s; anti-windup by conditional
+  integration. 100 Hz: at 50 Hz the roll loop (11–19 rad/s) degrades.
+- **Orbit guidance**: the vector field of Beard & McLain ch. 10,
+  χ = φ + λ(π/2 + atan(k(d − R)/R)), gain 2. The autopilot holds a 150 m orbit at
+  18 m/s within 0.5 m, at the bank of a steady turn, atan(V²/gR).
+- **Step 7 made concrete with the author** (during step 4): the example mirrors the
+  phase 7 scramble (Iris at rest on the pad, launch on alert, pure pursuit), one
+  case captured and one missed; the viewer app opens on a start menu to choose the
+  scenario page, named by the type of threat ("Generic target", "Fixed wing"), not
+  by phase; the menu is a separate page (`docs/index.html`) rather than one page
+  with every case, so each example still writes only its own viewer.
+- **The threat is recorded, then replayed** (`RecordedTrack`) instead of integrating
+  both bodies in one run: the fixed wing does not react to the Iris, so its flight
+  does not depend on the pursuit, and `engage` and the phase 7 scramble stay
+  unchanged. Replaying a recorded turn gives the same engagement as the turn itself
+  to 1e-9. A threat that reacts (evasion) will need one loop for both (loose end 19,
+  phase 8).
+- **`iris_scramble.py` is importable** (`main()`): `fixed_wing_scramble.py` imports
+  `scramble`, `report` and the constants, so the scenario logic is written once. The
+  refactor gave a byte-identical viewer page.
+- **Scenarios of the example**: A, the fixed wing flies in from the North-West and
+  loiters on a 150 m clockwise orbit around (60, 40) m at 18 m/s and 100 m (slower
+  than the Iris's ~20.7 m/s); B, a straight pass at 30 m/s and 120 m from the
+  South-West (the course of the phase 7 case B). The Iris is ordered to 25 m/s, more
+  than it can fly, so it flies flat out.
+- **Viewer**: the fixed wing is drawn as an aircraft (wing, tailplane, fin) with its
+  real attitude, so its bank shows (12.7° on the orbit, also in the telemetry); the
+  scripted target is still a dart along its velocity. "Menu" button and key M on the
+  scenario pages; the MVP page has no menu link (it is not in the menu).
+- **The pages were checked in headless Chromium** with three.js r160 taken from
+  GitHub (the CDN is not reachable from Claude's workspace): menu → viewer → menu,
+  both pages, both cases, no script errors. Not checked in pywebview (loose end 31).
 
 ## 7. Current state
 
@@ -575,7 +703,8 @@ Phase 6b (fixed-wing threat), in progress:
 - `jineta/core/quaternion.py` — `multiply`, `from_axis_angle` (accepts any
   array-like axis), `conjugate`, `to_rotation_vector` (short way, angle in
   [0, π]), `normalize`, `to_matrix`, `from_matrix` (w ≥ 0, Shepperd's method),
-  `derivative(q, omega_body) = ½ q ⊗ [0, ω]`.
+  `from_euler(roll, pitch, yaw)` and `to_euler(q)` (ZYX, display and controllers
+  only), `derivative(q, omega_body) = ½ q ⊗ [0, ω]`.
 - `jineta/core/rotating_body.py` — `RotatingBody` dataclass (validated inertia 3x3,
   torque model) with Euler's equations `ω̇ = I⁻¹(M − ω × Iω)`; inverse inertia
   computed once in `__post_init__`. Also `TorqueModel`, `zero_torque`.
@@ -625,30 +754,62 @@ Phase 6b (fixed-wing threat), in progress:
 - `jineta/jinete/profiles.py` — `flu_to_frd(vector)`, `IRIS` (PX4 SITL Iris, sources
   in the comments), `IRIS_RATE_GAINS`, `IRIS_ATTITUDE_GAINS`, `IRIS_VELOCITY_GAINS`,
   `IRIS_GAINS`, `SMALL_FIXED_WING` (generic small fixed-wing UAV, Aerosonde-class
-  open data).
+  open data), `SMALL_FIXED_WING_PROPULSION` (its motor and propeller),
+  `SMALL_FIXED_WING_AUTOPILOT` (design choices of its autopilot).
 - `jineta/jinete/fixed_wing.py` — `ControlSurfaces(elevator, aileron, rudder)`,
   `FixedWingParams` (frozen, validated; mass, inertia, S, b, c, e and the
   derivatives; `aspect_ratio`), `stall_blend`, `lift_coefficient`,
   `drag_coefficient`, `aero_force_moment(params, airspeed, rates, surfaces,
-  density)` → (force, moment) in body axes.
+  density)` → (force, moment) in body axes; `FixedWing(params, propulsion=None,
+  density, wind)` the vehicle (commands `surfaces`, `throttle`; `force_moment` =
+  aerodynamics + thrust along x + rolling moment −Q; `derivative`).
+- `jineta/jinete/propulsion.py` — `PropulsionParams` (D, K, R, i0, V_max, C_T and C_Q
+  fits; frozen, validated), `PropellerOutput(thrust, torque, rotor_speed)`,
+  `rotor_speed(params, axial_speed, throttle, density)` (torque balance, Ω ≥ 0) and
+  `propeller_thrust_torque(...)`.
+- `jineta/jinete/trim.py` — `Trim(state, surfaces, throttle, alpha, beta)` (state
+  read-only), `level_flight_state(aircraft, speed, alpha, beta, altitude, course)`,
+  `longitudinal_estimate(aircraft, speed, altitude)` (textbook α, elevator,
+  throttle) and `trim_level_flight(aircraft, speed, altitude=100, course=0,
+  tolerance=1e-9)`.
+- `jineta/jinete/stability.py` — `jacobian(func, x)` (central differences),
+  `Mode(eigenvalue, lateral)` (`natural_frequency`, `damping_ratio`, `oscillates`,
+  `period`), `dynamic_modes(matrix)`, `AircraftModes` and `classify_modes(modes)`
+  (short period, phugoid, roll, Dutch roll, spiral).
+- `jineta/jinete/fixed_wing_control.py` — `AutopilotDesign` (limits, bandwidths,
+  damping; validated), `AutopilotGains`, `design_gains(aircraft, trim, design)`,
+  `wrap_angle`, `FixedWingAutopilot(vehicle, trim, design, dt)` (callable
+  `pre_step`; `course_command`, `altitude_command`, `airspeed_command`; `reset()`)
+  and `orbit_course(position, center, radius, clockwise=True, gain=2)`.
 - `jineta/core/events.py` — `ClosestApproach(time, distance, step)` and
   `closest_approach(times, relative_positions)`: smallest separation with the time
   interpolated inside its step (validated input: n ≥ 2 samples, (n, 3) array).
 - `jineta/jinete/targets.py` — `TargetTrack` alias, `StraightLineTarget(start,
   velocity)`, `TurningTarget(start, speed, heading, turn_rate)` (frozen, validated,
-  arrays read-only), `track_positions(track, times)`.
+  arrays read-only), `RecordedTrack(times, positions, velocities)` (cubic Hermite
+  replay of a recording; validated, read-only, no extrapolation),
+  `track_positions(track, times)`.
 - `jineta/jinete/guidance.py` — `pure_pursuit_velocity(pursuer_position,
   target_position, speed, min_distance=1e-6)`.
 - `jineta/engagement.py` — `Engagement` (result), `EndOfPursuit(target,
   capture_radius, margin, initial_distance)` (stop condition with memory, validated)
   and `engage(autopilot, target, initial_state, speed, t_end, capture_radius=0.5,
   margin=10.0)`.
-- `viz/viewer.py` — `scenario_data(result, target, every=4, launch=None, **info)`
-  (one engagement, downsampled, NED) and `write_viewer(scenarios, path, dt,
-  capture_radius)` (fills the template, writes one self-contained HTML file).
+- `viz/viewer.py` — `scenario_data(result, target, every=4, launch=None,
+  target_kind="generic", target_attitudes=None, **info)` (one engagement,
+  downsampled, NED; labels in `info`, e.g. `threat_label`) and
+  `write_viewer(scenarios, path, dt, capture_radius, subtitle=..., menu=None)`
+  (fills the template, writes one self-contained HTML file).
 - `viz/viewer_template.html` — the three.js engagement viewer; `write_viewer`
-  replaces the `"__ENGAGEMENT_DATA__"` placeholder with the data.
-- Tests (265 passing, ruff check + ruff format clean):
+  replaces the `"__ENGAGEMENT_DATA__"` placeholder with the data. Draws a scripted
+  target as a dart and a fixed wing as an aircraft with its attitude (and its bank
+  in the telemetry); "Menu" button and key M when the page has a menu.
+- `viz/menu.py` — `MenuEntry`, `ENTRIES` (the two scenario pages: "Generic target",
+  "Fixed wing"), `write_menu(folder)` (writes `index.html` from
+  `viz/menu_template.html`; a missing page shows the example that writes it).
+- `viz/app.py` — `show(path)` (desktop window or browser), `MENU` (the start menu,
+  opened by `python -m viz.app` with no page), `window_requested`, `main`.
+- Tests (395 passing, ruff check + ruff format clean):
   - integrators (2); rotation (5) — as in phases 1–3.
   - rigid body (10): the 8 of phase 4 + rejects mass ≤ 0 (2 cases).
   - inertia (10): read-only copy, accepts lists and products of inertia, accepts
@@ -706,7 +867,9 @@ Phase 6b (fixed-wing threat), in progress:
     clamp and reset; rejects invalid gains (2 cases) and a non-positive period.
   - quaternion (11): conjugate is the inverse; rotation vector round trip (3
     angles); short way (350° → −10°); q and −q give the same vector; tiny angle;
-    `from_matrix` round trip (100 random, seeded) and half turns (3 axes).
+    `from_matrix` round trip (100 random, seeded) and half turns (3 axes). Phase
+    6b (13): Euler angles round trip (100 random, seeded); nose up, right wing down
+    and heading East point the body axes where they should.
   - attitude control (7): `ω_cmd = −kp·θ`; error in body axes from the command;
     turns the short way; rate command clipped; rejects invalid gains; roll recovery
     matches the exact discrete cascade (1e-6) and the continuous critically damped
@@ -719,11 +882,13 @@ Phase 6b (fixed-wing threat), in progress:
     (behaviour: no overshoot, altitude within 0.5 m); holding still in a 10 m/s wind
     tilts into it by `atan(D/mg)` (1e-5 rad); at 3000 m the rotor speed settles at
     `Ω₀·√(ρ₀/ρ)` (0.1 %).
-  - targets (10): straight line; a turn keeps speed and altitude; a turn is a circle
+  - targets (20): straight line; a turn keeps speed and altitude; a turn is a circle
     of radius V/|ω| with the centre on the correct side (right and left — 2 cases);
     a full turn comes back to the start; velocity = derivative of the position
     (central differences); ω = 0 is a straight line; rejects invalid targets
-    (3 cases).
+    (3 cases). Recorded tracks: the samples exactly; exact for a cubic path; replays
+    a turn recorded at 10 Hz within 1e-5 m; velocity = derivative of the position;
+    no extrapolation; rejects invalid input (4 cases); read-only.
   - events (9): straight fly-by exact between samples (1e-12); interpolation beats
     the nearest sample; closest at the ends (moving apart, still closing — 2 cases);
     0.5 m pass on a curved path found within 0.1 mm and 10 µs while the nearest
@@ -741,7 +906,8 @@ Phase 6b (fixed-wing threat), in progress:
     than the ideal pursuer but within 3 s; catches a fleeing target it starts behind
     (regression); a faster target is reported infeasible and never approached; a
     pass without capture ends the run after the closest approach; the same
-    autopilot gives identical results twice; negative speed rejected.
+    autopilot gives identical results twice; negative speed rejected; a recorded
+    target gives the same engagement as the original to 1e-9 (13 in total).
   - fixed wing (23): no air, no load; reference condition at α = 0 exact; lift
     perpendicular to the air and drag along it (α = −5, 4, 12° — 3 cases); loads
     scale with the dynamic pressure (speed, density); lift-curve slope = C_L_alpha;
@@ -750,9 +916,54 @@ Phase 6b (fixed-wing threat), in progress:
     stability (exact slope); weathercock, dihedral and side-force signs; roll, pitch
     and yaw damping exact (3 cases); control surface signs and sizes exact; mirror
     symmetry in β; profile (AR, −J_xz, frozen); rejects invalid parameters (5 cases).
-  - viz app (4): opens a window with the page URL and title, then starts it (with a
+  - propulsion (34): the source's reference thrust and torque (2 cases, 1e-12);
+    motor torque = propeller torque (12 operating points); thrust = ρn²D⁴C_T(J)
+    (2 speeds); no throttle at rest gives nothing; thrust and rotor speed grow with
+    the throttle (2 speeds); thrust falls with airspeed; throttle 0 in flight
+    windmills and brakes (< −20 N); full-throttle static thrust 80–84 N; throttle
+    clipped; reverse flow taken as none; thinner air: less thrust, faster propeller;
+    `rotor_speed` consistent; rejects invalid parameters (7 cases); profile frozen.
+  - fixed-wing vehicle (16): matches the source in level flight (1e-9) and in a
+    general state with wind (1e-6; F_y within 2e-3); commands start neutral; a
+    glider feels only the aerodynamics; thrust along the nose and torque as a rolling
+    moment; thrust follows the attitude; flying with the wind feels no air; loads
+    depend on airspeed, not ground speed; density read at the current altitude;
+    commands read when the forces are evaluated. Glide: the analytic glide is an
+    equilibrium (4 elevators, 1e-12); its numbers; a glider released level and slow
+    settles into it (V ±0.01 m/s, γ ±0.02°, α ±0.01°).
+  - trim (15): an equilibrium at 4 speeds (1e-9); faster needs less α, less elevator,
+    more throttle; thinner air needs more α; the aileron holds the propeller torque
+    (1e-6); trimmed flight stays steady for 60 s (1e-9); a uniform wind changes the
+    ground speed, not the trim; the course turns the whole trim; full throttle limits
+    the level speed (32.4 m/s trims, 33 does not); trims at every speed from 15 to
+    32.25 m/s (regression); the textbook estimate is close; rejects a glider and a
+    speed ≤ 0; trim state read-only.
+  - stability (25): Jacobian of a linear map and of a nonlinear function;
+    mass-spring-damper mode exact; real modes do not oscillate; neutral directions
+    left out. At 18, 25 and 30 m/s: short period vs the classic approximation (2 %);
+    phugoid frequency vs the refined approximation (1 %) with Lanchester 5–15 % high;
+    phugoid damping (20 %) and > 2.5 times the constant-thrust value; roll subsidence
+    vs L_p (3 %); Dutch roll (15 % / 20 %); spiral unstable as the criterion says,
+    every other mode stable. Simulated phugoid period (1 %) and damping (3 %);
+    simulated spiral growth rate (5 %).
+  - fixed-wing autopilot (20): roll and pitch use the whole surface at the
+    saturation error, with the right signs; outer loops slower by the separations;
+    faster flight gives faster inner loops; `wrap_angle`; rejects invalid input;
+    commands start at the trim. Closed loop: holds the trim and cures the spiral
+    (10° of bank); course step 90° (settled within 0.5° by 15 s, altitude ±1 m);
+    altitude step +20 m (overshoot < 3 m); airspeed steps to 20 and 30 m/s; fast
+    descending reversal does not dive (regression); crosswind flown with the crab
+    angle asin(5/25); reset repeats the flight. Orbit guidance: tangent on the circle
+    (both directions), at the centre from far away, away from it inside; rejects
+    invalid input; the autopilot holds a 150 m orbit (±0.5 m, bank atan(V²/gR) ±1°).
+  - viz app (5): opens a window with the page URL and title, then starts it (with a
     stand-in for pywebview); falls back to the browser without pywebview; a missing
-    page is an error; the `--no-window` flag.
+    page is an error; the `--no-window` flag; with no page it opens the start menu.
+  - viz viewer and menu (6): a scripted target has no attitude; a fixed-wing target
+    carries its attitude, downsampled; rejects an unknown kind or wrong attitudes;
+    the page carries the subtitle and the menu link (none by default); the menu
+    names the scenarios by threat type; it links the pages that exist and names the
+    example for the others.
 - Examples (all run, `python -m examples.<name>`):
   - `projectile_drag.py` — vacuum vs drag.
   - `density_comparison.py` — constant vs exponential vs ISA density (~1.7 km apogee:
@@ -777,10 +988,16 @@ Phase 6b (fixed-wing threat), in progress:
     (keys: space, ← →, O, T, F, P, 1, 2).
   - `iris_scramble.py` — the Iris waits on the pad at rest and launches when the
     threat comes within 400 m; case A captured, case B missed and chased until the
-    threat leaves the dome. Prints both
-    verdicts, plots range and altitude against time, and writes
-    `docs/iris_scramble_viewer.html` (~277 KB) with the alert dome and the standby
-    phase.
+    threat leaves the dome. Prints both verdicts, plots range and altitude against
+    time, writes `docs/iris_scramble_viewer.html` (~287 KB) with the alert dome and
+    the standby phase, writes the start menu `docs/index.html` and opens the app on
+    it. Importable (`main()`): its `scramble`, `report` and constants are reused.
+  - `fixed_wing_scramble.py` — the same scramble against the simulated fixed wing:
+    A loitering at 18 m/s on a 150 m orbit (captured, 0.49 m at T+63.32 s), B a
+    straight pass at 30 m/s (missed by 49.74 m). Flies each threat first and replays
+    it (`RecordedTrack`); prints the verdicts, plots, writes
+    `docs/fixed_wing_scramble_viewer.html` (~439 KB) and the menu, opens the app on
+    the menu. ~20 s to run.
 - Physics note (intermediate-axis instability, torque-free): spin Ω about the
   intermediate axis grows any tiny perturbation at rate
   `λ = Ω·sqrt((I2−I1)(I3−I2)/(I1·I3))`. The example perturbation (0.01 rad/s on p
@@ -845,33 +1062,52 @@ Phase 6b (fixed-wing threat), in progress:
   18. `engagement.py` lives at the top of the package. Review in phase 8: it may
       move to `jinete/engagement.py` or to a `jineta/scenario/` package next to the
       YAML loading.
-  19. Only the interceptor is integrated; the target is a closed-form track. A
-      simulated target (phase 6b) needs both bodies in one run: stacked states in
-      one `run`, or a multi-entity loop (phase 8 needs that anyway).
+  19. Two bodies in one loop. A threat that does not react is now flown first and
+      replayed (`RecordedTrack`); one that reacts (evades, chases) will need both
+      bodies integrated together: stacked states in one `run`, or the multi-entity
+      loop phase 8 needs anyway.
   20. The two MVP scenarios are written twice (`iris_pursuit.py` and
       `iris_pursuit_viewer.py`). The YAML scenarios of phase 8 remove the copy.
   21. The viewer needs internet (three.js and fonts from CDNs). For offline use,
       ship a pinned copy of three.js in the repo; a page opened from `file://`
       cannot import local ES modules, so it has to be inlined (or served by the
-      app window's local server). To do with the author's computer: three.js
-      cannot be downloaded from Claude's workspace.
-  24. Packaging as `Jineta.exe` (PyInstaller + pywebview) once there is a launcher
-      worth packaging.
+      app window's local server). three.js r160 can be taken from GitHub in Claude's
+      workspace (done in phase 6b to test the pages), not from the CDN.
+  22. Launch on alert lives in an example (`iris_scramble.py`, reused by
+      `fixed_wing_scramble.py`), with an instant launch (no reaction time, no
+      spin-up) and perfect detection at 400 m. Move it into the scenario logic of
+      phase 8; in phase 9 the alert becomes a sensor detection.
+  23. No ground: once flying, nothing stops a vehicle from going below z = 0 (it
+      does not happen in any current example). Terrain comes in phase 12; a flat
+      ground check could come earlier if a scenario needs it.
+  24. Packaging as `Jineta.exe` (PyInstaller + pywebview); the start menu is now a
+      launcher worth packaging.
   25. The source's stall gives C_L_max ≈ 2.2 near α ≈ 22° (C_L_alpha = 5.61 and
       α₀ = 27°), high for a small UAV (typically 1.2–1.5). Irrelevant while the
       threat flies at α < 10°; revisit if it has to manoeuvre hard.
   26. The side force and the lateral moments use β in body axes, and drag has no
       side component: the small-β simplification of the source.
-  22. Launch on alert lives in an example (`iris_scramble.py`), with an instant
-      launch (no reaction time, no spin-up) and perfect detection at 400 m. Move it
-      into the scenario logic of phase 8; in phase 9 the alert becomes a sensor
-      detection.
-  23. No ground: once flying, nothing stops a vehicle from going below z = 0 (it
-      does not happen in any current example). Terrain comes in phase 12; a flat
-      ground check could come earlier if a scenario needs it.
-- Next: phase 6b, step 3 (propeller thrust and the `FixedWing` vehicle). New chat:
-  "Seguimos con Jineta, fase 6b paso 3: empuje y vehículo de ala fija". The step
-  list of the phase is in section 5.
+  27. Control-surface limits live only in the autopilot (±30°): the vehicle model
+      accepts any deflection, and the trim at low speed asks for more (−22° of
+      elevator at 18 m/s, −35° at 15 m/s). Move the limits into the vehicle when a
+      second controller or a scripted manoeuvre could exceed them.
+  28. F_y differs from the source's case 3 by 0.0015 N (3e-5) with every input it
+      depends on matching to 1e-9. Not explained; the test tolerates it with a
+      comment.
+  29. The autopilot gains are designed at one trim (the operating speed) and not
+      rescheduled with speed. Tested from 18 to 30 m/s; a threat that changes speed
+      a lot would want gain scheduling.
+  30. The course loop uses the airspeed in its gains (Beard & McLain use the ground
+      speed): equal in still air, different in a strong wind.
+  31. The menu → viewer → menu navigation was checked in headless Chromium, not in
+      pywebview (WebView2), which Claude's workspace cannot install: check it on the
+      author's computer.
+  32. The test run doubled (~40 s, 395 tests): the fixed-wing closed-loop tests fly
+      30–120 s each at 100 Hz. If it gets in the way, mark them `slow` and run them
+      on demand.
+- Next: phase 8 (scenarios in YAML, multiple entities). New chat: "Seguimos con
+  Jineta, fase 8: escenarios YAML y varias entidades". Its step plan is drawn up at
+  the start of the phase and written in section 5.
 
 ## 8. Working with Claude
 
@@ -891,10 +1127,12 @@ Phase 6b (fixed-wing threat), in progress:
   commits. When a change touches several places of one file, Claude gives the whole
   file: partial insertions were the source of the errors in phase 6a (a lost
   import, a missing block).
-- Claude's workspace cannot reach CDNs either, so it cannot render browser pages
-  that load three.js. When the chat is linked to the author's computer, Claude can
-  test such a page in the desktop app's built-in browser (console errors, clicks,
-  screenshots); otherwise it says the page was not rendered.
+- Claude's workspace cannot reach CDNs either. It can still render the viewer pages
+  in headless Chromium (Playwright is installed) by serving three.js r160 taken from
+  GitHub in place of the CDN (phase 6b: clicks, script errors, screenshots; fonts
+  fall back). When the chat is linked to the author's computer, Claude can also test
+  a page in the desktop app's built-in browser. If a page could not be rendered at
+  all, Claude says so.
 - **End of each phase:** update this document (roadmap, conventions, decision log,
   current state) and hand it over to be committed.
 - **Session hygiene:** Claude must tell the author when to start a new chat —

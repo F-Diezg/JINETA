@@ -70,9 +70,7 @@ def level_flight_state(
     velocity is the air velocity plus the aircraft's wind at t = 0 at that point.
     """
     position = np.array([0.0, 0.0, -altitude])
-    yaw = quaternion.from_axis_angle([0.0, 0.0, 1.0], course - beta)
-    pitch = quaternion.from_axis_angle([0.0, 1.0, 0.0], alpha)
-    attitude = quaternion.multiply(yaw, pitch)  # ZYX order, roll = 0
+    attitude = quaternion.from_euler(0.0, alpha, course - beta)
     air_velocity = quaternion.to_matrix(attitude) @ airspeed_from_air_data(
         speed, alpha, beta
     )

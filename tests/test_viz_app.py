@@ -14,7 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from viz.app import show, window_requested
+import viz.app
+from viz.app import MENU, main, show, window_requested
 
 
 @contextmanager
@@ -81,3 +82,16 @@ def test_no_window_flag():
     assert window_requested([])
     assert window_requested(["--other"])
     assert not window_requested(["--no-window"])
+
+
+def test_without_a_page_the_app_opens_the_start_menu():
+    opened = []
+    original = viz.app.show
+    viz.app.show = opened.append
+    try:
+        main([])
+        main(["docs/other.html"])
+    finally:
+        viz.app.show = original
+    assert opened == [MENU, Path("docs/other.html")]
+    assert MENU.name == "index.html" and MENU.parent.name == "docs"

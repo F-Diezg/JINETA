@@ -26,8 +26,10 @@ How the launch is simulated, with no new physics:
     its duration, with an infinite margin so that a pass never stops it earlier.
 
 Writes `docs/iris_scramble_viewer.html` (the same viewer as the MVP, which adds the
-alert dome and a standby phase), shows range and altitude against time and then
-opens the viewer in its own window. `--no-window` only writes the page.
+alert dome and a standby phase) and the start menu `docs/index.html`, shows range and
+altitude against time and then opens the viewer app on its menu, in its own window.
+`--no-window` only writes the pages. Its functions (`scramble`, `report`, ...) are
+also used by `fixed_wing_scramble.py`, so the scenario logic is written once.
 """
 
 from pathlib import Path
@@ -42,6 +44,7 @@ from jineta.jinete.multirotor import Multirotor
 from jineta.jinete.profiles import IRIS, IRIS_GAINS
 from jineta.jinete.targets import StraightLineTarget, TurningTarget, track_positions
 from viz.app import show, window_requested
+from viz.menu import write_menu
 from viz.viewer import scenario_data, write_viewer
 
 DT = 0.01  # simulation and control step [s]
@@ -142,90 +145,105 @@ def report(name, result, t_launch, t_exit, commanded_speed):
     print(f"  run ended at T+{result.times[-1]:.2f} s: {end}")
 
 
-# --- The two scrambles ---------------------------------------------------------------
-# A: slow threat from the North-West, heading South-South-East, gentle left turn.
-slow_target = TurningTarget(
-    start=np.array([420.0, -250.0, -110.0]),
-    speed=8.0,
-    heading=np.radians(155.0),
-    turn_rate=np.radians(-1.5),
-)
-slow, slow_launch, slow_exit = scramble(slow_target, 16.0, t_max=120.0)
+def main() -> None:
+    """Run both scrambles, print the verdicts, write the viewer, plot, open."""
+    # --- The two scrambles ------------------------------------------------------------
+    # A: slow threat from the North-West, heading South-South-East, gentle left turn.
+    slow_target = TurningTarget(
+        start=np.array([420.0, -250.0, -110.0]),
+        speed=8.0,
+        heading=np.radians(155.0),
+        turn_rate=np.radians(-1.5),
+    )
+    slow, slow_launch, slow_exit = scramble(slow_target, 16.0, t_max=120.0)
 
-# B: fast threat from the South-West, straight towards the North-East.
-fast_heading = np.radians(40.0)
-fast_target = StraightLineTarget(
-    start=np.array([-600.0, -350.0, -120.0]),
-    velocity=25.0 * np.array([np.cos(fast_heading), np.sin(fast_heading), 0.0]),
-)
-fast, fast_launch, fast_exit = scramble(fast_target, 30.0, t_max=120.0)
+    # B: fast threat from the South-West, straight towards the North-East.
+    fast_heading = np.radians(40.0)
+    fast_target = StraightLineTarget(
+        start=np.array([-600.0, -350.0, -120.0]),
+        velocity=25.0 * np.array([np.cos(fast_heading), np.sin(fast_heading), 0.0]),
+    )
+    fast, fast_launch, fast_exit = scramble(fast_target, 30.0, t_max=120.0)
 
-report("A. Slow threat: 8 m/s, turning", slow, slow_launch, slow_exit, 16.0)
-report("B. Fast threat: 25 m/s, straight", fast, fast_launch, fast_exit, 30.0)
+    report("A. Slow threat: 8 m/s, turning", slow, slow_launch, slow_exit, 16.0)
+    report("B. Fast threat: 25 m/s, straight", fast, fast_launch, fast_exit, 30.0)
 
-# --- Viewer --------------------------------------------------------------------------
-launch = {"range": ALERT_RANGE, "site": SITE}
-write_viewer(
-    [
-        scenario_data(
-            slow,
-            slow_target,
-            EVERY,
-            launch={**launch, "time": slow_launch},
-            id="scramble-slow",
-            name="A · slow threat",
-            detail="8 m/s, turning 1.5 deg/s",
-            target_speed=8.0,
-            commanded_speed=16.0,
-        ),
-        scenario_data(
-            fast,
-            fast_target,
-            EVERY,
-            launch={**launch, "time": fast_launch},
-            id="scramble-fast",
-            name="B · fast threat",
-            detail="25 m/s, straight",
-            target_speed=25.0,
-            commanded_speed=30.0,
-        ),
-    ],
-    VIEWER_PATH,
-    dt=DT * EVERY,
-    capture_radius=CAPTURE_RADIUS,
-)
-print(f"\nViewer written to {VIEWER_PATH}")
+    # --- Viewer -----------------------------------------------------------------------
+    launch = {"range": ALERT_RANGE, "site": SITE}
+    write_viewer(
+        [
+            scenario_data(
+                slow,
+                slow_target,
+                EVERY,
+                launch={**launch, "time": slow_launch},
+                id="scramble-slow",
+                name="A · slow threat",
+                detail="8 m/s, turning 1.5 deg/s",
+                target_speed=8.0,
+                commanded_speed=16.0,
+            ),
+            scenario_data(
+                fast,
+                fast_target,
+                EVERY,
+                launch={**launch, "time": fast_launch},
+                id="scramble-fast",
+                name="B · fast threat",
+                detail="25 m/s, straight",
+                target_speed=25.0,
+                commanded_speed=30.0,
+            ),
+        ],
+        VIEWER_PATH,
+        dt=DT * EVERY,
+        capture_radius=CAPTURE_RADIUS,
+        subtitle="generic target · scramble",
+        menu="index.html",
+    )
+    menu = write_menu(VIEWER_PATH.parent)
+    print(f"\nViewer written to {VIEWER_PATH}; menu at {menu}")
 
-# --- Plots: range and altitude against time ------------------------------------------
-fig, (ax_range, ax_alt) = plt.subplots(2, 1, sharex=True, figsize=(8, 7))
-for key, result, t_launch, label in (
-    ("A", slow, slow_launch, "A: slow threat, captured"),
-    ("B", fast, fast_launch, "B: fast threat, missed"),
-):
-    color = COLORS[key]
-    separation = np.linalg.norm(result.target_positions - result.states[:, :3], axis=1)
-    ax_range.plot(result.times, separation, color=color, lw=2, label=label)
-    ax_range.plot(result.closest.time, result.closest.distance, "o", color=color)
-    ax_alt.plot(result.times, -result.states[:, 2], color=color, lw=2)
-    ax_alt.plot(result.times, -result.target_positions[:, 2], color=color, lw=1, ls=":")
+    # --- Plots: range and altitude against time ---------------------------------------
+    fig, (ax_range, ax_alt) = plt.subplots(2, 1, sharex=True, figsize=(8, 7))
+    for key, result, t_launch, label in (
+        ("A", slow, slow_launch, "A: slow threat, captured"),
+        ("B", fast, fast_launch, "B: fast threat, missed"),
+    ):
+        color = COLORS[key]
+        separation = np.linalg.norm(
+            result.target_positions - result.states[:, :3], axis=1
+        )
+        ax_range.plot(result.times, separation, color=color, lw=2, label=label)
+        ax_range.plot(result.closest.time, result.closest.distance, "o", color=color)
+        ax_alt.plot(result.times, -result.states[:, 2], color=color, lw=2)
+        ax_alt.plot(
+            result.times, -result.target_positions[:, 2], color=color, lw=1, ls=":"
+        )
+        for ax in (ax_range, ax_alt):
+            ax.axvline(t_launch, color=color, lw=1, ls="--")
+
+    ax_range.axhline(ALERT_RANGE, color=GREY, lw=1, ls="--")
+    ax_range.axhline(CAPTURE_RADIUS, color=GREY, lw=1, ls="--")
+    ax_range.text(
+        0.5, ALERT_RANGE * 1.1, f"alert range {ALERT_RANGE:.0f} m", color=GREY
+    )
+    ax_range.text(0.5, CAPTURE_RADIUS * 1.2, f"capture {CAPTURE_RADIUS} m", color=GREY)
+    ax_range.set_yscale("log")
+    ax_range.set_ylabel("Separation [m]")
+    ax_range.set_title("Dashed vertical lines: launch. Dots: closest approach")
+    ax_range.legend()
+    ax_alt.set_ylabel("Altitude [m]")
+    ax_alt.set_xlabel("Time [s]")
+    ax_alt.set_title("Solid: Iris (from the pad at 0 m). Dotted: threat")
     for ax in (ax_range, ax_alt):
-        ax.axvline(t_launch, color=color, lw=1, ls="--")
+        ax.grid(True, which="both", alpha=0.3)
+    fig.suptitle("Scramble: launch on alert, then pure pursuit")
+    fig.tight_layout()
+    if window_requested():
+        plt.show()  # close the plot to open the viewer app on its menu
+        show(menu)
 
-ax_range.axhline(ALERT_RANGE, color=GREY, lw=1, ls="--")
-ax_range.axhline(CAPTURE_RADIUS, color=GREY, lw=1, ls="--")
-ax_range.text(0.5, ALERT_RANGE * 1.1, f"alert range {ALERT_RANGE:.0f} m", color=GREY)
-ax_range.text(0.5, CAPTURE_RADIUS * 1.2, f"capture {CAPTURE_RADIUS} m", color=GREY)
-ax_range.set_yscale("log")
-ax_range.set_ylabel("Separation [m]")
-ax_range.set_title("Dashed vertical lines: launch. Dots: closest approach")
-ax_range.legend()
-ax_alt.set_ylabel("Altitude [m]")
-ax_alt.set_xlabel("Time [s]")
-ax_alt.set_title("Solid: Iris (from the pad at 0 m). Dotted: threat")
-for ax in (ax_range, ax_alt):
-    ax.grid(True, which="both", alpha=0.3)
-fig.suptitle("Scramble: launch on alert, then pure pursuit")
-fig.tight_layout()
-if window_requested():
-    plt.show()  # close the plot to open the viewer
-    show(VIEWER_PATH)
+
+if __name__ == "__main__":
+    main()
