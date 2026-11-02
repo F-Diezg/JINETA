@@ -19,8 +19,10 @@ Every step goes:
   3. one RK4 step for the whole vector, with the commands held (zero-order hold);
   4. post_step (renormalise the quaternions) and the stop condition.
 
-An entity that is not active (waiting on its pad, or later destroyed) has a zero
-derivative, so it stays exactly where it is, and its control is not called.
+An entity that is not active (waiting on its pad, or destroyed) has a zero
+derivative, so it stays exactly where it is, and its control is not called. A
+destroyed entity (`World.destroy`, e.g. at a capture) stays where it was hit for the
+rest of the flight; a destroyed scripted track stops at that point too.
 
 Three kinds of entity:
   - `VehicleEntity`: a simulated vehicle (13-element rigid-body state).
@@ -79,7 +81,8 @@ class VehicleEntity:
     initial_state: np.ndarray  # (13,) at t = 0
     control: Control | None = None
     waiting: bool = False  # True: starts on standby until a rule launches it
-    active: bool = field(init=False)
+    active: bool = field(init=False)  # moving: launched and not destroyed
+    destroyed: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
         _check_name(self.name)
@@ -118,6 +121,7 @@ class PointEntity:
     waiting: bool = False
     velocity_command: np.ndarray = field(default_factory=lambda: np.zeros(3))
     active: bool = field(init=False)
+    destroyed: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
         _check_name(self.name)
@@ -140,12 +144,18 @@ class PointEntity:
         return state
 
     def velocity(self, t: float, state: np.ndarray) -> np.ndarray:
+        if not self.active:
+            return np.zeros(3)  # waiting or destroyed: it does not move
         return np.array(self.velocity_command, dtype=float)
 
 
 @dataclass
 class TrackEntity:
-    """A scripted track in the world: no state, no control, always active."""
+    """A scripted track in the world: no state, no control, never waits.
+
+    When it is destroyed at time `stopped_at` it stays at the point where it was
+    then, with zero velocity.
+    """
 
     size: ClassVar[int] = 0
 
@@ -154,6 +164,8 @@ class TrackEntity:
     control: None = field(default=None, init=False)
     waiting: bool = field(default=False, init=False)
     active: bool = field(default=True, init=False)
+    destroyed: bool = field(default=False, init=False)
+    stopped_at: float | None = field(default=None, init=False)  # [s]
 
     def __post_init__(self) -> None:
         _check_name(self.name)
@@ -169,9 +181,13 @@ class TrackEntity:
         return state
 
     def position(self, t: float, state: np.ndarray) -> np.ndarray:
+        if self.stopped_at is not None:
+            t = min(t, self.stopped_at)
         return np.asarray(self.track(t)[0], dtype=float)
 
     def velocity(self, t: float, state: np.ndarray) -> np.ndarray:
+        if self.stopped_at is not None and t > self.stopped_at:
+            return np.zeros(3)
         return np.asarray(self.track(t)[1], dtype=float)
 
 
@@ -247,10 +263,22 @@ class World:
         return np.concatenate([e.initial_state for e in self.entities])
 
     def reset(self) -> None:
-        """Put every entity back to its starting status (waiting or active)."""
+        """Put every entity back to its starting status (waiting or active, none
+        destroyed)."""
         for entity in self.entities:
-            if not isinstance(entity, TrackEntity):
-                entity.active = not entity.waiting
+            entity.active = not entity.waiting
+            entity.destroyed = False
+            if isinstance(entity, TrackEntity):
+                entity.stopped_at = None
+
+    def destroy(self, name: str, t: float) -> None:
+        """Take an entity out of the fight at time t: from the next step it no
+        longer moves and its control no longer runs."""
+        entity = self.entity(name)
+        entity.active = False
+        entity.destroyed = True
+        if isinstance(entity, TrackEntity) and entity.stopped_at is None:
+            entity.stopped_at = t
 
     def snapshot(self, t: float, state: np.ndarray) -> Snapshot:
         """A read-only view of the world at time t (the caller's array is not
@@ -311,7 +339,15 @@ class World:
             post_step=self.post_step,
             pre_step=self.pre_step,
         )
-        return Flight(self, times, states)
+        # The positions are recorded now: a scripted track's depends on when it was
+        # destroyed, and that is forgotten at the next `reset`.
+        positions = {}
+        for entity in self.entities:
+            part = states[:, self._slices[entity.name]]
+            positions[entity.name] = np.array(
+                [entity.position(t, y) for t, y in zip(times, part, strict=True)]
+            )
+        return Flight(self, times, states, positions)
 
 
 @dataclass(frozen=True)
@@ -321,6 +357,7 @@ class Flight:
     world: World
     times: np.ndarray  # (n,) [s]
     states: np.ndarray  # (n, world.size) stacked states
+    _positions: dict[str, np.ndarray] = field(repr=False)
 
     def state(self, name: str) -> np.ndarray:
         """(n, size) history of one entity's state ((n, 0) for a track)."""
@@ -328,10 +365,5 @@ class Flight:
 
     def positions(self, name: str) -> np.ndarray:
         """(n, 3) positions of one entity, NED [m]."""
-        entity = self.world.entity(name)
-        return np.array(
-            [
-                entity.position(t, y)
-                for t, y in zip(self.times, self.state(name), strict=True)
-            ]
-        )
+        self.world.entity(name)  # a clear error for an unknown name
+        return self._positions[name]

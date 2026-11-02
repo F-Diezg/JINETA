@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
-from jineta.engagement import engage
+from jineta.arena.engagement import engage
 from jineta.jinete.control import Autopilot
 from jineta.jinete.multirotor import Multirotor
 from jineta.jinete.profiles import IRIS, IRIS_GAINS

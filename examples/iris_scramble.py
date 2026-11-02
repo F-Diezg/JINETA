@@ -37,8 +37,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
+from jineta.arena.engagement import Engagement, engage
 from jineta.core.events import ClosestApproach
-from jineta.engagement import Engagement, engage
 from jineta.jinete.control import Autopilot
 from jineta.jinete.multirotor import Multirotor
 from jineta.jinete.profiles import IRIS, IRIS_GAINS

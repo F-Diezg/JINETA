@@ -23,6 +23,7 @@ runs ahead of it by about h sin^2(theta) / (2 (1 - cos(theta))) ln(a / d), which
 import numpy as np
 import pytest
 
+from jineta.arena.world import PointEntity, TrackEntity, VehicleEntity, World
 from jineta.campo.atmosphere import isa_density
 from jineta.core.environment import GRAVITY
 from jineta.core.rigid_body import RigidBody, normalize_attitude
@@ -41,7 +42,6 @@ from jineta.jinete.profiles import (
 )
 from jineta.jinete.targets import StraightLineTarget, track_positions
 from jineta.jinete.trim import trim_level_flight
-from jineta.arena.world import PointEntity, TrackEntity, VehicleEntity, World
 
 DT = 0.01
 AT_REST = np.array([0, 0, -100.0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0])
@@ -287,3 +287,45 @@ def test_rejects_invalid_worlds():
         VehicleEntity("a", body, np.zeros(13))  # zero quaternion
     with pytest.raises(KeyError):
         World([PointEntity("a", [0, 0, 0])]).slice_of("b")  # unknown name
+
+
+def test_a_destroyed_entity_stays_where_it_was_hit_until_the_next_flight():
+    """A point and a scripted track, destroyed by a rule at 1 s: from then on both
+    stay where they were (the track stops on its path), with zero velocity. Flying
+    again starts them afresh."""
+    line = StraightLineTarget([0.0, 0.0, -50.0], [4.0, 0.0, 0.0])
+    world = World(
+        [
+            PointEntity("dot", [0.0, 0.0, -10.0], velocity_command=[0.0, 2.0, 0.0]),
+            TrackEntity("line", line),
+        ]
+    )
+    hit = []
+
+    def shoot_down(snapshot):
+        if not hit and snapshot.time >= 1.0 - 1e-9:
+            hit.append(snapshot.time)
+            world.destroy("dot", snapshot.time)
+            world.destroy("line", snapshot.time)
+
+    world.rules = (shoot_down,)
+    flight = world.fly(DT, 2.0)
+    after = flight.times >= hit[0]
+    for name, speed in (("dot", [0.0, 2.0, 0.0]), ("line", [4.0, 0.0, 0.0])):
+        positions = flight.positions(name)
+        assert np.array_equal(
+            positions[after], np.tile(positions[after][0], (after.sum(), 1))
+        )
+        assert np.allclose(positions[after][0], positions[0] + hit[0] * np.array(speed))
+        assert world.entity(name).destroyed
+    snapshot = world.snapshot(1.5, flight.states[-1])
+    assert np.array_equal(snapshot.velocity("line"), np.zeros(3))
+    assert np.array_equal(snapshot.velocity("dot"), np.zeros(3))
+
+    line_hit = flight.positions("line")[-1]
+    world.rules = ()
+    again = world.fly(DT, 2.0)
+    assert not world.entity("line").destroyed
+    assert np.array_equal(again.positions("line"), track_positions(line, again.times))
+    assert np.allclose(again.positions("dot")[-1], [0.0, 4.0, -10.0])
+    assert np.array_equal(flight.positions("line")[-1], line_hit)  # first one kept

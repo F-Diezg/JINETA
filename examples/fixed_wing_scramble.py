@@ -5,7 +5,7 @@ origin, rotors stopped, launches when the threat comes within ALERT_RANGE and fl
 pure pursuit), but the threat is no longer a scripted point: it is the generic small
 fixed-wing UAV, simulated in 6-DOF and flown by its own autopilot.
 
-  A. A loitering drone (18 m/s): it flies in from the North-East and circles over
+  A. A loitering drone (18 m/s): it flies in from the North-West and circles over
      the area, 150 m around a point near the pad, 100 m up. The Iris is faster
      (~20.7 m/s in level flight) and catches it.
   B. A fast pass (30 m/s, near the fixed wing's top level speed of ~32.5 m/s),

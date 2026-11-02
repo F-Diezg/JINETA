@@ -11,8 +11,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from jineta.arena.engagement import Engagement
 from jineta.core.events import ClosestApproach
-from jineta.engagement import Engagement
 from jineta.jinete.targets import StraightLineTarget, track_positions
 from viz.menu import ENTRIES, MENU_FILE, page_cases, write_menu
 from viz.viewer import read_viewer, scenario_data, write_viewer

@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 import numpy.typing as npt
 
-from jineta.engagement import Engagement
+from jineta.arena.engagement import Engagement
 from jineta.jinete.targets import TargetTrack
 
 TEMPLATE = Path(__file__).resolve().parent / "viewer_template.html"
