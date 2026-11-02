@@ -19,10 +19,10 @@ Every step goes:
   3. one RK4 step for the whole vector, with the commands held (zero-order hold);
   4. post_step (renormalise the quaternions) and the stop condition.
 
-An entity that is not active (waiting on its pad, or destroyed) has a zero
-derivative, so it stays exactly where it is, and its control is not called. A
-destroyed entity (`World.destroy`, e.g. at a capture) stays where it was hit for the
-rest of the flight; a destroyed scripted track stops at that point too.
+An entity that is not active (waiting on its pad until `World.launch`, or
+destroyed) has a zero derivative, so it stays exactly where it is, and its control
+is not called. A destroyed entity (`World.destroy`, e.g. at a capture) stays where
+it was hit for the rest of the flight; a destroyed scripted track stops there too.
 
 Three kinds of entity:
   - `VehicleEntity`: a simulated vehicle (13-element rigid-body state).
@@ -83,6 +83,7 @@ class VehicleEntity:
     waiting: bool = False  # True: starts on standby until a rule launches it
     active: bool = field(init=False)  # moving: launched and not destroyed
     destroyed: bool = field(default=False, init=False)
+    launched_at: float | None = field(default=None, init=False)  # [s]
 
     def __post_init__(self) -> None:
         _check_name(self.name)
@@ -122,6 +123,7 @@ class PointEntity:
     velocity_command: np.ndarray = field(default_factory=lambda: np.zeros(3))
     active: bool = field(init=False)
     destroyed: bool = field(default=False, init=False)
+    launched_at: float | None = field(default=None, init=False)  # [s]
 
     def __post_init__(self) -> None:
         _check_name(self.name)
@@ -165,6 +167,7 @@ class TrackEntity:
     waiting: bool = field(default=False, init=False)
     active: bool = field(default=True, init=False)
     destroyed: bool = field(default=False, init=False)
+    launched_at: float | None = field(default=0.0, init=False)  # [s]
     stopped_at: float | None = field(default=None, init=False)  # [s]
 
     def __post_init__(self) -> None:
@@ -268,8 +271,20 @@ class World:
         for entity in self.entities:
             entity.active = not entity.waiting
             entity.destroyed = False
+            entity.launched_at = None if entity.waiting else 0.0
             if isinstance(entity, TrackEntity):
                 entity.stopped_at = None
+
+    def launch(self, name: str, t: float) -> None:
+        """Launch a waiting entity at time t: it moves and its control runs from
+        this step on (a rule calls it before the controls, so the control already
+        runs in the step of the launch)."""
+        entity = self.entity(name)
+        if entity.destroyed:
+            raise ValueError(f"{name!r} was destroyed: it cannot be launched")
+        if entity.launched_at is None:
+            entity.launched_at = t
+        entity.active = True
 
     def destroy(self, name: str, t: float) -> None:
         """Take an entity out of the fight at time t: from the next step it no
@@ -339,15 +354,16 @@ class World:
             post_step=self.post_step,
             pre_step=self.pre_step,
         )
-        # The positions are recorded now: a scripted track's depends on when it was
-        # destroyed, and that is forgotten at the next `reset`.
+        # Positions and launch times are recorded now: a scripted track's position
+        # depends on when it was destroyed, and both are forgotten at `reset`.
         positions = {}
         for entity in self.entities:
             part = states[:, self._slices[entity.name]]
             positions[entity.name] = np.array(
                 [entity.position(t, y) for t, y in zip(times, part, strict=True)]
             )
-        return Flight(self, times, states, positions)
+        launched_at = {entity.name: entity.launched_at for entity in self.entities}
+        return Flight(self, times, states, positions, launched_at)
 
 
 @dataclass(frozen=True)
@@ -358,6 +374,7 @@ class Flight:
     times: np.ndarray  # (n,) [s]
     states: np.ndarray  # (n, world.size) stacked states
     _positions: dict[str, np.ndarray] = field(repr=False)
+    launched_at: dict[str, float | None]  # launch time of each entity (None: never)
 
     def state(self, name: str) -> np.ndarray:
         """(n, size) history of one entity's state ((n, 0) for a track)."""

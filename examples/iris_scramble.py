@@ -13,17 +13,16 @@ flies pure pursuit at its commanded speed.
 Each run ends at the capture or when the threat leaves the alert dome, whichever
 comes first: past that point the pad no longer cares about it.
 
-How the launch is simulated, with no new physics:
-  - There is no ground model, so the Iris cannot "rest" on the ground inside the
-    simulation. Before the launch it is simply not integrated: it stays at rest on
-    the pad, which is exactly what a vehicle with its motors off on the ground does.
-  - The alert is checked once per control step, so the launch happens on the step
-    grid: the first t = k * DT at which the threat is inside the range.
-  - From the launch on, `engage` flies the pursuit as in the MVP. It starts its own
-    clock at 0, so it is given the threat as seen from the launch time,
-    `t -> target(t + t_launch)`, and its times are shifted back afterwards.
-  - The end of the run is the time the threat leaves the dome, passed to `engage` as
-    its duration, with an infinite margin so that a pass never stops it earlier.
+How the launch is simulated (`jineta.arena`), with no new physics:
+  - The Iris and the threat fly in one world. The Iris is a waiting entity: until
+    its launch its derivative is zero, so it stays exactly at rest on the pad, which
+    is what a vehicle with its motors off on the ground does (there is no ground
+    model).
+  - A launch rule (`LaunchOnAlert`) checks the alert once per control step, before
+    the controls: the Iris launches at the first t = k * DT at which the threat is
+    inside the dome, and its pursuit control runs from that same step.
+  - The pair (Iris -> threat) defends the dome, with an infinite margin so that a
+    pass never ends it: it ends at the capture or when the threat leaves the dome.
 
 Writes `docs/iris_scramble_viewer.html` (the same viewer as the MVP, which adds the
 alert dome and a standby phase) and the start menu `docs/index.html`, shows range and
@@ -32,17 +31,19 @@ altitude against time and then opens the viewer app on its menu, in its own wind
 also used by `fixed_wing_scramble.py`, so the scenario logic is written once.
 """
 
+import math
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 
-from jineta.arena.engagement import Engagement, engage
-from jineta.core.events import ClosestApproach
+from jineta.arena.engagement import ESCAPED, Engagement, Pairing, fight, pursuit
+from jineta.arena.launch import Dome, LaunchOnAlert
+from jineta.arena.world import TrackEntity, VehicleEntity, World
 from jineta.jinete.control import Autopilot
 from jineta.jinete.multirotor import Multirotor
 from jineta.jinete.profiles import IRIS, IRIS_GAINS
-from jineta.jinete.targets import StraightLineTarget, TurningTarget, track_positions
+from jineta.jinete.targets import StraightLineTarget, TurningTarget
 from viz.app import show, window_requested
 from viz.menu import write_menu
 from viz.viewer import scenario_data, write_viewer
@@ -53,6 +54,7 @@ ALERT_RANGE = 400.0  # distance from the pad that triggers the launch [m]
 EVERY = 4  # viewer keeps one sample in 4 (25 Hz)
 SITE = np.zeros(3)  # launch pad: the origin, on the ground (NED, altitude 0)
 ON_THE_PAD = np.array([*SITE, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0], dtype=float)  # at rest
+DOME = Dome(SITE, ALERT_RANGE)  # the alert dome of the pad
 ROOT = Path(__file__).resolve().parents[1]
 VIEWER_PATH = ROOT / "docs" / "iris_scramble_viewer.html"
 
@@ -60,64 +62,47 @@ COLORS = {"A": "#2a78d6", "B": "#eb6834"}
 GREY = "#888780"
 
 
-def alert_time(target, t_max):
-    """First control step t = k * DT at which the threat is within ALERT_RANGE."""
-    times = np.arange(0.0, t_max + DT / 2, DT)
-    ranges = np.linalg.norm(track_positions(target, times) - SITE, axis=1)
-    inside = np.flatnonzero(ranges <= ALERT_RANGE)
-    if inside.size == 0:
-        raise ValueError(f"the threat never comes within {ALERT_RANGE} m")
-    return float(times[inside[0]])
-
-
-def exit_time(target, t_launch, t_max):
-    """First control step after the launch at which the threat is outside
-    ALERT_RANGE again (t_max if it never leaves)."""
-    times = np.arange(t_launch, t_max + DT / 2, DT)
-    ranges = np.linalg.norm(track_positions(target, times) - SITE, axis=1)
-    outside = np.flatnonzero(ranges > ALERT_RANGE)
-    return float(times[outside[0]]) if outside.size else t_max
-
-
-def scramble(target, speed, t_max):
+def scramble(threat, speed, t_max):
     """Wait on the pad until the alert, then pursue until the capture or until the
-    threat leaves the dome. Returns the whole run on one time axis from t = 0 (an
-    `Engagement`), the launch time and the time the threat leaves the dome."""
-    t_launch = alert_time(target, t_max)
-    t_exit = exit_time(target, t_launch, t_max)
+    threat leaves the dome.
 
-    def seen_from_launch(t):
-        return target(t + t_launch)
-
+    `threat` is a scripted track or a simulated vehicle (a `VehicleEntity` named
+    "threat"); either way it flies in the same world as the Iris. Returns the whole
+    run on one time axis from t = 0 (an `Engagement`), the launch time, the time the
+    run ended (the threat left the dome, or `t_max`) and the `Flight`.
+    """
+    if not isinstance(threat, VehicleEntity):
+        threat = TrackEntity("threat", threat)
     autopilot = Autopilot(Multirotor(IRIS), IRIS_GAINS, DT)
-    pursuit = engage(
-        autopilot,
-        seen_from_launch,
+    iris = VehicleEntity(
+        "iris",
+        autopilot.vehicle.derivative,
         ON_THE_PAD,
-        speed,
-        t_exit - t_launch,
-        capture_radius=CAPTURE_RADIUS,
-        margin=np.inf,  # never stop on a pass: only a capture or leaving the dome
+        control=pursuit(autopilot, "threat", speed),
+        waiting=True,
     )
+    world = World([iris, threat], rules=[LaunchOnAlert("iris", DOME, ["threat"])])
+    target_speed = np.linalg.norm(
+        world.snapshot(0.0, world.initial_state()).velocity("threat")
+    )
+    # margin = inf: never stop on a pass, only a capture or leaving the dome
+    pair = Pairing("iris", "threat", CAPTURE_RADIUS, margin=math.inf, dome=DOME)
+    battle = fight(world, [pair], DT, t_max)
+    flight, result = battle.flight, battle.results[0]
 
-    # Standby: the steps before the launch, with the Iris at rest on the pad.
-    waiting = round(t_launch / DT)
-    times = np.concatenate([DT * np.arange(waiting), t_launch + pursuit.times])
-    states = np.vstack([np.tile(ON_THE_PAD, (waiting, 1)), pursuit.states])
-    closest = ClosestApproach(
-        time=pursuit.closest.time + t_launch,
-        distance=pursuit.closest.distance,
-        step=pursuit.closest.step + waiting,
-    )
+    t_launch = flight.launched_at["iris"]
+    if t_launch is None:
+        raise ValueError(f"the threat never comes within {ALERT_RANGE} m")
     whole = Engagement(
-        times=times,
-        states=states,
-        target_positions=track_positions(target, times),
-        closest=closest,
-        captured=pursuit.captured,
-        pursuit_feasible=pursuit.pursuit_feasible,
+        times=flight.times,
+        states=flight.state("iris"),
+        target_positions=flight.positions("threat"),
+        closest=result.closest,
+        captured=result.captured,
+        pursuit_feasible=speed > target_speed,
     )
-    return whole, t_launch, t_exit
+    t_exit = result.end_time if result.outcome == ESCAPED else t_max
+    return whole, t_launch, t_exit, flight
 
 
 def report(name, result, t_launch, t_exit, commanded_speed):
@@ -155,7 +140,7 @@ def main() -> None:
         heading=np.radians(155.0),
         turn_rate=np.radians(-1.5),
     )
-    slow, slow_launch, slow_exit = scramble(slow_target, 16.0, t_max=120.0)
+    slow, slow_launch, slow_exit, _ = scramble(slow_target, 16.0, t_max=120.0)
 
     # B: fast threat from the South-West, straight towards the North-East.
     fast_heading = np.radians(40.0)
@@ -163,7 +148,7 @@ def main() -> None:
         start=np.array([-600.0, -350.0, -120.0]),
         velocity=25.0 * np.array([np.cos(fast_heading), np.sin(fast_heading), 0.0]),
     )
-    fast, fast_launch, fast_exit = scramble(fast_target, 30.0, t_max=120.0)
+    fast, fast_launch, fast_exit, _ = scramble(fast_target, 30.0, t_max=120.0)
 
     report("A. Slow threat: 8 m/s, turning", slow, slow_launch, slow_exit, 16.0)
     report("B. Fast threat: 25 m/s, straight", fast, fast_launch, fast_exit, 30.0)

@@ -1,9 +1,10 @@
-bottle==0.13.4
+﻿bottle==0.13.4
 cffi==2.1.1
 clr_loader==0.3.1
 colorama==0.4.6
 contourpy==1.4.0
 cycler==0.12.1
+execnet==2.1.2
 fonttools==4.66.1
 iniconfig==2.3.0
 kiwisolver==1.5.1
@@ -17,6 +18,7 @@ pycparser==3.11
 Pygments==2.21.0
 pyparsing==3.3.3
 pytest==9.1.1
+pytest-xdist==3.8.0
 python-dateutil==2.9.0.post0
 pythonnet==3.2.1
 pywebview==6.2.1

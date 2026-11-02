@@ -11,12 +11,12 @@ fixed-wing UAV, simulated in 6-DOF and flown by its own autopilot.
   B. A fast pass (30 m/s, near the fixed wing's top level speed of ~32.5 m/s),
      straight from the South-West at 120 m: the Iris cannot catch it.
 
-How the two bodies are simulated: the threat does not react to the Iris (it flies
-its route whatever happens), so it is flown first, on its own, and recorded; the
-recording is then replayed as the target of `engage` (`RecordedTrack`, cubic
-interpolation between the 100 Hz samples). The pursuit itself is exactly the
-`scramble` of `iris_scramble.py`. A threat that reacts (evades) will need both
-bodies in one loop (phase 8).
+How the two bodies are simulated: both fly in the same world (`jineta.arena`), each
+with its own autopilot, and the Iris's guidance reads where the fixed wing is at the
+start of every step. The pursuit is exactly the `scramble` of `iris_scramble.py`,
+given the fixed wing as a vehicle instead of a scripted track. (Until phase 8 the
+fixed wing was flown first and replayed; the result is the same to rounding error,
+because it does not react to the Iris.)
 
 Writes `docs/fixed_wing_scramble_viewer.html` (the viewer draws the threat as an
 aircraft with its real attitude and shows its bank) and the start menu
@@ -39,9 +39,8 @@ from examples.iris_scramble import (
     report,
     scramble,
 )
+from jineta.arena.world import VehicleEntity
 from jineta.campo.atmosphere import isa_density
-from jineta.core.rigid_body import normalize_attitude
-from jineta.core.simulation import run
 from jineta.jinete.fixed_wing import FixedWing
 from jineta.jinete.fixed_wing_control import FixedWingAutopilot, orbit_course
 from jineta.jinete.profiles import (
@@ -59,15 +58,13 @@ VIEWER_PATH = ROOT / "docs" / "fixed_wing_scramble_viewer.html"
 IRIS_ORDERED_SPEED = 25.0  # [m/s]: more than it can fly, so it flies flat out
 
 
-def fly_threat(speed, start, course, altitude, duration, orbit=None):
-    """Fly the fixed wing on its own and record it.
+def fixed_wing_threat(speed, start, course, altitude, orbit=None):
+    """The fixed wing as an entity of the world, named "threat".
 
     It starts trimmed for level flight at `speed`, at `start` (North, East [m]) and
-    `altitude`, on `course` [rad]. The autopilot holds the speed and the altitude;
+    `altitude`, on `course` [rad]. Its autopilot holds the speed and the altitude;
     the course is fixed, or, with `orbit = (center NED, radius, clockwise)`, comes
     from the orbit guidance at every step.
-
-    Returns the recording (a target track) and the states (n, 13).
     """
     aircraft = FixedWing(
         SMALL_FIXED_WING, SMALL_FIXED_WING_PROPULSION, density=isa_density
@@ -77,48 +74,37 @@ def fly_threat(speed, start, course, altitude, duration, orbit=None):
     state = np.array(trim.state)
     state[0:2] = start
 
-    def pre_step(t, y):
+    def control(t, y, snapshot):
         if orbit is not None:
             center, radius, clockwise = orbit
             autopilot.course_command = orbit_course(y[:3], center, radius, clockwise)
         autopilot(t, y)
 
-    times, states = run(
-        aircraft.derivative,
-        state,
-        DT,
-        duration,
-        post_step=normalize_attitude,
-        pre_step=pre_step,
-    )
-    return RecordedTrack(times, states[:, :3], states[:, 3:6]), states
+    return VehicleEntity("threat", aircraft.derivative, state, control=control)
 
 
-def attitudes_along(result, threat_states):
-    """The threat's quaternions at the times of the engagement (same 100 Hz grid,
-    both from t = 0)."""
-    n = len(result.times)
-    assert np.allclose(result.times, DT * np.arange(n)), "not on the step grid"
-    return threat_states[:n, 6:10]
+def replay(flight):
+    """The threat's flight as a track, for the viewer (it evaluates the target's
+    velocity at each sample it keeps)."""
+    threat = flight.state("threat")
+    return RecordedTrack(flight.times, threat[:, 0:3], threat[:, 3:6])
 
 
 def main() -> None:
     """Fly both threats, run both scrambles, write the pages, plot, open the app."""
     # --- A: loitering drone ----------------------------------------------------------
     orbit = (np.array([60.0, 40.0, 0.0]), 150.0, True)
-    loiter_track, loiter_states = fly_threat(
-        18.0, [650.0, -350.0], np.radians(140.0), 100.0, 150.0, orbit=orbit
+    loiter_threat = fixed_wing_threat(
+        18.0, [650.0, -350.0], np.radians(140.0), 100.0, orbit=orbit
     )
-    loiter, loiter_launch, loiter_exit = scramble(
-        loiter_track, IRIS_ORDERED_SPEED, t_max=float(loiter_track.times[-1])
+    loiter, loiter_launch, loiter_exit, loiter_flight = scramble(
+        loiter_threat, IRIS_ORDERED_SPEED, t_max=150.0
     )
 
     # --- B: fast pass ----------------------------------------------------------------
-    pass_track, pass_states = fly_threat(
-        30.0, [-600.0, -350.0], np.radians(40.0), 120.0, 90.0
-    )
-    fast, fast_launch, fast_exit = scramble(
-        pass_track, IRIS_ORDERED_SPEED, t_max=float(pass_track.times[-1])
+    pass_threat = fixed_wing_threat(30.0, [-600.0, -350.0], np.radians(40.0), 120.0)
+    fast, fast_launch, fast_exit, fast_flight = scramble(
+        pass_threat, IRIS_ORDERED_SPEED, t_max=90.0
     )
 
     report(
@@ -142,11 +128,11 @@ def main() -> None:
         [
             scenario_data(
                 loiter,
-                loiter_track,
+                replay(loiter_flight),
                 EVERY,
                 launch={**launch, "time": loiter_launch},
                 target_kind="fixed_wing",
-                target_attitudes=attitudes_along(loiter, loiter_states),
+                target_attitudes=loiter_flight.state("threat")[:, 6:10],
                 id="fixed-wing-loiter",
                 name="A · loitering",
                 detail="18 m/s, orbit of 150 m",
@@ -156,11 +142,11 @@ def main() -> None:
             ),
             scenario_data(
                 fast,
-                pass_track,
+                replay(fast_flight),
                 EVERY,
                 launch={**launch, "time": fast_launch},
                 target_kind="fixed_wing",
-                target_attitudes=attitudes_along(fast, pass_states),
+                target_attitudes=fast_flight.state("threat")[:, 6:10],
                 id="fixed-wing-pass",
                 name="B · fast pass",
                 detail="30 m/s, straight",

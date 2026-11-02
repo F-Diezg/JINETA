@@ -11,6 +11,8 @@ watches every pair after each step:
     afterwards still counts), but the pair is decided.
   - lost: one of the two was destroyed in another pair (two interceptors on one
     target: the second one loses its target).
+  - escaped: the pair defends a dome (`Pairing.dome`) and the target, after being
+    inside it, has left it: past that point the site no longer cares about it.
 
 The run ends when every pair is decided, or at `t_end`.
 
@@ -23,6 +25,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from jineta.arena.launch import Dome
 from jineta.arena.world import (
     Control,
     Flight,
@@ -38,6 +41,7 @@ from jineta.jinete.targets import TargetTrack
 
 OPEN, CAPTURED, PASSED = "open", "captured", "passed"
 TARGET_LOST, INTERCEPTOR_LOST = "target lost", "interceptor lost"
+ESCAPED = "escaped"
 
 
 @dataclass(frozen=True)
@@ -48,6 +52,7 @@ class Pairing:
     target: str  # entity name
     capture_radius: float = 0.5  # [m]
     margin: float = 10.0  # growth over the smallest separation that is a pass [m]
+    dome: Dome | None = None  # the area it defends: leaving it ends the pair
 
     def __post_init__(self) -> None:
         if self.interceptor == self.target:
@@ -72,7 +77,8 @@ class Duel:
     smallest: float = field(init=False)  # smallest separation seen so far [m]
     closed_in: bool = field(default=False, init=False)  # dropped below the start
     outcome: str = field(default=OPEN, init=False)
-    end_step: int | None = field(default=None, init=False)  # capture or loss
+    end_step: int | None = field(default=None, init=False)  # capture, loss, escape
+    seen_inside: bool = field(default=False, init=False)  # target inside the dome
 
     def __post_init__(self) -> None:
         self.smallest = self.initial_distance
@@ -104,9 +110,19 @@ class Duel:
             self.outcome = PASSED
 
     def lose(self, step: int, outcome: str) -> None:
-        """One of the two was destroyed in another pair."""
+        """One of the two was destroyed in another pair, or the target escaped."""
         if not self.finished:
             self.outcome, self.end_step = outcome, step
+
+    def watch_dome(self, step: int, target_position: np.ndarray) -> None:
+        """Track the target against the dome: out again after being in, it escaped."""
+        dome = self.pairing.dome
+        if dome is None or self.finished:
+            return
+        if dome.contains(target_position):
+            self.seen_inside = True
+        elif self.seen_inside:
+            self.lose(step, ESCAPED)
 
 
 @dataclass
@@ -128,8 +144,10 @@ class Referee:
             if duel.finished:
                 continue
             pair = duel.pairing
-            gap = snapshot.position(pair.target) - snapshot.position(pair.interceptor)
+            target = snapshot.position(pair.target)
+            gap = target - snapshot.position(pair.interceptor)
             duel.update(self.step, float(np.linalg.norm(gap)))
+            duel.watch_dome(self.step, target)
             if duel.outcome == CAPTURED:
                 self.world.destroy(pair.interceptor, t)
                 self.world.destroy(pair.target, t)
@@ -153,8 +171,10 @@ class DuelResult:
     """How one pair ended."""
 
     pairing: Pairing
-    outcome: str  # "captured", "passed", "open", "target lost", "interceptor lost"
-    closest: ClosestApproach  # up to the capture or the loss (whole run otherwise)
+    outcome: str  # "captured", "passed", "open", "escaped", "target lost",
+    # "interceptor lost"
+    closest: ClosestApproach  # up to the capture, loss or escape (else whole run)
+    end_time: float  # when the pair ended (the end of the run if it never did) [s]
 
     @property
     def captured(self) -> bool:
@@ -182,17 +202,13 @@ def fight(world: World, pairings: Sequence[Pairing], dt: float, t_end: float) ->
         world.entity(pair.target)
     world.reset()
     start = world.snapshot(0.0, world.initial_state())
-    duels = [
-        Duel(
-            pair,
-            float(
-                np.linalg.norm(
-                    start.position(pair.target) - start.position(pair.interceptor)
-                )
-            ),
-        )
-        for pair in pairings
-    ]
+    duels = []
+    for pair in pairings:
+        target = start.position(pair.target)
+        gap = target - start.position(pair.interceptor)
+        duel = Duel(pair, float(np.linalg.norm(gap)))
+        duel.seen_inside = pair.dome is not None and pair.dome.contains(target)
+        duels.append(duel)
     flight = world.fly(dt, t_end, stop=Referee(world, duels))
 
     results = []
@@ -201,7 +217,9 @@ def fight(world: World, pairings: Sequence[Pairing], dt: float, t_end: float) ->
         end = len(flight.times) if duel.end_step is None else duel.end_step + 1
         relative = flight.positions(pair.target) - flight.positions(pair.interceptor)
         closest = closest_approach(flight.times[:end], relative[:end])
-        results.append(DuelResult(pair, duel.outcome, closest))
+        results.append(
+            DuelResult(pair, duel.outcome, closest, float(flight.times[end - 1]))
+        )
     return Battle(flight, tuple(results))
 
 
