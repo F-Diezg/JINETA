@@ -1,10 +1,10 @@
 """Tests for the viewer export (viz/viewer.py) and the start menu (viz/menu.py).
 
-Only our side is tested: what data goes into the pages and which links the menu
-shows. The pages themselves (three.js) are not run here.
+Only our side is tested: what data goes into the pages and what the menu shows
+(links, cases, results). The pages themselves (three.js) are not run here.
 """
 
-import json
+import dataclasses
 import tempfile
 from pathlib import Path
 
@@ -14,8 +14,8 @@ import pytest
 from jineta.core.events import ClosestApproach
 from jineta.engagement import Engagement
 from jineta.jinete.targets import StraightLineTarget, track_positions
-from viz.menu import ENTRIES, MENU_FILE, write_menu
-from viz.viewer import scenario_data, write_viewer
+from viz.menu import ENTRIES, MENU_FILE, page_cases, write_menu
+from viz.viewer import read_viewer, scenario_data, write_viewer
 
 TARGET = StraightLineTarget(start=[100.0, 0.0, -50.0], velocity=[-5.0, 0.0, 0.0])
 N = 11
@@ -37,10 +37,19 @@ def engagement():
     )
 
 
-def page_data(path):
-    text = Path(path).read_text(encoding="utf-8")
-    start = text.index('id="engagement-data">') + len('id="engagement-data">')
-    return json.loads(text[start : text.index("</script>", start)])
+def write_page(path, *results):
+    """A viewer page with one case per (name, captured) pair."""
+    scenarios = [
+        scenario_data(
+            dataclasses.replace(engagement(), captured=captured),
+            TARGET,
+            id=f"case-{i}",
+            name=name,
+            detail=f"detail {i}",
+        )
+        for i, (name, captured) in enumerate(results)
+    ]
+    return write_viewer(scenarios, path, dt=0.4, capture_radius=0.5)
 
 
 def test_a_scripted_target_has_no_attitude():
@@ -81,7 +90,7 @@ def test_page_carries_the_subtitle_and_the_menu_link():
         path = Path(folder) / "viewer.html"
         scenario = scenario_data(engagement(), TARGET)
         write_viewer([scenario], path, dt=0.4, capture_radius=0.5)
-        meta = page_data(path)["meta"]
+        meta = read_viewer(path)["meta"]
         assert meta["menu"] is None  # no link by default (the MVP page)
         write_viewer(
             [scenario],
@@ -91,7 +100,7 @@ def test_page_carries_the_subtitle_and_the_menu_link():
             subtitle="fixed wing · scramble",
             menu="index.html",
         )
-        meta = page_data(path)["meta"]
+        meta = read_viewer(path)["meta"]
         assert meta["subtitle"] == "fixed wing · scramble"
         assert meta["menu"] == "index.html"
 
@@ -100,11 +109,43 @@ def test_menu_names_the_scenarios_by_threat_type():
     assert [entry.kind for entry in ENTRIES] == ["Generic target", "Fixed wing"]
 
 
+def test_reading_a_page_gives_back_what_was_written():
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "viewer.html"
+        scenario = scenario_data(engagement(), TARGET, name="A · test")
+        write_viewer([scenario], path, dt=0.4, capture_radius=0.5)
+        data = read_viewer(path)
+        assert data["scenarios"][0]["name"] == "A · test"
+        assert data["scenarios"][0]["t"] == scenario["t"]
+        assert data["meta"]["dt"] == 0.4
+        other = Path(folder) / "other.html"
+        other.write_text("<title>not a viewer</title>", encoding="utf-8")
+        with pytest.raises(ValueError):
+            read_viewer(other)
+
+
+def test_menu_cases_and_results_come_from_the_page():
+    with tempfile.TemporaryDirectory() as folder:
+        folder = Path(folder)
+        entry = ENTRIES[0]
+        write_page(folder / entry.page, ("A · caught", True), ("B · escaped", False))
+        cases = page_cases(folder / entry.page)
+        assert [(c.name, c.captured) for c in cases] == [
+            ("A · caught", True),
+            ("B · escaped", False),
+        ]
+        text = write_menu(folder).read_text(encoding="utf-8")
+        caught = text.index("A · caught (detail 0)")
+        escaped = text.index("B · escaped (detail 1)")
+        assert caught < text.index('class="badge captured"') < escaped
+        assert escaped < text.index('class="badge missed"')
+
+
 def test_menu_links_the_pages_that_exist_and_names_the_example_for_the_others():
     with tempfile.TemporaryDirectory() as folder:
         folder = Path(folder)
         present, missing = ENTRIES
-        (folder / present.page).write_text("<title>viewer</title>", encoding="utf-8")
+        write_page(folder / present.page, ("A · caught", True))
         path = write_menu(folder)
         assert path == folder / MENU_FILE
         text = path.read_text(encoding="utf-8")

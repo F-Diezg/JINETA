@@ -2,14 +2,20 @@
 
 `docs/index.html` lists the scenario pages, one card each, named by the type of
 threat. The viewer pages link back to it ("Menu"), and `python -m viz.app` opens it.
-It is plain HTML written from `viz/menu_template.html`; a card whose page has not
-been generated yet says which example writes it (a page opened from disk cannot
+It is plain HTML written from `viz/menu_template.html`.
+
+What a card says about its cases (their names and whether each was captured) is
+read from the viewer page itself (`viz.viewer.read_viewer`), never written here by
+hand, so the menu cannot disagree with the page it links to. A card whose page has
+not been generated yet says which example writes it (a page opened from disk cannot
 check other files itself).
 """
 
 import html
 from dataclasses import dataclass
 from pathlib import Path
+
+from viz.viewer import read_viewer
 
 TEMPLATE = Path(__file__).resolve().parent / "menu_template.html"
 PLACEHOLDER = "__MENU_CARDS__"
@@ -24,7 +30,15 @@ class MenuEntry:
     description: str
     page: str  # viewer file name, in the same folder as the menu
     command: str  # the example that writes the page
-    cases: tuple[tuple[str, bool], ...]  # (case name, captured)
+
+
+@dataclass(frozen=True)
+class MenuCase:
+    """One case of a page, as the page itself reports it."""
+
+    name: str  # "A · slow threat"
+    detail: str  # "8 m/s, turning 1.5 deg/s"
+    captured: bool
 
 
 ENTRIES = (
@@ -36,10 +50,6 @@ ENTRIES = (
         ),
         page="iris_scramble_viewer.html",
         command="python -m examples.iris_scramble",
-        cases=(
-            ("A · slow, turning, 8 m/s", True),
-            ("B · fast, straight, 25 m/s", False),
-        ),
     ),
     MenuEntry(
         kind="Fixed wing",
@@ -49,35 +59,49 @@ ENTRIES = (
         ),
         page="fixed_wing_scramble_viewer.html",
         command="python -m examples.fixed_wing_scramble",
-        cases=(
-            ("A · loitering, orbit at 18 m/s", True),
-            ("B · fast pass, 30 m/s", False),
-        ),
     ),
 )
 
 
-def card(entry: MenuEntry, available: bool) -> str:
-    """HTML of one card."""
+def page_cases(path: Path) -> tuple[MenuCase, ...]:
+    """The cases of a viewer page and their results, read from the page."""
+    return tuple(
+        MenuCase(
+            name=scenario.get("name", scenario.get("id", "")),
+            detail=scenario.get("detail", ""),
+            captured=bool(scenario["captured"]),
+        )
+        for scenario in read_viewer(path)["scenarios"]
+    )
+
+
+def card(entry: MenuEntry, cases: tuple[MenuCase, ...] | None) -> str:
+    """HTML of one card. `cases` is None when the page does not exist yet."""
     e = html.escape
-    cases = "\n".join(
-        f"        <li><span>{e(name)}</span>"
-        f'<b class="badge {"captured" if captured else "missed"}">'
-        f"{'captured' if captured else 'missed'}</b></li>"
-        for name, captured in entry.cases
-    )
-    action = (
-        f'      <a class="ctl open" href="{e(entry.page)}">Open viewer &rsaquo;</a>'
-        if available
-        else f'      <p class="missing">Not generated yet: run <code>{e(entry.command)}'
-        "</code></p>"
-    )
+    if cases is None:
+        listing = ""
+        action = (
+            f'      <p class="missing">Not generated yet: run <code>{e(entry.command)}'
+            "</code></p>"
+        )
+    else:
+        rows = "\n".join(
+            f"        <li><span>{e(case.name)}"
+            f"{f' ({e(case.detail)})' if case.detail else ''}</span>"
+            f'<b class="badge {"captured" if case.captured else "missed"}">'
+            f"{'captured' if case.captured else 'missed'}</b></li>"
+            for case in cases
+        )
+        listing = f'      <ul class="cases">\n{rows}\n      </ul>\n'
+        action = (
+            f'      <a class="ctl open" href="{e(entry.page)}">Open viewer &rsaquo;</a>'
+        )
     return (
         '    <article class="card">\n'
         '      <div class="eyebrow">Threat</div>\n'
         f"      <h2>{e(entry.kind)}</h2>\n"
         f"      <p>{e(entry.description)}</p>\n"
-        f'      <ul class="cases">\n{cases}\n      </ul>\n'
+        f"{listing}"
         f"{action}\n"
         "    </article>"
     )
@@ -86,12 +110,15 @@ def card(entry: MenuEntry, available: bool) -> str:
 def write_menu(folder: Path, entries: tuple[MenuEntry, ...] = ENTRIES) -> Path:
     """Write the menu page (`index.html`) into `folder`, next to the viewer pages.
 
-    A card links to its page if the file exists in `folder`; otherwise it shows the
-    command that writes it.
+    A card whose page exists in `folder` lists the page's cases with their results
+    and links to it; otherwise it shows the command that writes the page.
     """
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
-    cards = "\n".join(card(e, (folder / e.page).is_file()) for e in entries)
+    cards = "\n".join(
+        card(e, page_cases(folder / e.page) if (folder / e.page).is_file() else None)
+        for e in entries
+    )
     path = folder / MENU_FILE
     path.write_text(
         TEMPLATE.read_text(encoding="utf-8").replace(PLACEHOLDER, cards),

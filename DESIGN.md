@@ -223,7 +223,7 @@ Visualisation is a separate layer that reads that data:
 | 6a | Quadrotor (Iris profile) + cascaded attitude/velocity control | ✅ Done |
 | 7 | **End-to-end MVP:** one interceptor vs one target, simple guidance | ✅ Done |
 | 6b | Generic fixed-wing threat model (aero coefficient tables) | ✅ Done |
-| 8 | Scenarios in YAML, multiple entities | ⏳ |
+| 8 | Scenarios in YAML, multiple entities | 🔄 In progress |
 | 9 | Sensors + Kalman filter | ⏳ |
 | 10 | Guidance (proportional navigation) | ⏳ |
 | 11 | Coordination strategies (assignment, comms) | ⏳ |
@@ -249,7 +249,7 @@ layer worked together for the first time and the interfaces held (autopilot
 30 m/s and never flew faster than 22.0 m/s.
 
 **Phase 6b — done**, in 8 steps (tests green and ruff clean at each; committed as
-1–2, 3 in three parts, 4–5, 6, 7 and 8). A 6-DOF fixed-wing drone driven by
+1–2, 3 in three parts, 4, 5 and 6–8). A 6-DOF fixed-wing drone driven by
 aerodynamic coefficients and an electric propeller, flown by its own autopilot,
 replaces the scripted target. The plan was kept; step 7 was made more concrete
 with the author during step 4 (see the decision log).
@@ -274,6 +274,57 @@ Result: the Iris launches from its pad when the fixed wing comes within 400 m. A
 loitering at 18 m/s on a 150 m orbit: launch T+20.71 s, capture 0.49 m at
 T+63.32 s. B, passing straight at 30 m/s: launch T+10.72 s, miss 49.74 m at
 T+20.39 s; the run ends when it leaves the dome at T+34.93 s.
+
+**Phase 8 — in progress.** Plan agreed with the author at the start of the phase
+(each step: tests green, ruff clean, commit + push). Scenarios become data (YAML
+files in `scenarios/`), and one simulation loop flies every entity of a scenario
+together. It resolves loose ends 18, 19, 20 and 22, and 16 on the way (wind and ISA
+set in the scenario file). The assignment stays fixed in the file (each interceptor
+names its target): choosing it is phase 11. Decided with the author: the vehicle
+profiles stay in `profiles.py` and the files name them; the viewer learns to show
+several entities in this phase (step 7); the MVP page gets a card in the menu.
+Before step 1 the menu already reads its cases and their captured / missed badges
+from the viewer pages (`viz.viewer.read_viewer`) instead of a hand-written list.
+1. ⏳ **World loop** (`jineta/scenario/world.py`): entities (a rigid-body vehicle with
+   its controller, an ideal kinematic point, a scripted track) stacked in one state
+   vector and flown by the existing `run`; every controller reads the same snapshot
+   of the world at the start of the step. An entity can wait (standby: its
+   derivative is zero). Tests: N independent bodies in one loop give the same as
+   each one alone; cyclic pursuit of N ideal agents on a regular polygon (the side
+   shrinks at v(1 − cos 2π/N), they meet at a / (v(1 − cos 2π/N))); a waiting
+   entity does not move.
+2. ⏳ **Engagements in the world**: pairs interceptor → target from the scenario,
+   closest approach per pair, capture (both are destroyed and leave the loop), pass,
+   end of the run when no threat is left. `engage` becomes a thin wrapper over the
+   world and moves to `jineta/scenario/engagement.py` (loose end 18): its tests are
+   the regression.
+3. ⏳ **Launch on alert and threats in the same loop**: the launch rule of an entity
+   (at a time, or when a threat comes within a range of its site) and the alert dome
+   move from the example into the scenario logic (loose end 22). The fixed wing
+   flies in the same loop as the Iris (loose end 19) and reproduces the recorded and
+   replayed phase 6b engagements (1e-6); a test with a threat that reacts to the
+   interceptor shows the coupling both ways.
+4. ⏳ **Scenario files** (`jineta/scenario/spec.py`): YAML read with
+   `yaml.safe_load` into frozen, validated specs; vehicles referenced by profile name
+   (the profiles stay in `profiles.py`); degrees and altitude only in the file,
+   converted to SI and NED at load; environment block (ISA or sea level, wind models)
+   and an engagement in wind (loose end 16). Clear errors for unknown keys, profiles
+   or target ids.
+5. ⏳ **The existing scenarios as files**: `scenarios/<page>/` (a `page.yaml` with the
+   menu card and one file per case) for the MVP, the generic scramble and the
+   fixed-wing scramble; `python -m examples.run_scenarios` runs them and writes the
+   pages; the examples only load the files and plot (loose end 20). Regression: every
+   case gives its phase 7 / 6b numbers, and the viewer data match numerically (not
+   byte for byte: Windows and Linux differ in signed zeros, `-0.0` against `0.0`).
+6. ⏳ **Menu from the scenario files**: the cards (title, description, page) come from
+   the `page.yaml` files instead of `viz/menu.py` (the cases and badges already come
+   from the pages); the MVP page gets its card too. Checked in headless Chromium and
+   in pywebview on the author's computer.
+7. ⏳ **Several entities in the viewer, and a scenario that needs them**: the export
+   carries a list of entities; the viewer draws every interceptor and threat and
+   shows the telemetry of the selected pair. A new scenario with two pads and
+   several threats, the assignment fixed in the file.
+8. ⏳ **Close the phase**: this document and the README.
 
 ## 6. Decision log
 
@@ -1099,15 +1150,13 @@ Phase 6b (fixed-wing threat):
       a lot would want gain scheduling.
   30. The course loop uses the airspeed in its gains (Beard & McLain use the ground
       speed): equal in still air, different in a strong wind.
-  31. The menu → viewer → menu navigation was checked in headless Chromium, not in
-      pywebview (WebView2), which Claude's workspace cannot install: check it on the
-      author's computer.
+  31. (Resolved at the start of phase 8: the author checked the menu → viewer →
+      menu navigation in pywebview on his computer.)
   32. The test run doubled (~40 s, 395 tests): the fixed-wing closed-loop tests fly
       30–120 s each at 100 Hz. If it gets in the way, mark them `slow` and run them
       on demand.
-- Next: phase 8 (scenarios in YAML, multiple entities). New chat: "Seguimos con
-  Jineta, fase 8: escenarios YAML y varias entidades". Its step plan is drawn up at
-  the start of the phase and written in section 5.
+- Next: phase 8 (scenarios in YAML, multiple entities), step 1, following the plan
+  in section 5.
 
 ## 8. Working with Claude
 

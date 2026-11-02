@@ -18,6 +18,7 @@ from jineta.jinete.targets import TargetTrack
 
 TEMPLATE = Path(__file__).resolve().parent / "viewer_template.html"
 PLACEHOLDER = '"__ENGAGEMENT_DATA__"'
+DATA_START = '<script type="application/json" id="engagement-data">'
 
 # Minimal page around the template, so the file also opens straight from disk.
 PAGE = """<!doctype html>
@@ -155,3 +156,17 @@ def write_viewer(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(PAGE.format(body=body), encoding="utf-8")
     return path
+
+
+def read_viewer(path: Path) -> dict:
+    """The data inside a viewer page written by `write_viewer` (the inverse).
+
+    The start menu uses it to list the cases of a page with their real results, so
+    the menu cannot disagree with the page it links to.
+    """
+    text = Path(path).read_text(encoding="utf-8")
+    start = text.find(DATA_START)
+    if start < 0:
+        raise ValueError(f"{path} has no engagement data: is it a viewer page?")
+    start += len(DATA_START)
+    return json.loads(text[start : text.index("</script>", start)])
