@@ -26,9 +26,14 @@ code should be clear and every concept explained before it is used.
 - OS: Windows (two machines: laptop + desktop, synced via GitHub)
 - Python **3.13** in a `.venv` virtual environment
 - Editor: VS Code (extensions: Python, Pylance, Ruff, GitLens)
-- Dependencies: `numpy`, `scipy`, `pyyaml`, `matplotlib`, `pytest`, `ruff`
-  (pinned in `requirements.txt`)
-- Run tests from repo root: `pytest -v`
+- Dependencies: `numpy`, `scipy`, `pyyaml`, `matplotlib`, `pytest`, `pytest-xdist`,
+  `ruff` (pinned in `requirements.txt`). After pulling on the other computer, run
+  `pip install -r requirements.txt` when `requirements.txt` changed: `git pull`
+  brings the list, not the packages.
+- Run tests from repo root: `pytest -n auto` (pytest-xdist spreads the tests over
+  every core) or `pytest -v` (one by one, every name listed); one file:
+  `pytest tests\test_world.py`; by name: `pytest -k cyclic`; the last failures:
+  `pytest --lf`.
 - `pyproject.toml` configures pytest (`testpaths`) and ruff (line length 88, rules
   E, F, I, UP, B, RUF). VS Code's Ruff extension reads it, so the editor shows the
   same warnings as `ruff check .`
@@ -38,19 +43,27 @@ code should be clear and every concept explained before it is used.
   newline and fixes blank lines that are easy to lose when pasting code. In VS
   Code, "Files: Insert Final Newline" and format-on-save with the Ruff formatter
   do the same automatically.
-- The full test run takes ~40 s (395 tests; 39.9 s in Claude's workspace at the end
-  of phase 6b): the closed-loop tests fly up to 120 s each at 100 Hz, and the
-  fixed-wing ones are ~20 s of the total.
+- The full test run, in one process, takes ~60 s (463 tests; 62 s in Claude's
+  workspace at the end of phase 8): the closed-loop tests fly up to 120 s each at
+  100 Hz; the fixed-wing ones are ~18 s and the engagement and launch ones ~20 s of
+  the total. `pytest -n auto` divides that by the number of cores.
 - The interactive viewers (`docs/*_viewer.html`) open in their own desktop window
   with `pywebview` (optional: `pip install pywebview`; without it they open in the
   browser). They need internet: three.js and the fonts come from CDNs.
   `python -m viz.app` opens the start menu (`docs/index.html`, the scenario pages by
   type of threat); `python -m viz.app <page>` reopens one page without simulating
-  again; the examples take `--no-window` to only write their files (e.g. to
-  regenerate `docs/`).
+  again; `python -m examples.run_scenarios --no-window` flies every scenario file and
+  rewrites every page and the menu (~50 s in Claude's workspace); the examples take
+  `--no-window` to only write their files.
 - `scipy` is used since phase 6b (trim: `scipy.optimize.root`).
-- Regenerate dependencies as UTF-8 (PowerShell's `>` writes UTF-16):
-  `pip freeze | Out-File -Encoding utf8 requirements.txt`
+- Regenerate dependencies with `pip freeze | Set-Content -Encoding ascii
+  requirements.txt`. PowerShell's `>` writes UTF-16, and `Out-File -Encoding utf8`
+  in Windows PowerShell 5 adds a BOM (an invisible mark at the start of the file;
+  pip tolerates it, but it does not belong there). Package names are ASCII.
+- A block of commands pasted into PowerShell does not stop when one line fails:
+  the next lines still run (in phase 8 a commit and push went ahead after
+  `pytest -n auto` failed on the computer without pytest-xdist). So the checks come
+  first, and the commit only once they passed.
 
 ## 3. Conventions
 
@@ -94,9 +107,10 @@ code should be clear and every concept explained before it is used.
 - **Vehicle profiles are data, not code.** Each vehicle is a frozen (immutable)
   parameter dataclass (e.g. `MultirotorParams`), one constant per vehicle in
   `jinete/profiles.py`, with a comment citing where every number comes from. Models
-  never know which vehicle they fly. Fields are plain numbers that map 1:1 to the
-  YAML files of phase 8. Controller gains will live next to the physical parameters
-  of each profile, not inside them.
+  never know which vehicle they fly. The controller gains live next to the
+  physical parameters of each profile, not inside them. The scenario files name a
+  profile (`MULTIROTOR_PROFILES`, `FIXED_WING_PROFILES` in `profiles.py`); the
+  numbers stay in code next to their sources.
 - **Vehicle interface:** a vehicle contains a `RigidBody` and hands it its own
   `force_moment` (vehicles do not subclass `RigidBody`). It exposes
   `derivative(t, state)` and is commanded through attributes that a controller sets
@@ -146,15 +160,53 @@ code should be clear and every concept explained before it is used.
 - **Euler angles** for input, display and the controllers' angle errors only:
   `quaternion.from_euler(roll, pitch, yaw)` and `quaternion.to_euler(q)` (ZYX).
 - **Relative position** between two tracks is always `r = r_target − r_pursuer`.
-- **Engagement result:** `engage(...)` returns an `Engagement` with `times`,
-  `states` (interceptor), `target_positions`, `closest` (`ClosestApproach`: `time`,
-  `distance`, `step`), `captured` and `pursuit_feasible`. `captured` means the
-  closest approach fell inside the capture radius (default 0.5 m).
+- **Engagement result:** `engage(...)` (`jineta.arena.engagement`) returns an
+  `Engagement` with `times`, `states` (interceptor), `target_positions`, `closest`
+  (`ClosestApproach`: `time`, `distance`, `step`), `captured` and
+  `pursuit_feasible`. `captured` means the closest approach fell inside the capture
+  radius (default 0.5 m).
+- **World interface** (`jineta.arena.world`): a `World(entities, rules)` flies every
+  entity in one `run` (`world.fly(dt, t_end, stop)` → `Flight`). Entities:
+  `VehicleEntity(name, dynamics, initial_state, control, waiting)` (13 states),
+  `PointEntity(name, initial_position, control, waiting)` (an ideal point flying
+  `velocity_command`), `TrackEntity(name, track)` (a scripted track, no state). A
+  control is `control(t, own_state, snapshot)`; a rule is `rule(snapshot)` and runs
+  first. The snapshot (`position(name)`, `velocity(name)`, `of(name)`) is the world
+  at the start of the step, read-only, the same for everyone. `world.launch(name, t)`
+  and `world.destroy(name, t)` change an entity's status; a waiting or destroyed
+  entity has a zero derivative. `Flight` has `times`, `states`, `state(name)`,
+  `positions(name)` and `launched_at`.
+- **Engagements in the world:** a `Pairing(interceptor, target, capture_radius,
+  margin, dome)` per assignment; `fight(world, pairings, dt, t_end)` → `Battle`
+  (`flight`, one `DuelResult` per pair: `outcome`, `closest`, `end_time`). Outcomes:
+  `captured` (both destroyed), `passed`, `escaped` (the target left the pair's
+  dome), `target lost` / `interceptor lost` (destroyed in another pair), `open`.
+  `pursuit(autopilot, target, speed)` is the pure-pursuit control of a multirotor.
+- **Launch rules** (`jineta.arena.launch`): `Dome(site, radius)`,
+  `LaunchOnAlert(interceptor, dome, threats)` (the first step a watched threat is
+  inside), `LaunchAt(interceptor, time)`.
+- **Scenario files** (`scenarios/<folder>/<case>.yaml`, format in the docstring of
+  `jineta/arena/spec.py`): positions `[north, east]` plus `altitude` (up), metres,
+  m/s, seconds; degrees only in the file, in keys that say so (`course_deg`,
+  `turn_rate_deg_s`); one atmosphere and one uniform wind for the whole scenario;
+  vehicles by profile name; an interceptor starts on a `site` (waiting for its
+  target's alert when the site has an `alert_range`) or at a `start` (hovering, from
+  t = 0). `load_scenario(path)` → frozen `ScenarioSpec`; `build(spec)` → `Setup`
+  (world, pairings); `play(spec)` → `(Setup, Battle)`. Errors are `ScenarioError`
+  and say the file, the place and, when a name is close to a valid one, the
+  suggestion.
+- **Scenario pages:** a folder of `scenarios/` is one viewer page: `page.yaml`
+  (`title`, `description`, `page`, `subtitle`, `cases`) plus one file per case (a
+  tab; the tab id is the file name). `scenarios/menu.yaml` lists the folders of the
+  start menu, in order; their pages link back to it.
 - **Viewer pages and the start menu:** `docs/index.html` (written by
-  `viz.menu.write_menu`) lists the scenario pages by type of threat ("Generic
-  target", "Fixed wing"), never by phase number; the scenario viewers link back to it
-  (`write_viewer(..., menu="index.html")`). The export says what the target is
-  (`target_kind`: "generic" or "fixed_wing") and may carry its attitude.
+  `viz.menu.write_menu` from the scenario files) lists the scenario pages by type of
+  threat and start ("Generic target · scramble", "Fixed wing · scramble", ...), never
+  by phase number; the cases and their captured / missed badges are read from the
+  pages themselves. The export says what the target is (`target_kind`: "generic" or
+  "fixed_wing") and may carry its attitude. A case with several entities adds
+  `others` (every entity outside the first pair), `pairs` (each pair and its end) and
+  `domes`; a case with one pair is exported exactly as before.
 - **Viewers read exported data in the simulator's conventions** (NED, quaternion
   body → NED, SI). Any change of axes happens inside the viewer, never in the
   export: the three.js viewer maps NED to (East, Up, −North).
@@ -184,19 +236,28 @@ jineta/
 │   ├── atalaya/    # sensors (radar, EO, IMU) + Kalman filtering
 │   ├── capitan/    # target assignment / threat prioritisation
 │   ├── escuadron/  # inter-unit coordination and communications
-│   └── engagement.py  # one interceptor vs one target (composes the layers)
+│   └── arena/      # composes the layers: world.py (every entity in one loop),
+│                   #   engagement.py (pairs, outcomes, engage), launch.py (alert
+│                   #   rules), spec.py (scenario files), scenario.py (spec -> world)
 ├── tests/
-├── scenarios/      # mission definitions (YAML)
-├── examples/       # runnable demo scripts
+├── scenarios/      # scenario files (YAML): menu.yaml + one folder per viewer page
+│                   #   (page.yaml + one file per case)
+├── examples/       # runnable scripts; run_scenarios.py flies every scenario file
 ├── viz/            # visualisation layer: viewer.py (export), viewer_template.html,
-│                   #   menu.py + menu_template.html (start menu), app.py (window)
+│                   #   pages.py (scenario folders -> pages), menu.py +
+│                   #   menu_template.html (start menu), app.py (window)
 ├── docs/           # generated figures and viewer pages (committed, for the README)
 ├── pyproject.toml  # pytest + ruff configuration
 └── DESIGN.md
 ```
 
-`engagement.py` sits at the top of the package because it uses `core`, `jinete`
-and (soon) `campo`; inside any of them the dependency arrows would point upwards.
+`arena` sits on top of the other layers because it composes them (`core`, `campo`,
+`jinete`): inside any of them the dependency arrows would point upwards. `viz` reads
+what `arena` produces and never runs the physics; the scripts in `examples/` fly the
+scenarios and hand the results to `viz`. The package was planned as
+`jineta/scenario/`; next to the `scenarios/` data folder the name invited a mistake
+(files ended up in the wrong folder), so it took a themed name of its own: the
+arena, where everyone meets.
 
 Simulation flow: `atalaya` detects → `capitan` decides → `escuadron` coordinates →
 each `jinete` flies using `core` inside the `campo`.
@@ -223,7 +284,7 @@ Visualisation is a separate layer that reads that data:
 | 6a | Quadrotor (Iris profile) + cascaded attitude/velocity control | ✅ Done |
 | 7 | **End-to-end MVP:** one interceptor vs one target, simple guidance | ✅ Done |
 | 6b | Generic fixed-wing threat model (aero coefficient tables) | ✅ Done |
-| 8 | Scenarios in YAML, multiple entities | 🔄 In progress |
+| 8 | Scenarios in YAML, multiple entities | ✅ Done |
 | 9 | Sensors + Kalman filter | ⏳ |
 | 10 | Guidance (proportional navigation) | ⏳ |
 | 11 | Coordination strategies (assignment, comms) | ⏳ |
@@ -275,56 +336,54 @@ loitering at 18 m/s on a 150 m orbit: launch T+20.71 s, capture 0.49 m at
 T+63.32 s. B, passing straight at 30 m/s: launch T+10.72 s, miss 49.74 m at
 T+20.39 s; the run ends when it leaves the dome at T+34.93 s.
 
-**Phase 8 — in progress.** Plan agreed with the author at the start of the phase
-(each step: tests green, ruff clean, commit + push). Scenarios become data (YAML
-files in `scenarios/`), and one simulation loop flies every entity of a scenario
-together. It resolves loose ends 18, 19, 20 and 22, and 16 on the way (wind and ISA
-set in the scenario file). The assignment stays fixed in the file (each interceptor
-names its target): choosing it is phase 11. Decided with the author: the vehicle
-profiles stay in `profiles.py` and the files name them; the viewer learns to show
-several entities in this phase (step 7); the MVP page gets a card in the menu.
-Before step 1 the menu already reads its cases and their captured / missed badges
-from the viewer pages (`viz.viewer.read_viewer`) instead of a hand-written list.
-1. ⏳ **World loop** (`jineta/scenario/world.py`): entities (a rigid-body vehicle with
-   its controller, an ideal kinematic point, a scripted track) stacked in one state
-   vector and flown by the existing `run`; every controller reads the same snapshot
-   of the world at the start of the step. An entity can wait (standby: its
-   derivative is zero). Tests: N independent bodies in one loop give the same as
-   each one alone; cyclic pursuit of N ideal agents on a regular polygon (the side
-   shrinks at v(1 − cos 2π/N), they meet at a / (v(1 − cos 2π/N))); a waiting
-   entity does not move.
-2. ⏳ **Engagements in the world**: pairs interceptor → target from the scenario,
-   closest approach per pair, capture (both are destroyed and leave the loop), pass,
-   end of the run when no threat is left. `engage` becomes a thin wrapper over the
-   world and moves to `jineta/scenario/engagement.py` (loose end 18): its tests are
-   the regression.
-3. ⏳ **Launch on alert and threats in the same loop**: the launch rule of an entity
-   (at a time, or when a threat comes within a range of its site) and the alert dome
-   move from the example into the scenario logic (loose end 22). The fixed wing
-   flies in the same loop as the Iris (loose end 19) and reproduces the recorded and
-   replayed phase 6b engagements (1e-6); a test with a threat that reacts to the
-   interceptor shows the coupling both ways.
-4. ⏳ **Scenario files** (`jineta/scenario/spec.py`): YAML read with
-   `yaml.safe_load` into frozen, validated specs; vehicles referenced by profile name
-   (the profiles stay in `profiles.py`); degrees and altitude only in the file,
-   converted to SI and NED at load; environment block (ISA or sea level, wind models)
-   and an engagement in wind (loose end 16). Clear errors for unknown keys, profiles
-   or target ids.
-5. ⏳ **The existing scenarios as files**: `scenarios/<page>/` (a `page.yaml` with the
-   menu card and one file per case) for the MVP, the generic scramble and the
-   fixed-wing scramble; `python -m examples.run_scenarios` runs them and writes the
-   pages; the examples only load the files and plot (loose end 20). Regression: every
-   case gives its phase 7 / 6b numbers, and the viewer data match numerically (not
-   byte for byte: Windows and Linux differ in signed zeros, `-0.0` against `0.0`).
-6. ⏳ **Menu from the scenario files**: the cards (title, description, page) come from
-   the `page.yaml` files instead of `viz/menu.py` (the cases and badges already come
-   from the pages); the MVP page gets its card too. Checked in headless Chromium and
-   in pywebview on the author's computer.
-7. ⏳ **Several entities in the viewer, and a scenario that needs them**: the export
-   carries a list of entities; the viewer draws every interceptor and threat and
-   shows the telemetry of the selected pair. A new scenario with two pads and
-   several threats, the assignment fixed in the file.
-8. ⏳ **Close the phase**: this document and the README.
+**Phase 8 — done**, in 8 steps (tests green and ruff clean at each; each step
+committed on its own, after a first commit with the plan). Scenarios became data
+(YAML files in `scenarios/`), and one simulation loop flies every entity of a
+scenario together. Loose ends 16, 18, 19, 20, 22 and 32 resolved (31 at the start).
+Decided with the author at the start: the vehicle profiles stay in `profiles.py` and
+the files name them; the viewer learns to show several entities in this phase; the
+MVP page gets a card in the menu. The plan was kept, with four changes discussed or
+reported on the way: the package is `jineta/arena/`, not `jineta/scenario/` (step 1,
+with the author); a scenario has one atmosphere for every vehicle, which changed the
+fixed-wing scramble's numbers (step 4); the menu order comes from
+`scenarios/menu.yaml` (step 6); an interceptor on a pad launches on its own target's
+alert, not on any threat's (step 7).
+1. ✅ **World loop** (`jineta/arena/world.py`): vehicles, ideal points and scripted
+   tracks stacked in one state vector and flown by the existing `run`; every control
+   reads the same read-only snapshot; a waiting entity has a zero derivative. Bodies
+   flown together are bit-for-bit the same as alone; cyclic pursuit follows its
+   exact discrete law (1e-9) and meets at the closed-form time (< 0.4 %).
+2. ✅ **Engagements in the world** (`jineta/arena/engagement.py`): pairs, a referee
+   after every step, captures that destroy both, passes, losses; `engage` rebuilt on
+   it, bit-for-bit the same, and moved into `arena` (loose end 18).
+3. ✅ **Launch on alert and threats in the same loop** (`jineta/arena/launch.py`):
+   the alert dome and the launch rules leave the example (loose end 22); the dome
+   ends a pair (escaped); the fixed wing flies in the same loop as the Iris and
+   gives the recorded engagement (loose end 19); a threat that flees from its
+   pursuer follows its exact 1-D law (1e-9).
+4. ✅ **Scenario files** (`jineta/arena/spec.py`, `scenario.py`): YAML into frozen,
+   validated specs, clear errors with suggestions, profiles by name, ISA or sea
+   level and a uniform wind; an engagement in ISA and wind (loose end 16).
+5. ✅ **The existing scenarios as files** (`scenarios/pursuit`, `generic-scramble`,
+   `fixed-wing-scramble`), `python -m examples.run_scenarios`, examples that only
+   load, report and plot (loose end 20); the MVP and generic-scramble pages carry the
+   same data as before.
+6. ✅ **Menu from the scenario files** (`scenarios/menu.yaml` + each `page.yaml`); the
+   MVP page has its card and links back. Checked in headless Chromium; the author
+   checks pywebview.
+7. ✅ **Several entities in the viewer, and a scenario that needs them**
+   (`scenarios/two-pads`): every vehicle drawn, a pair selector (key N), every alert
+   dome; the menu badge counts the captured pairs.
+8. ✅ **Close the phase**: this document and the README.
+
+Result: three threats against two pads (case A): the north Iris catches the slow
+scripted threat (0.49 m at T+61.02 s, launched T+33.83 s), a south Iris the
+loitering fixed wing (0.50 m at T+65.78 s, launched T+15.97 s), and the fast one
+escapes the other (29.55 m, out of the dome at T+49.69 s). Two Iris on one loitering
+drone (case B): the north one catches it (0.49 m at T+71.26 s), the south one is left
+with "target lost" 48.05 m away. The phase 7 cases keep their numbers; the
+fixed-wing scramble, now with the Iris in ISA air like the drone: A 0.48 m at
+T+62.14 s (was 0.49 m at T+63.32 s), B missed by 49.80 m (was 49.74 m).
 
 ## 6. Decision log
 
@@ -734,6 +793,109 @@ Phase 6b (fixed-wing threat):
   GitHub (the CDN is not reachable from Claude's workspace): menu → viewer → menu,
   both pages, both cases, no script errors. Not checked in pywebview (loose end 31).
 
+Phase 8 (scenarios and several entities):
+- **One loop for everyone: the states are stacked**, `[vehicle 1 (13) | vehicle 2
+  (13) | point (3) | track (0) ...]`, and flown by the existing `run`. The entities do
+  not push on each other, so each derivative only reads its own slice; RK4 works
+  component by component, so a body flown with others is bit-for-bit the body flown
+  alone (tested with an Iris and the fixed wing). No new integrator, no second loop.
+- **Every control reads the same snapshot** of the world at the start of the step, a
+  read-only view: the order of the entities does not matter and nobody sees where
+  another will be after the step (simultaneous turns, as in a board game). A control
+  that tries to write into it fails. The rules (launches) run before the controls,
+  so a launched interceptor already steers in the step of its launch.
+- **Waiting and destroyed entities have a zero derivative**: they stay exactly where
+  they are (the waiting Iris is bit-for-bit at rest on its pad; no ground model is
+  needed for that). This replaces the phase 7 trick of not integrating the Iris and
+  joining the samples afterwards. A destroyed scripted track stops at the point
+  where it was hit. `Flight` records positions and launch times at the end of `fly`,
+  because both are forgotten at the next `reset`.
+- **Cyclic pursuit as the analytic test of the loop**: N ideal pursuers on a regular
+  polygon, each chasing the next; the side shrinks at v(1 − cos 2π/N) and they meet
+  at a / (v(1 − cos 2π/N)). With the zero-order hold one step takes a side d to
+  exactly √((d − h)² + h² + 2(d − h)h cos θ), h = v·dt, which the world reproduces to
+  5e-12 — only possible if everyone reads the same snapshot. The continuous meeting
+  time is matched within 0.4 %; the first-order estimate of the difference,
+  h sin²θ / (2(1 − cos θ)) · ln(a/d), predicted the measured 0.12 / 0.23 / 0.35 m
+  before the run.
+- **The package is `jineta/arena/`** (planned as `jineta/scenario/`): next to the
+  `scenarios/` data folder the two names differed by one letter and the author's
+  files landed in the wrong one; a themed name of its own avoids it.
+- **A pair is judged by a `Duel`** (the phase 7 `EndOfPursuit`, renamed: same capture
+  and pass logic) and a `Referee` runs every duel after each step as the stop
+  condition of `fly`. A capture destroys both (they collide); a capture after a pass
+  still counts; the other pairs of a destroyed entity become "target lost" /
+  "interceptor lost"; captures in one step are judged in the order of the pairings.
+  The run ends when every pair is decided. The closest approach of a pair is taken up
+  to its end (capture, loss, escape).
+- **`engage` is a world with two entities and one pair**, bit-for-bit the earlier one
+  in five cases (capture, pass, infeasible, open, infinite margin) and in every
+  example; its tests were the regression. It moved to `jineta/arena/` (loose end 18).
+- **Launch on alert is a rule of the world** (`LaunchOnAlert`): the first step a
+  watched threat is inside the dome. Against the earlier offline method (wait, then
+  `engage` against the threat seen from the launch time) it matched bit for bit in
+  practice; the test allows 1e-6 because the two accumulate the step times
+  differently. A test that put the threat exactly on the edge of the dome at a sample
+  time failed by rounding: tests keep crossings away from the sample grid.
+- **The dome also ends a pair** (`escaped`): the target, after being inside, is
+  outside again. It reproduces the phase 7 "the run ends when the threat leaves the
+  dome".
+- **A threat in the same loop gives the recorded engagement** (loose end 19): the
+  guidance only reads the target at the start of each step, where the recording has
+  its samples, so flying the fixed wing next to the Iris gives the replayed result
+  bit for bit (the test allows 1e-6). And a threat can now react: an evader that
+  flees along the line of sight once the pursuer is within 50 m makes the problem
+  one-dimensional, the gap shrinks by exactly v_p·dt and then (v_p − v_e)·dt per
+  step, and the world reproduces it to 1e-9.
+- **Scenario files are strict**: `yaml.safe_load` (plain data, never objects), every
+  key read or rejected, unknown names answered with the closest valid one
+  (`difflib`), booleans refused where a number is expected (YAML reads `yes` as true
+  and Python's `True` is an int). The files are written by hand, so a typo must stop
+  the run and say where. 24 typical mistakes are tested.
+- **Positions in the files are `[north, east]` plus `altitude`**, as on a map; the
+  loader turns them into NED. Degrees only in the files, in keys that say so.
+- **One atmosphere and one uniform wind per scenario.** In phase 6b the Iris flew at
+  sea-level density while the fixed wing flew in ISA — an inconsistency nobody had
+  seen. With one environment per file the fixed-wing scramble moved: A 0.48 m at
+  T+62.14 s (was 0.49 m at T+63.32 s), B 49.80 m (was 49.74 m); the launches and the
+  exit from the dome did not move. The MVP and the generic scramble stay at sea level
+  and keep their numbers exactly.
+- **An engagement in ISA and wind** (loose end 16): chasing East, the Iris catches the
+  target at 8.6 s in still air, 9.55 s into a 5 m/s headwind and 8.0 s with it
+  behind, all within the ideal-pursuer band [T, T + 3 s]. The velocity loop holds the
+  ground velocity whatever the wind; the wind only shows while it accelerates.
+- **An interceptor on a pad launches when its own target comes within the alert
+  range.** Step 4 had it launch on any threat; with the assignment fixed in the file
+  an Iris would take off for a threat it is not assigned to. With one threat both
+  rules are the same. Choosing the assignment is phase 11.
+- **A folder is a page, a file is a case** (`page.yaml`, `menu.yaml`):
+  `examples/run_scenarios.py` flies them and writes every page and the menu; the
+  examples only load their folder, report and plot (loose end 20: the MVP is no longer
+  written twice). The tab id is the file name; the MVP subtitle lost its phase number
+  ("generic target · in the air"). The menu cards come from the files, the cases and
+  badges from the pages: nothing about a scenario is written by hand in `viz`.
+- **Several entities in the viewer, without breaking the old pages**: the first pair
+  is still exported as the viewer has always read it; a case with more entities adds
+  `others`, `pairs` and `domes`, and the viewer makes one "view" per pair (the same
+  tab, followed through another interceptor and its target). The other entities are
+  drawn with their tracks and labels; a destroyed vehicle stays where it was hit and
+  its speed reads 0; the range rings and the north arrow sit on the followed
+  interceptor's pad. The single-pair pages carry the same data as before.
+- **An interceptor that never launches is shown waiting until the end of the run**
+  (its target never came within range). A test found that the export crashed on it.
+- **pytest-xdist** (`pytest -n auto`) instead of marking slow tests (loose end 32):
+  no test changes, one package more.
+- **Two environment lessons**: `requirements.txt` was saved with a BOM by
+  `Out-File -Encoding utf8` (now `Set-Content -Encoding ascii`), and a pasted block of
+  PowerShell commands kept going after `pytest -n auto` failed on the other computer
+  (pytest-xdist not installed there), up to the commit and push. The code was right,
+  but since then the checks and the commit come as two separate blocks.
+- In Claude's workspace the MVP figure came out in another font when the script runs
+  with `python -m` (the workspace's matplotlib picks Inter); the same happened with
+  the old code, so the figure differs only in the font, not in its data.
+- For the browser checks Claude's workspace cannot reach the CDN, raw GitHub files
+  or the npm registry; a sparse `git clone` of three.js r160 does work.
+
 ## 7. Current state
 
 - `jineta/core/integrators.py` — `euler_step`, `rk4_step`, `Derivative` type alias.
@@ -806,7 +968,10 @@ Phase 6b (fixed-wing threat):
   in the comments), `IRIS_RATE_GAINS`, `IRIS_ATTITUDE_GAINS`, `IRIS_VELOCITY_GAINS`,
   `IRIS_GAINS`, `SMALL_FIXED_WING` (generic small fixed-wing UAV, Aerosonde-class
   open data), `SMALL_FIXED_WING_PROPULSION` (its motor and propeller),
-  `SMALL_FIXED_WING_AUTOPILOT` (design choices of its autopilot).
+  `SMALL_FIXED_WING_AUTOPILOT` (design choices of its autopilot). The profiles by
+  the names the scenario files use: `MULTIROTOR_PROFILES` (`"iris"` →
+  `MultirotorProfile(params, gains)`) and `FIXED_WING_PROFILES`
+  (`"small_fixed_wing"` → `FixedWingProfile(params, propulsion, autopilot)`).
 - `jineta/jinete/fixed_wing.py` — `ControlSurfaces(elevator, aileron, rudder)`,
   `FixedWingParams` (frozen, validated; mass, inertia, S, b, c, e and the
   derivatives; `aspect_ratio`), `stall_blend`, `lift_coefficient`,
@@ -842,25 +1007,57 @@ Phase 6b (fixed-wing threat):
   `track_positions(track, times)`.
 - `jineta/jinete/guidance.py` — `pure_pursuit_velocity(pursuer_position,
   target_position, speed, min_distance=1e-6)`.
-- `jineta/engagement.py` — `Engagement` (result), `EndOfPursuit(target,
-  capture_radius, margin, initial_distance)` (stop condition with memory, validated)
-  and `engage(autopilot, target, initial_state, speed, t_end, capture_radius=0.5,
-  margin=10.0)`.
-- `viz/viewer.py` — `scenario_data(result, target, every=4, launch=None,
-  target_kind="generic", target_attitudes=None, **info)` (one engagement,
-  downsampled, NED; labels in `info`, e.g. `threat_label`) and
-  `write_viewer(scenarios, path, dt, capture_radius, subtitle=..., menu=None)`
-  (fills the template, writes one self-contained HTML file).
+- `jineta/arena/world.py` — `VehicleEntity`, `PointEntity`, `TrackEntity`
+  (`Entity` is any of the three), `Snapshot(world, time, state)` (`of`, `position`,
+  `velocity`), `World(entities, rules)` (`entity`, `slice_of`, `initial_state`,
+  `reset`, `launch`, `destroy`, `snapshot`, `derivative`, `pre_step`, `post_step`,
+  `fly(dt, t_end, stop)`) and `Flight(world, times, states, ...)` (`state`,
+  `positions`, `launched_at`). `Control` and `Rule` aliases.
+- `jineta/arena/engagement.py` — outcome names (`CAPTURED`, `PASSED`, `ESCAPED`,
+  `OPEN`, `TARGET_LOST`, `INTERCEPTOR_LOST`), `Pairing(interceptor, target,
+  capture_radius=0.5, margin=10, dome=None)` (validated), `Duel` (the judge of one
+  pair: `update`, `lose`, `watch_dome`, `decided`, `finished`), `Referee(world,
+  duels)` (stop condition), `DuelResult(pairing, outcome, closest, end_time)`,
+  `Battle(flight, results)`, `fight(world, pairings, dt, t_end)`,
+  `pursuit(autopilot, target, speed)` (pure-pursuit control), `Engagement` and
+  `engage(autopilot, target, initial_state, speed, t_end, capture_radius=0.5,
+  margin=10.0)` (one interceptor, one scripted target).
+- `jineta/arena/launch.py` — `Dome(site, radius)` (`contains`), `LaunchAt(interceptor,
+  time)`, `LaunchOnAlert(interceptor, dome, threats)`.
+- `jineta/arena/spec.py` — the scenario file format (docstring), `ScenarioError`, the
+  frozen specs (`ScenarioSpec`, `EnvironmentSpec`, `WindSpec`, `SiteSpec`,
+  `InterceptorSpec`, `ThreatSpec`, `OrbitSpec`), `Reader` (reads one mapping of a file
+  and says where a mistake is), `suggest`, `parse_scenario(data, source)`,
+  `load_scenario(path)`.
+- `jineta/arena/scenario.py` — `Setup(spec, world, pairings)`, `at_rest(position)`,
+  `environment(spec)` (density and wind models), `threat_entity`,
+  `interceptor_entity`, `build(spec)` and `play(spec)` → `(Setup, Battle)`.
+- `viz/viewer.py` — `keep_indices(n, every)`, `scenario_data(result, target, every=4,
+  launch=None, target_kind="generic", target_attitudes=None, **info)` (one
+  engagement, downsampled, NED; labels in `info`, e.g. `threat_label`),
+  `write_viewer(scenarios, path, dt, capture_radius, subtitle=..., menu=None)` (fills
+  the template, writes one self-contained HTML file) and `read_viewer(path)` (the
+  data inside a page, its inverse).
+- `viz/pages.py` — `PageSpec` and `load_page(folder)` (a `page.yaml`),
+  `menu_folders(root)` and `menu_entries(root)` (from `menu.yaml`),
+  `page_folders(root)`, `load_cases`, `Case(file, setup, battle)` (the first pair:
+  `interceptor`, `threat`, `result`, `launched`, `launch_time`, `dome`,
+  `target_track`, `engagement`; `destroyed_at`), `entity_data`, `pair_data`,
+  `case_data(case, every=4)` and `write_page(page, cases, folder, menu=False)`.
 - `viz/viewer_template.html` — the three.js engagement viewer; `write_viewer`
   replaces the `"__ENGAGEMENT_DATA__"` placeholder with the data. Draws a scripted
   target as a dart and a fixed wing as an aircraft with its attitude (and its bank
-  in the telemetry); "Menu" button and key M when the page has a menu.
-- `viz/menu.py` — `MenuEntry`, `ENTRIES` (the two scenario pages: "Generic target",
-  "Fixed wing"), `write_menu(folder)` (writes `index.html` from
-  `viz/menu_template.html`; a missing page shows the example that writes it).
+  in the telemetry); "Menu" button and key M when the page has a menu. With several
+  entities: every vehicle with its track and label, every alert dome, a pair
+  selector (key N) that switches the telemetry, range plot, text and event log.
+- `viz/menu.py` — `MenuEntry(kind, description, page, command)`, `MenuCase(name,
+  detail, captured, pairs)` (`badge`: captured / missed / "2/3 captured"),
+  `page_cases(path)` (read from the page), `card`, `write_menu(folder, entries)`
+  (writes `index.html` from `viz/menu_template.html`; a missing page shows the
+  command that writes it).
 - `viz/app.py` — `show(path)` (desktop window or browser), `MENU` (the start menu,
   opened by `python -m viz.app` with no page), `window_requested`, `main`.
-- Tests (395 passing, ruff check + ruff format clean):
+- Tests (463 passing, ruff check + ruff format clean):
   - integrators (2); rotation (5) — as in phases 1–3.
   - rigid body (10): the 8 of phase 4 + rejects mass ≤ 0 (2 cases).
   - inertia (10): read-only copy, accepts lists and products of inertia, accepts
@@ -951,14 +1148,48 @@ Phase 6b (fixed-wing threat):
     (3 geometries); a faster crossing target is never caught and the minimum
     separation matches the closed form (~87.7 m); a faster receding target is never
     closer than at the start.
-  - engagement (12): stop inside the capture radius; stop only after growing by the
-    margin over the smallest; growing before closing in is not a pass; rejects
-    invalid stop parameters (3 cases); the Iris catches a slower target in 3D later
-    than the ideal pursuer but within 3 s; catches a fleeing target it starts behind
-    (regression); a faster target is reported infeasible and never approached; a
-    pass without capture ends the run after the closest approach; the same
-    autopilot gives identical results twice; negative speed rejected; a recorded
-    target gives the same engagement as the original to 1e-9 (13 in total).
+  - engagement (20): the judge of one pair: a capture is inside the radius; a pass is
+    growing by the margin over the smallest; growing before closing in is not a
+    pass; a capture after a pass still counts and a capture is final; an infinite
+    margin never passes; rejects invalid pairings (4 cases). `engage` with the Iris:
+    catches a slower target in 3D later than the ideal pursuer but within 3 s;
+    catches a fleeing target it starts behind (regression); a faster target is
+    reported infeasible and never approached; a pass ends the run after the closest
+    approach; the same autopilot gives identical results twice; negative speed
+    rejected; a recorded target gives the same engagement to 1e-9. Several pairs: two
+    Iris against two targets in one world fly bit-for-bit as alone until their
+    capture, then stay where they collided; two interceptors on one target, the
+    second loses it; the fight ends when every pair is decided (capture + pass);
+    rejects unknown names and no pairings.
+  - world (14): bodies flown together are bit-for-bit the same as alone (Iris and
+    fixed wing); a track is where its track says and a point flies its command;
+    cyclic pursuit of 3, 4 and 6 points follows the exact discrete law (1e-9, still a
+    regular polygon around the same centre) and meets at the closed-form time (1 %);
+    a waiting body does not move until a rule launches it, then falls on the exact
+    parabola; flying again starts from the same status; controls cannot change the
+    snapshot; the snapshot reads every kind of entity; rejects invalid worlds; a
+    destroyed entity stays where it was hit until the next flight.
+  - launch (9): the dome contains its surface and rejects bad input; launch at a
+    time; launch on alert at the first step the threat is inside (5.16 s) and the
+    Iris exactly still until then; it watches several threats and ignores destroyed
+    ones; a destroyed entity cannot be launched; the pair ends when the threat leaves
+    the dome; the rule in the world gives the earlier offline wait + `engage` (1e-6);
+    the fixed wing in the same loop gives the recorded engagement (1e-6); a threat
+    that flees from its pursuer follows the exact 1-D law (1e-9) and is caught at the
+    closed-form time (one step).
+  - scenario files (27): every kind of entry read in SI and NED; the defaults of a
+    minimal file; 24 mistakes, each with its place and, where it fits, a suggestion;
+    load from a file, reject broken YAML and a top level that is not a mapping.
+  - scenario building (3): the generic-scramble file flies bit-for-bit the world built
+    by hand; each entry becomes its entity, rule and pair; an engagement in ISA and
+    wind (headwind later than still air, later than tailwind, all within [T, T + 3]).
+  - scenario pages (7): every scenario file of the repo loads and the menu shows the
+    four pages in order; a folder becomes a page with one tab per case (launch time,
+    fixed-wing label and attitude); page mistakes say where; the cases of a page
+    share one step; the menu list says which folders and in what order (errors with
+    suggestions); a case with several entities exports them all (`others`, `pairs`,
+    `domes`, an interceptor that never launched); the menu badge counts the captured
+    pairs.
   - fixed wing (23): no air, no load; reference condition at α = 0 exact; lift
     perpendicular to the air and drag along it (α = −5, 4, 12° — 3 cases); loads
     scale with the dynamic pressure (speed, density); lift-curve slope = C_L_alpha;
@@ -1010,11 +1241,11 @@ Phase 6b (fixed-wing threat):
   - viz app (5): opens a window with the page URL and title, then starts it (with a
     stand-in for pywebview); falls back to the browser without pywebview; a missing
     page is an error; the `--no-window` flag; with no page it opens the start menu.
-  - viz viewer and menu (6): a scripted target has no attitude; a fixed-wing target
+  - viz viewer and menu (7): a scripted target has no attitude; a fixed-wing target
     carries its attitude, downsampled; rejects an unknown kind or wrong attitudes;
-    the page carries the subtitle and the menu link (none by default); the menu
-    names the scenarios by threat type; it links the pages that exist and names the
-    example for the others.
+    the page carries the subtitle and the menu link (none by default); reading a page
+    gives back what was written; the menu's cases and results come from the page; it
+    links the pages that exist and names the command for the others.
 - Examples (all run, `python -m examples.<name>`):
   - `projectile_drag.py` — vacuum vs drag.
   - `density_comparison.py` — constant vs exponential vs ISA density (~1.7 km apogee:
@@ -1029,26 +1260,30 @@ Phase 6b (fixed-wing threat):
   - `wind_gust.py` — power-law mean wind + 1-cosine gust: the body lags the wind.
   - `iris_velocity_step.py` — Iris under the autopilot: 10 m/s North, then stop
     (speed, pitch, rotor speeds, altitude), plus the top speed (20.7 m/s at 45°).
-  - `iris_pursuit.py` — the MVP: slow and fast threat, PASS/FAIL verdict per
-    engagement, 3D intercept plus separation vs time (log scale); saves
-    `docs/iris_pursuit.png` (the README figure).
-  - `iris_pursuit_viewer.py` — same two engagements exported into the viewer:
-    writes `docs/iris_pursuit_viewer.html` (~149 KB). Orbit / zoom / pan, timeline
-    with range sparkline, 0.25–4× playback, overview / top / follow cameras,
-    telemetry, event log, line of sight and velocity vectors, cyan or amber palette
-    (keys: space, ← →, O, T, F, P, 1, 2).
-  - `iris_scramble.py` — the Iris waits on the pad at rest and launches when the
-    threat comes within 400 m; case A captured, case B missed and chased until the
-    threat leaves the dome. Prints both verdicts, plots range and altitude against
-    time, writes `docs/iris_scramble_viewer.html` (~287 KB) with the alert dome and
-    the standby phase, writes the start menu `docs/index.html` and opens the app on
-    it. Importable (`main()`): its `scramble`, `report` and constants are reused.
-  - `fixed_wing_scramble.py` — the same scramble against the simulated fixed wing:
-    A loitering at 18 m/s on a 150 m orbit (captured, 0.49 m at T+63.32 s), B a
-    straight pass at 30 m/s (missed by 49.74 m). Flies each threat first and replays
-    it (`RecordedTrack`); prints the verdicts, plots, writes
-    `docs/fixed_wing_scramble_viewer.html` (~439 KB) and the menu, opens the app on
-    the menu. ~20 s to run.
+  - `run_scenarios.py` — flies every folder of `scenarios/` (or the ones given),
+    prints each case's verdict (and every pair of a case with several), writes the
+    viewer pages and the start menu, opens the app on the menu (`--no-window`: only
+    the files). Its `play_folder`, `report` and `write_folder` are what the other
+    examples use. ~50 s for the four pages in Claude's workspace.
+  - `iris_pursuit.py` — the MVP (`scenarios/pursuit`): slow and fast threat, verdicts,
+    3D intercept plus separation vs time (log scale); saves `docs/iris_pursuit.png`
+    (the README figure).
+  - `iris_pursuit_viewer.py` — the same folder into the viewer
+    (`docs/iris_pursuit_viewer.html`, ~160 KB) and the menu, where it now has its
+    card. Orbit / zoom / pan, timeline with range sparkline, 0.25–4× playback,
+    overview / top / follow cameras, telemetry, event log, line of sight and
+    velocity vectors, cyan or amber palette (keys: space, ← →, O, T, F, P, 1–9, N, M).
+  - `iris_scramble.py` — `scenarios/generic-scramble`: the Iris waits on the pad and
+    launches when the threat comes within 400 m; case A captured, case B missed and
+    chased until the threat leaves the dome. Prints the verdicts, plots range and
+    altitude against time (`plot_scramble`), writes its page (~290 KB) and the menu,
+    opens the app.
+  - `fixed_wing_scramble.py` — `scenarios/fixed-wing-scramble`: the same against the
+    simulated fixed wing in the same world, both in ISA air: A loitering at 18 m/s on
+    a 150 m orbit (captured, 0.48 m at T+62.14 s), B a straight pass at 30 m/s
+    (missed by 49.80 m). Page ~440 KB; ~14 s to run.
+  - `scenarios/two-pads` has no example of its own: `run_scenarios` writes its page
+    (`docs/two_pads_viewer.html`, ~1.1 MB).
 - Physics note (intermediate-axis instability, torque-free): spin Ω about the
   intermediate axis grows any tiny perturbation at rate
   `λ = Ω·sqrt((I2−I1)(I3−I2)/(I1·I3))`. The example perturbation (0.01 rad/s on p
@@ -1104,30 +1339,23 @@ Phase 6b (fixed-wing threat):
   15. Yaw is never commanded during an engagement (`yaw_command` stays 0): the Iris
       flies the whole pursuit nose North. Harmless for the physics now; it matters
       in phase 9, when a sensor with a field of view has to point at the target.
-  16. Wind and ISA density are never exercised in `engage` (tests and example use
-      sea-level density and no wind, although the phase 7 plan said "ISA + wind").
-      The `Multirotor` already accepts both; add an engagement test in wind.
+  16. (Resolved in phase 8: scenarios set ISA or sea level and a uniform wind; an
+      engagement in ISA and wind is tested.)
   17. A capture stops the run at the first sample inside the radius, so the
       reported distance is "inside", not the impact precision. Comparing strategies
       by precision would need running past the capture or a smaller radius.
-  18. `engagement.py` lives at the top of the package. Review in phase 8: it may
-      move to `jinete/engagement.py` or to a `jineta/scenario/` package next to the
-      YAML loading.
-  19. Two bodies in one loop. A threat that does not react is now flown first and
-      replayed (`RecordedTrack`); one that reacts (evades, chases) will need both
-      bodies integrated together: stacked states in one `run`, or the multi-entity
-      loop phase 8 needs anyway.
-  20. The two MVP scenarios are written twice (`iris_pursuit.py` and
-      `iris_pursuit_viewer.py`). The YAML scenarios of phase 8 remove the copy.
+  18. (Resolved in phase 8: `engagement.py` lives in `jineta/arena/`.)
+  19. (Resolved in phase 8: every entity flies in one world; a reacting threat is
+      tested.)
+  20. (Resolved in phase 8: the scenarios are YAML files, written once.)
   21. The viewer needs internet (three.js and fonts from CDNs). For offline use,
       ship a pinned copy of three.js in the repo; a page opened from `file://`
       cannot import local ES modules, so it has to be inlined (or served by the
       app window's local server). three.js r160 can be taken from GitHub in Claude's
       workspace (done in phase 6b to test the pages), not from the CDN.
-  22. Launch on alert lives in an example (`iris_scramble.py`, reused by
-      `fixed_wing_scramble.py`), with an instant launch (no reaction time, no
-      spin-up) and perfect detection at 400 m. Move it into the scenario logic of
-      phase 8; in phase 9 the alert becomes a sensor detection.
+  22. (Moved into the world in phase 8: `LaunchOnAlert`.) Still instant (no reaction
+      time, no spin-up) and with perfect detection: in phase 9 the alert becomes a
+      sensor detection.
   23. No ground: once flying, nothing stops a vehicle from going below z = 0 (it
       does not happen in any current example). Terrain comes in phase 12; a flat
       ground check could come earlier if a scenario needs it.
@@ -1152,11 +1380,28 @@ Phase 6b (fixed-wing threat):
       speed): equal in still air, different in a strong wind.
   31. (Resolved at the start of phase 8: the author checked the menu → viewer →
       menu navigation in pywebview on his computer.)
-  32. The test run doubled (~40 s, 395 tests): the fixed-wing closed-loop tests fly
-      30–120 s each at 100 Hz. If it gets in the way, mark them `slow` and run them
-      on demand.
-- Next: phase 8 (scenarios in YAML, multiple entities), step 1, following the plan
-  in section 5.
+  32. (Resolved in phase 8: `pytest -n auto` with pytest-xdist.)
+  33. A threat with no interceptor assigned is drawn and flies, but nobody judges it
+      (no pair): whether it got through is not reported. Phase 11 assigns, and the
+      verdict of a scenario should then count the threats that reached their aim.
+  34. After its pair ends (escaped, passed, target lost) an interceptor keeps flying
+      its pursuit: it chases a target outside the dome, or the wreck of one another
+      Iris destroyed. It should return to its pad or be re-tasked (phase 11).
+  35. A destroyed vehicle freezes where it was hit (no falling wreck): enough for the
+      verdicts; a falling wreck needs a ground (loose end 23).
+  36. Captures in the same step are judged in the order of the pairings: if two
+      interceptors reach one target in the same step, the second is "target lost".
+      Rare at 100 Hz; documented, not tested.
+  37. The page grows with the entities (`two_pads_viewer.html` ~1.1 MB: 25 Hz, ten
+      numbers per vehicle per sample). For many agents: downsample harder or leave it
+      to the Cesium export (phase 12).
+  38. The console report and the scramble plots follow the first pair of a case; the
+      viewer shows every pair. Per-pair plots if a study needs them.
+  39. All the cases of one page share the step and the capture radius (the viewer
+      has one timeline and one capture line); `write_page` refuses otherwise.
+- Next: phase 9 (sensors and a Kalman filter). New chat in the Project: "Seguimos con
+  Jineta, fase 9: sensores y filtro de Kalman". Its step plan is drawn up at the
+  start of the phase and written in section 5.
 
 ## 8. Working with Claude
 
@@ -1170,18 +1415,28 @@ Phase 6b (fixed-wing threat):
   the code (test counts, labels, numbers, behaviour) before handing it over. When
   something could not be verified, it says so.
 - Claude's workspace cannot install packages from PyPI: it runs the tests with a
-  minimal pytest stand-in (`parametrize` + `raises`) and ruff. The author's
-  `pytest -v` is the reference. Claude never commits to the repo: it hands over
-  complete files (or exact insertions), the author writes them, runs the checks and
-  commits. When a change touches several places of one file, Claude gives the whole
-  file: partial insertions were the source of the errors in phase 6a (a lost
-  import, a missing block).
-- Claude's workspace cannot reach CDNs either. It can still render the viewer pages
-  in headless Chromium (Playwright is installed) by serving three.js r160 taken from
-  GitHub in place of the CDN (phase 6b: clicks, script errors, screenshots; fonts
-  fall back). When the chat is linked to the author's computer, Claude can also test
-  a page in the desktop app's built-in browser. If a page could not be rendered at
-  all, Claude says so.
+  minimal pytest stand-in (`parametrize`, `raises` with `match` and `as`, `approx`
+  for scalars, `tmp_path`) and ruff. The author's `pytest -n auto` is the reference.
+  Claude never commits to the repo (its access to GitHub is read-only): it hands
+  over complete files, since phase 8 as a zip per step with the repo's folders,
+  which the author keeps in `..\buffer` and expands over the repo
+  (`Expand-Archive -Path "..\buffer\<zip>" -DestinationPath . -Force`). Files to
+  delete or move are named with their `git rm` / `Move-Item` command. When a change
+  touches several places of one file, Claude gives the whole file: partial
+  insertions were the source of the errors in phase 6a (a lost import, a missing
+  block). Each step ends with two blocks of commands: the checks, and then, once
+  they passed, the commit (one-line message) and push.
+- Claude checks every push against its own copy (same files, `ruff check`, the
+  tests, the regenerated pages compared number by number) before going on. Its own
+  working copy carries local commits that never leave the workspace.
+- Claude's workspace cannot reach CDNs either (nor raw GitHub files or the npm
+  registry). It can still render the viewer pages in headless Chromium (Playwright
+  is installed) by serving three.js r160, taken with a sparse `git clone` of
+  `mrdoob/three.js` at tag r160, in place of the CDN (clicks, keys, script errors,
+  screenshots; fonts fall back). Wait for a page to load before pressing keys: the
+  fixed-wing page takes a few seconds. When the chat is linked to the author's
+  computer, Claude can also test a page in the desktop app's built-in browser. If a
+  page could not be rendered at all, Claude says so.
 - **End of each phase:** update this document (roadmap, conventions, decision log,
   current state) and hand it over to be committed.
 - **Session hygiene:** Claude must tell the author when to start a new chat —

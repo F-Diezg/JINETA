@@ -9,11 +9,11 @@ through Monte Carlo analysis.
 The name comes from the *jineta*, the historical Spanish light cavalry: small, agile
 units that coordinated hit-and-run attacks.
 
-> **Status: end-to-end MVP (phase 7) and a simulated fixed-wing threat (phase 6b)
-> done.** One interceptor, one threat — a scripted point or a 6-DOF fixed-wing drone
-> flown by its own autopilot — perfect information, the simplest guidance law that
-> works. Sensors, several agents, real terrain and the coordination strategies — the
-> actual point of the project — come later. See [`DESIGN.md`](DESIGN.md) for the
+> **Status: phase 8 done — scenarios are YAML files, and several interceptors and
+> threats fly in one world.** Each interceptor is assigned its target in the file;
+> perfect information, the simplest guidance law that works. Sensors, smarter
+> guidance, choosing the assignment, real terrain and the coordination strategies —
+> the actual point of the project — come next. See [`DESIGN.md`](DESIGN.md) for the
 > full roadmap and decision log.
 
 ## The MVP
@@ -61,10 +61,11 @@ following the interceptor; and a cyan tactical or amber CRT palette (key **P**).
 
 The viewer opens in its own window when `pywebview` is installed
 (`pip install pywebview`), and in the browser otherwise. `python -m viz.app` opens
-its start menu, where the scenario pages are listed by type of threat (**Generic
-target**, **Fixed wing**); `python -m viz.app docs\iris_scramble_viewer.html`
-reopens one page without simulating again, and `--no-window` makes an example only
-write its files.
+its start menu, where the scenario pages are listed by type of threat and start
+(**Generic target · in the air**, **Generic target · scramble**, **Fixed wing ·
+scramble**, **Two pads · several threats**); `python -m viz.app
+docs\iris_scramble_viewer.html` reopens one page without simulating again, and
+`--no-window` makes an example only write its files.
 
 The viewer only replays data: the Python script runs the simulation and embeds the
 results, in the simulator's own conventions, into one self-contained HTML file. It
@@ -100,17 +101,17 @@ altitude and airspeed hold by successive loop closure).
 
 - **A loitering drone** flies in and circles 150 m around a point near the pad at
   18 m/s, 100 m up. It comes within range at T+20.7 s; the Iris, slightly faster,
-  catches it at T+63.3 s (0.49 m).
+  catches it at T+62.1 s (0.48 m).
 - **A fast pass** at 30 m/s, straight, 120 m up, comes within range at T+10.7 s. The
-  Iris misses it by 49.7 m at T+20.4 s and is left behind.
+  Iris misses it by 49.8 m at T+20.4 s and is left behind.
 
 ```powershell
 python -m examples.fixed_wing_scramble   # verdicts, plot, then the viewer app
 ```
 
 The viewer draws the drone as an aircraft with its real attitude (it banks 12.7° on
-its orbit). The threat does not react to the Iris, so it is flown first, recorded
-and replayed as the target of the same pursuit as above.
+its orbit). Both aircraft fly in the same simulation loop and in the same ISA air,
+each with its own autopilot.
 
 Building the aircraft model also produced a few results that are tested against
 flight-mechanics theory: the power-off glide angle (tan γ = −C_D/C_L), the trim for
@@ -119,6 +120,47 @@ against their classic approximations — Lanchester's phugoid is ~10 % fast, the
 propeller (not the drag) is what damps it, and this airframe is spirally unstable,
 which the autopilot cures.
 
+## Scenario files and several entities
+
+Every engagement above is a YAML file in `scenarios/`, not code. One folder is one
+viewer page; one file is one case:
+
+```yaml
+name: "A · slow threat"
+duration: 120                     # s
+environment: {atmosphere: sea_level}
+sites:
+  - {id: pad, position: [0, 0], alert_range: 400}      # [north, east] in m
+interceptors:
+  - {id: iris, vehicle: iris, site: pad, target: threat, speed: 16}
+threats:
+  - {id: threat, kind: turning, position: [420, -250], altitude: 110,
+     speed: 8, course_deg: 155, turn_rate_deg_s: -1.5}
+```
+
+A mistake in a file stops the run with a message that says where it is and what was
+probably meant (`interceptors[0].vehicle: unknown vehicle 'irs'; did you mean
+'iris'?`). Vehicles are named by their profile; the numbers stay in code next to
+their sources.
+
+All the entities of a scenario fly together in one world: their states are stacked
+into one vector and integrated by the same RK4 loop, and every interceptor's
+guidance reads the same snapshot of the world at the start of each step. A referee
+judges each interceptor → target pair after every step: a capture destroys both, a
+pass or a target that leaves the alert dome ends the pair, and a pair whose target
+was destroyed by someone else loses it.
+
+The new **two pads** page shows it: in case A, three threats against two pads, one
+Iris assigned to each (two caught, one escapes); in case B, two Iris from different
+pads chase the same loitering drone, one catches it and the other is left with no
+target. The viewer draws every vehicle and lets you choose which pair to follow
+(key **N**).
+
+```powershell
+python -m examples.run_scenarios          # every scenario folder, then the menu
+python -m examples.run_scenarios scenarios\two-pads
+```
+
 ## What works today
 
 | Layer | Package | Contents |
@@ -126,8 +168,8 @@ which the autopilot cures.
 | Physics engine | `jineta/core` | RK4 and Euler integrators, point mass with quadratic drag, quaternion algebra, Euler's equations, full 13-element 6-DOF rigid body, fixed-step simulation loop with pre/post-step hooks, closest-approach interpolation |
 | Environment | `jineta/campo` | ISA atmosphere 0–20 km, wind models (constant, altitude profile, power-law boundary layer, 1-cosine gust, sums of models) |
 | Vehicles | `jineta/jinete` | Airspeed in body axes, multirotor force model (thrust, reaction torques, rotor drag, body drag), rotor mixer built from the geometry, cascaded autopilot, vehicle profiles as data, pure pursuit guidance, scripted and recorded targets; fixed-wing air data (V, α, β), aerodynamics (stability derivatives, stall, drag polar), electric motor + propeller, trim, linearisation and dynamic modes, autopilot (course, altitude, airspeed) and orbit guidance for a generic small UAV |
-| Engagement | `jineta/engagement.py` | One interceptor against one target: runs the loop, stops on capture or on a miss, reports the miss distance and time |
-| Visualisation | `examples/`, `viz/` | matplotlib figures, a standalone three.js viewer that replays engagements (`viz/viewer.py` exports them) and a start menu that lists the scenario pages |
+| Arena | `jineta/arena` | The world loop (every entity of a scenario in one RK4 run, waiting and destroyed entities), engagements judged per pair (capture, pass, escape, loss), launch rules (on alert, at a time), scenario files in YAML (validated, clear errors) built into a world |
+| Visualisation | `examples/`, `viz/` | matplotlib figures, a standalone three.js viewer that replays engagements with every interceptor and threat (`viz/viewer.py`, `viz/pages.py` export them) and a start menu built from the scenario files |
 | Sensors, assignment, coordination | `jineta/atalaya`, `capitan`, `escuadron` | Empty: phases 9–11 |
 
 Every physics module is tested against an analytic or otherwise known result — free
@@ -149,10 +191,10 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 
-pytest -v                      # the test suite
+pytest -n auto                 # the test suite, on every core (pytest -v: one by one)
 ruff check . ; ruff format .   # style
-python -m examples.iris_pursuit
-python -m examples.iris_pursuit_viewer
+python -m examples.run_scenarios   # fly every scenario file, write the pages
+python -m examples.iris_pursuit    # the figure above
 python -m examples.iris_scramble
 python -m examples.fixed_wing_scramble
 python -m viz.app              # the viewer app on its start menu
@@ -177,6 +219,8 @@ The ones that matter when reading any file (the rest are in `DESIGN.md`):
   model is `(t, position) -> wind velocity`, so any of them can be swapped or combined.
 - **Vehicle parameters are data, not code**: one frozen dataclass per airframe in
   `jineta/jinete/profiles.py`, every number with a comment saying where it came from.
+- **Scenarios are data too**: YAML files in `scenarios/`, positions as `[north,
+  east]` plus an altitude, angles in degrees only there (the key says `_deg`).
 
 Vehicle parameters come from open sources (published platforms, PX4 SITL models).
 Threats are generic, representative classes with plausible public numbers — not
@@ -185,11 +229,11 @@ coordination analysis, not weapon data.
 
 ## Roadmap
 
-Phases 1–7 are done: integrators, point mass, rotation, 6-DOF rigid body,
-atmosphere and wind, the Iris quadrotor with its control cascade, this MVP, and a
-generic fixed-wing threat with its own autopilot. Next: YAML scenarios with several
-entities, then sensors and a Kalman filter, proportional navigation, the
-coordination strategies, real terrain with Cesium, and a Monte Carlo study. The table in
+Phases 1–8 are done: integrators, point mass, rotation, 6-DOF rigid body,
+atmosphere and wind, the Iris quadrotor with its control cascade, this MVP, a
+generic fixed-wing threat with its own autopilot, and YAML scenarios with several
+entities in one world. Next: sensors and a Kalman filter, proportional navigation,
+the coordination strategies, real terrain with Cesium, and a Monte Carlo study. The table in
 [`DESIGN.md`](DESIGN.md#5-roadmap) tracks them.
 
 ## Licence
