@@ -1,9 +1,12 @@
 """Vehicle profiles: parameter sets from open sources, one constant per vehicle.
 
 A profile is only data: the vehicle models never know which vehicle they fly. Each
-profile cites where its numbers come from. In phase 8 profiles will also be loaded
-from YAML files into the same dataclasses.
+profile cites where its numbers come from. The scenario files name the profiles
+(the tables at the end); the profiles themselves stay here, in code, next to their
+sources.
 """
+
+from typing import NamedTuple
 
 import numpy as np
 import numpy.typing as npt
@@ -201,3 +204,27 @@ SMALL_FIXED_WING_AUTOPILOT = AutopilotDesign(
     sideslip_frequency=2.0,
     sideslip_damping=1.0,
 )
+
+
+# --- Profiles by name -----------------------------------------------------------------
+# The scenario files (jineta/arena/spec.py) name a vehicle; these tables say which
+# profile each name means. A new vehicle is a new entry here.
+
+
+class MultirotorProfile(NamedTuple):
+    params: MultirotorParams
+    gains: MultirotorGains
+
+
+class FixedWingProfile(NamedTuple):
+    params: FixedWingParams
+    propulsion: PropulsionParams
+    autopilot: AutopilotDesign
+
+
+MULTIROTOR_PROFILES = {"iris": MultirotorProfile(IRIS, IRIS_GAINS)}
+FIXED_WING_PROFILES = {
+    "small_fixed_wing": FixedWingProfile(
+        SMALL_FIXED_WING, SMALL_FIXED_WING_PROPULSION, SMALL_FIXED_WING_AUTOPILOT
+    )
+}
