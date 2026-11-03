@@ -10,8 +10,14 @@ it (`World.launch`). The control then runs in that same step.
     inside its alert dome (the straight-line distance to the site, as a radar
     measures it, is at most the dome radius).
 
-Both are instant: no reaction time, no motor spin-up, and the detection is perfect
-(in phase 9 the alert becomes a sensor detection).
+  - `LaunchOnTrack`: at the first step at which a radar station's track of one of
+    the threats it watches puts that threat inside the dome: the alert comes from
+    what the radar believes, not from the truth.
+
+All are instant: no reaction time, no motor spin-up. `LaunchOnAlert` reads the
+truth (perfect detection); `LaunchOnTrack` reads the estimate. Put the station
+before the launch rule in the world's rules, so the launch uses the scan of the
+same step.
 """
 
 from collections.abc import Sequence
@@ -20,6 +26,7 @@ from dataclasses import dataclass
 import numpy as np
 import numpy.typing as npt
 
+from jineta.arena.sensing import RadarStation
 from jineta.arena.world import Snapshot
 
 
@@ -78,5 +85,27 @@ class LaunchOnAlert:
             if not world.entity(threat).destroyed and self.dome.contains(
                 snapshot.position(threat)
             ):
+                world.launch(self.interceptor, snapshot.time)
+                return
+
+
+@dataclass(frozen=True)
+class LaunchOnTrack:
+    """Launch `interceptor` when `station` believes any of `threats` is inside
+    `dome` (its track's estimate, predicted to the current time)."""
+
+    interceptor: str
+    dome: Dome
+    station: RadarStation
+    threats: Sequence[str]
+
+    def __call__(self, snapshot: Snapshot) -> None:
+        world = snapshot.world
+        entity = world.entity(self.interceptor)
+        if entity.launched_at is not None or entity.destroyed:
+            return
+        for threat in self.threats:
+            known = self.station.knowledge(threat, snapshot)
+            if known is not None and self.dome.contains(known[0]):
                 world.launch(self.interceptor, snapshot.time)
                 return

@@ -48,7 +48,8 @@ from jineta.jinete.targets import TargetTrack
 # effect (sets the commands of its vehicle). The own state is the entity's slice of
 # the snapshot. Both are read-only.
 Control = Callable[[float, np.ndarray, "Snapshot"], None]
-# rule(snapshot): runs once per step before the controls; may change the world.
+# rule(snapshot): runs once per step before the controls; may change the world. A
+# rule with memory also has a `reset()`, which `World.reset` calls.
 Rule = Callable[["Snapshot"], None]
 
 
@@ -267,7 +268,12 @@ class World:
 
     def reset(self) -> None:
         """Put every entity back to its starting status (waiting or active, none
-        destroyed)."""
+        destroyed), and reset every rule that has memory (a `reset` method, e.g. a
+        radar station with its tracks)."""
+        for rule in self.rules:
+            reset = getattr(rule, "reset", None)
+            if callable(reset):
+                reset()
         for entity in self.entities:
             entity.active = not entity.waiting
             entity.destroyed = False

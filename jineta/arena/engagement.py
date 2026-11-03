@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from jineta.arena.launch import Dome
+from jineta.arena.sensing import Knowledge
 from jineta.arena.world import (
     Control,
     Flight,
@@ -223,17 +224,35 @@ def fight(world: World, pairings: Sequence[Pairing], dt: float, t_end: float) ->
     return Battle(flight, tuple(results))
 
 
-def pursuit(autopilot: Autopilot, target: str, speed: float) -> Control:
+def pursuit(
+    autopilot: Autopilot,
+    target: str,
+    speed: float,
+    knowledge: Knowledge | None = None,
+) -> Control:
     """Control of a multirotor flying pure pursuit at `speed` against `target`:
-    every step the guidance points the velocity command at where the target is now,
-    then the autopilot runs."""
+    every step the guidance points the velocity command at where the target is
+    believed to be now, then the autopilot runs.
+
+    Args:
+        knowledge: where the belief comes from (`sensing.Knowledge`). None: the
+            truth, read straight from the snapshot, as in phases 1-8. While the
+            knowledge has nothing on the target (no track yet) the command is to
+            hold still (zero velocity).
+    """
     if not speed >= 0.0:
         raise ValueError("speed must be >= 0")
 
     def control(t: float, state: np.ndarray, snapshot: Snapshot) -> None:
-        autopilot.velocity_command = pure_pursuit_velocity(
-            state[:3], snapshot.position(target), speed
-        )
+        if knowledge is None:
+            aim = snapshot.position(target)
+        else:
+            known = knowledge(target, snapshot)
+            aim = None if known is None else known[0]
+        if aim is None:
+            autopilot.velocity_command = np.zeros(3)
+        else:
+            autopilot.velocity_command = pure_pursuit_velocity(state[:3], aim, speed)
         autopilot(t, state)
 
     return control

@@ -202,7 +202,20 @@ code should be clear and every concept explained before it is used.
   `pursuit(autopilot, target, speed)` is the pure-pursuit control of a multirotor.
 - **Launch rules** (`jineta.arena.launch`): `Dome(site, radius)`,
   `LaunchOnAlert(interceptor, dome, threats)` (the first step a watched threat is
-  inside), `LaunchAt(interceptor, time)`.
+  inside, on the truth), `LaunchOnTrack(interceptor, dome, station, threats)` (the
+  first step the station's estimate of one is inside), `LaunchAt(interceptor,
+  time)`.
+- **Knowledge interface** (`jineta.arena.sensing`): what a participant believes
+  about a target is a `Knowledge`, `knowledge(target, snapshot) -> (position,
+  velocity)` NED, or None when it knows nothing yet. `perfect_knowledge` reads the
+  truth from the snapshot; `RadarStation.knowledge` is its track predicted to the
+  snapshot's time. Only sensors (rules) read the truth; the referee judges with it.
+  `pursuit(autopilot, target, speed, knowledge=None)`: None is the truth, read as
+  before phase 9.
+- **Rules with memory** have a `reset()`, called by `World.reset` at the start of
+  every flight (a `RadarStation`: its tracks, measurements and the radar's noise).
+  Rules run in their order: a station goes before the launch rules, so they use the
+  scan of the same step.
 - **Scenario files** (`scenarios/<folder>/<case>.yaml`, format in the docstring of
   `jineta/arena/spec.py`): positions `[north, east]` plus `altitude` (up), metres,
   m/s, seconds; degrees only in the file, in keys that say so (`course_deg`,
@@ -261,7 +274,8 @@ jineta/
 │   ├── escuadron/  # inter-unit coordination and communications
 │   └── arena/      # composes the layers: world.py (every entity in one loop),
 │                   #   engagement.py (pairs, outcomes, engage), launch.py (alert
-│                   #   rules), spec.py (scenario files), scenario.py (spec -> world)
+│                   #   rules), sensing.py (radar stations, knowledge), spec.py
+│                   #   (scenario files), scenario.py (spec -> world)
 ├── tests/
 ├── scenarios/      # scenario files (YAML): menu.yaml + one folder per viewer page
 │                   #   (page.yaml + one file per case)
@@ -457,10 +471,16 @@ alarms; the link from the radar to the interceptor is perfect and instant (phase
    a noisy target 0.8–1.5 km away; 4.4 m against 19 m of the raw points 1 km away;
    the lag outside a turn (4.6 m with q = 0.1, 0.36 m with q = 10); the azimuth
    wrapped across South.
-4. ⏳ **Sensors in the world** (`jineta/arena`): the radar as a rule (the only thing
-   that reads the truth from the snapshot); the guidance reads a knowledge source
-   (perfect or a track); launch when the radar detects the target instead of on the
-   ideal dome. Regression: without sensors the existing cases fly bit for bit.
+4. ✅ **Sensors in the world** (`jineta/arena/sensing.py`): a `RadarStation` is a rule
+   (the only participant that reads the truth from the snapshot) with one track per
+   watched target; the guidance reads a `Knowledge` (`perfect_knowledge` or the
+   station's tracks) and holds still while it has nothing; `LaunchOnTrack` launches
+   when the track puts the threat inside the dome. Regression: the 527 earlier tests
+   and the four pages, the same data bit for bit. Tests: the station in the loop is
+   the radar and track run by hand; flying again repeats the run; perfect knowledge
+   is the old path bit for bit; a near-perfect radar gives the perfect engagement
+   (same capture step, 1e-5 m); with a 300 m radar the Iris holds still and its
+   launch waits for the scan at 23.5 s instead of the 400 m crossing at 6.74 s.
 5. ⏳ **Scenario files**: a `radar:` block on a site, a `seed`, `knowledge: perfect |
    radar` per interceptor, with their typical mistakes tested; a new page that flies
    the same threats with perfect knowledge and with the radar.
@@ -1075,6 +1095,29 @@ Phase 9 (sensors and tracking):
   turn; with a 15 m/s target turning at 0.1 rad/s (1.5 m/s²) the lag is 4.6 m with
   q = 0.1 and 0.36 m with q = 10, while a larger q lets more of the measurement
   noise through. The scenario sets it per threat class (step 5).
+- **Sensors live in the world as rules** (`arena/sensing.py`): a `RadarStation` is a
+  rule with a radar and one `Track` per watched target. Once per step, before the
+  controls, it reads the truth from the snapshot and, when its radar is due, measures
+  and updates the tracks. The controls run after the rules on the same snapshot, so
+  they use the estimate of that same step. `atalaya` stays free of the world (plain
+  measurements and filters); `arena` is where the truth meets the sensors.
+- **One interface for what a participant believes** (`Knowledge`): the guidance does
+  not know whether its target comes from the truth or a track. `pursuit` takes a
+  `knowledge`; with None it reads the snapshot exactly as before, so the existing
+  pages fly bit for bit (checked on all four, and `perfect_knowledge` gives the same
+  states as None to the last bit). With no estimate yet the interceptor is told to
+  hold still (zero velocity command).
+- **The alert follows the radar's belief** (`LaunchOnTrack`): the interceptor takes
+  off at the first step at which its station's track puts the threat inside the
+  dome (predicted between scans). With a near-perfect radar that is the step of the
+  truth's crossing; with a radar shorter than the dome it is the first scan that
+  sees the threat. `LaunchOnAlert` (on the truth) stays for the perfect-knowledge
+  cases.
+- **Rules can have memory**: the world calls `reset()` on every rule that has one,
+  at the start of each flight, the convention the controllers already follow.
+  Without it a second flight would continue the first one's tracks and noise.
+- **The referee keeps the truth**: captures, passes and escapes are judged on the
+  true positions, whatever the participants believe.
 
 ## 7. Current state
 
@@ -1597,7 +1640,12 @@ Phase 9 (sensors and tracking):
   `state_jacobian`, `position_covariance`, `Track(target, process_noise,
   speed_prior)` (`ready`, `update`, `estimate`, `position`, `velocity`); 17 tests in
   `tests/test_tracker.py`.
-- Now: phase 9, step 4 (sensors in the world). The step plan is in section 5.
+- `jineta/arena/sensing.py` (phase 9, step 4) — `Knowledge`, `perfect_knowledge`,
+  `TrackSettings(process_noise, speed_prior)`, `TrackRecord(time, x, P)`,
+  `RadarStation(radar, targets)` (`reset`, `tracks`, `measurements`, `history`,
+  `knowledge`); `LaunchOnTrack` in `launch.py`; `pursuit(..., knowledge=None)`;
+  `World.reset` resets rules with memory; 9 tests in `tests/test_sensing.py`.
+- Now: phase 9, step 5 (scenario files). The step plan is in section 5.
 
 ## 8. Working with Claude
 
