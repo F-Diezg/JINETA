@@ -1,9 +1,9 @@
 """Vehicle profiles: parameter sets from open sources, one constant per vehicle.
 
 A profile is only data: the vehicle models never know which vehicle they fly. Each
-profile cites where its numbers come from. The scenario files name the profiles
-(the tables at the end); the profiles themselves stay here, in code, next to their
-sources.
+profile cites where its numbers come from. Files that describe a flight name the
+profiles (the tables at the end); the profiles themselves stay here, in code, next
+to their sources.
 """
 
 from typing import NamedTuple
@@ -105,7 +105,7 @@ IRIS_GAINS = MultirotorGains(
 )
 
 
-# Generic small fixed-wing UAV (the threat class of phase 6b): Aerosonde-class numbers
+# Generic small fixed-wing UAV: Aerosonde-class numbers
 # from the open-source simulator of Beard & McLain, Small Unmanned Aircraft (2012),
 # mavsim_public (github.com/byu-magicc/mavsim_public),
 # mavsim_python/parameters/aerosonde_parameters.py. The Aerosonde is a civilian
@@ -207,8 +207,8 @@ SMALL_FIXED_WING_AUTOPILOT = AutopilotDesign(
 
 
 # --- Profiles by name -----------------------------------------------------------------
-# The scenario files (jineta/arena/spec.py) name a vehicle; these tables say which
-# profile each name means. A new vehicle is a new entry here.
+# Files that describe a flight name a vehicle; these tables say which profile each
+# name means. A new vehicle is a new entry here.
 
 
 class MultirotorProfile(NamedTuple):

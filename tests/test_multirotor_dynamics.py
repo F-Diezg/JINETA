@@ -150,7 +150,8 @@ def test_wind_acts_through_the_airspeed():
 
 def test_attitude_changes_the_drag():
     """Same ground velocity, different attitude: in-plane air gives rotor drag, air
-    along the rotor axis does not (the pending in-air decoupling test of phase 4)."""
+    along the rotor axis does not (the in-air counterpart of the rigid-body
+    decoupling test)."""
     speed = 5.0
     quad = make_quad(HOVER_SPEEDS, params=ROTOR_DRAG_ONLY)
     level = make_state(velocity=(speed, 0.0, 0.0))

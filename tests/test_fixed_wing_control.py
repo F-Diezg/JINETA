@@ -189,13 +189,13 @@ def test_altitude_step_settles_within_the_pitch_limit():
     assert_within_limits(states, commands)
 
 
-@pytest.mark.parametrize("target", [20.0, 30.0])
-def test_airspeed_step_settles_with_the_throttle(target):
+@pytest.mark.parametrize("speed_command", [20.0, 30.0])
+def test_airspeed_step_settles_with_the_throttle(speed_command):
     pilot = autopilot()
-    pilot.airspeed_command = target
+    pilot.airspeed_command = speed_command
     times, states, commands = fly(pilot, 40.0)
     speed = airspeed(pilot, times, states)
-    assert abs(speed[-1] - target) < 0.05
+    assert abs(speed[-1] - speed_command) < 0.05
     assert np.all(np.abs(-states[:, 2] - 100.0) < 1.0)
     assert_within_limits(states, commands)
 

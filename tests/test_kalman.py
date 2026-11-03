@@ -82,8 +82,8 @@ def test_update_returns_the_innovation_and_does_not_touch_its_inputs():
 def test_continuous_noise_does_not_depend_on_how_the_interval_is_split():
     """Predicting 0.1 s in one go or in ten 0.01 s pieces gives the same P with
     white-noise acceleration, but not with piecewise acceleration (one random
-    acceleration per piece is a different model). The trackers predict at the
-    simulation step between measurements, so they use the first one."""
+    acceleration per piece is a different model). A filter that predicts at the
+    simulation step between measurements needs the first one."""
     P0 = np.diag([25.0, 25.0, 25.0, 4.0, 4.0, 4.0])
     x0 = np.zeros(6)
     for model, splits_alike in (
@@ -116,8 +116,8 @@ def test_steady_state_gain_is_the_alpha_beta_filter(tracking_index):
     assert np.allclose(gain.ravel(), [alpha, beta / T], rtol=1e-9)
 
 
-def test_an_accelerating_target_is_tracked_with_the_alpha_beta_lag():
-    """A constant-velocity filter on a target with constant acceleration a settles
+def test_an_accelerating_body_is_followed_with_the_alpha_beta_lag():
+    """A constant-velocity filter on a body with constant acceleration a settles
     at a fixed lag (noise-free measurements, so only the bias is left):
     predicted position a T^2 / beta, updated position (1 - alpha) a T^2 / beta,
     velocity (alpha - beta / 2) a T / beta, all behind the truth."""
@@ -188,8 +188,8 @@ def test_a_filter_that_trusts_itself_too_much_fails_the_check():
 
 
 def test_alpha_beta_gains_limits():
-    """A sloppy sensor or a steady target (small index) smooths: alpha ~ sqrt(2
-    lambda), beta ~ lambda. A precise sensor or an agile target trusts the
+    """A sloppy sensor or a steady body (small index) smooths: alpha ~ sqrt(2
+    lambda), beta ~ lambda. A precise sensor or an agile body trusts the
     measurement: alpha -> 1, beta -> 2."""
     alpha, beta = alpha_beta_gains(1e-6)
     assert np.isclose(alpha, np.sqrt(2e-6), rtol=1e-3)

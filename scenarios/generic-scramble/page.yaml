@@ -1,8 +1,0 @@
-# The phase 7 scramble: the Iris waits on its pad and launches on the alert.
-title: Generic target · scramble
-description: >-
-  A scripted threat: a point that follows a closed-form path (a gentle turn or a
-  straight line), with no aircraft behind it.
-page: iris_scramble_viewer.html
-subtitle: "generic target · scramble"
-cases: [a-slow.yaml, b-fast.yaml]

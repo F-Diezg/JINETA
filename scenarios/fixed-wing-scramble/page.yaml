@@ -1,8 +1,0 @@
-# The phase 6b scramble against the simulated fixed wing.
-title: Fixed wing · scramble
-description: >-
-  A simulated fixed-wing drone (6-DOF, generic small-UAV aerodynamics, electric
-  propeller) flown by its own autopilot.
-page: fixed_wing_scramble_viewer.html
-subtitle: "fixed wing · scramble"
-cases: [a-loiter.yaml, b-pass.yaml]

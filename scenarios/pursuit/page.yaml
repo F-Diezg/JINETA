@@ -1,8 +1,0 @@
-# The phase 7 MVP: the Iris already in the air, flying pure pursuit from t = 0.
-title: Generic target · in the air
-description: >-
-  The end-to-end MVP: the same kind of scripted threat, but the Iris starts
-  already hovering and flies pure pursuit from the first instant.
-page: iris_pursuit_viewer.html
-subtitle: "generic target · in the air"
-cases: [slow.yaml, fast.yaml]

@@ -7,7 +7,7 @@ filter alternates two steps:
   - predict: move the estimate forward in time with a motion model,
         x <- F x,    P <- F P F^T + Q;
     F is the motion over the interval and Q the uncertainty the model cannot
-    explain (the target may accelerate), so P grows.
+    explain (the body may accelerate), so P grows.
   - update: blend in a measurement z = H x + noise (noise covariance R),
         y = z - H x            innovation: what the measurement says that the
                                prediction did not
@@ -18,16 +18,17 @@ filter alternates two steps:
     (I - K H) P for the optimal gain, but always symmetric and positive
     semi-definite, also with rounding errors.
 
-The functions here know nothing about targets or sensors: they take matrices and
+The functions here know nothing about vehicles or sensors: they take matrices and
 return new arrays (the inputs are never changed).
 
-Motion model used for tracking: constant velocity, state [x, y, z, vx, vy, vz]
-(NED, as a point mass), with the target's acceleration as white noise. Two classic
+Motion model: constant velocity, state [x, y, z, vx, vy, vz]
+(NED, as a point mass), with the body's acceleration as white noise. Two classic
 ways of putting that noise into Q:
   - `white_noise_acceleration` (continuous): the acceleration is white noise of
     spectral density q [m^2/s^3]. Predicting over T in one go or in several
     pieces gives exactly the same P, so the prediction does not depend on the
-    simulation step. This is the one the trackers use.
+    simulation step. It is the one to use when the filter predicts at every
+    simulation step between measurements.
   - `piecewise_white_acceleration` (discrete): one constant random acceleration of
     standard deviation sigma [m/s^2] per interval. It has the closed-form
     steady state of the alpha-beta filter (Kalata), used in the tests.
@@ -177,7 +178,7 @@ def alpha_beta_gains(tracking_index: float) -> tuple[float, float]:
         lambda = sigma_a T^2 / sigma_w   (the tracking index),
         alpha  = -(lambda^2 + 8 lambda - (lambda + 4) sqrt(lambda^2 + 8 lambda)) / 8,
         beta   =  (lambda^2 + 4 lambda - lambda sqrt(lambda^2 + 8 lambda)) / 4.
-    A large index (an agile target, a precise sensor) trusts the measurements
+    A large index (an agile body, a precise sensor) trusts the measurements
     (alpha -> 1); a small one smooths them (alpha -> 0).
     """
     if not tracking_index > 0.0:
