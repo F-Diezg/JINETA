@@ -307,7 +307,7 @@ Visualisation is a separate layer that reads that data:
 | 7 | **End-to-end MVP:** one interceptor vs one target, simple guidance | ✅ Done |
 | 6b | Generic fixed-wing threat model (aero coefficient tables) | ✅ Done |
 | 8 | Scenarios in YAML, multiple entities | ✅ Done |
-| 9 | Sensors + Kalman filter | ⏳ |
+| 9 | Sensors + Kalman filter | 🔄 In progress |
 | 10 | Guidance (proportional navigation) | ⏳ |
 | 11 | Coordination strategies (assignment, comms) | ⏳ |
 | 12 | Real terrain + Cesium visualisation | ⏳ |
@@ -411,6 +411,56 @@ drone (case B): the north one catches it (0.49 m at T+71.26 s), the south one is
 with "target lost" 48.05 m away. The phase 7 cases keep their numbers; the
 fixed-wing scramble, now with the Iris in ISA air like the drone: A 0.48 m at
 T+62.14 s (was 0.49 m at T+63.32 s), B missed by 49.80 m (was 49.74 m).
+
+**Phase 9 — in progress.** Plan agreed with the author at the start of the phase
+(each step: tests green, ruff clean, commit + push). The interceptors stop seeing the
+true position of their threat: a ground radar measures it with noise, a Kalman
+filter estimates position and velocity, and the guidance and the launch use that
+estimate. A prototype run before the plan (not in the repo; radar at the pad, 10 Hz,
+5 seeds, generic-scramble case A) showed why the phase has two sensors: with the
+radar alone the capture at 0.5 m became a coin toss (1 to 3 captures in 5, misses
+of 0.5–1.3 m, worse with more angle noise), because the cross-range error of a
+ground radar grows with the range (r·σθ, ~3.5 m at 400 m and 0.5°); with an onboard
+seeker in the last 100 m, 5 captures in 5. Decided with the author: the onboard
+seeker (step 6) is part of this phase. Kept from the start: perfect knowledge stays
+available (`knowledge: perfect`), so every existing page flies bit for bit as
+before and the effect of the sensors can be measured against it; the referee keeps
+judging with the truth (it is the umpire, not a participant); the interceptor knows
+its own state perfectly (navigation errors are not modelled); the radar knows which
+measurement belongs to which threat, detects with probability 1 and has no false
+alarms; the link from the radar to the interceptor is perfect and instant (phase 11).
+1. ✅ **Kalman filter** (`jineta/atalaya/kalman.py`): predict and update (Joseph
+   form), the constant-velocity model with white-noise acceleration (continuous and
+   piecewise), NEES, the alpha-beta gains. Tests: the running mean and σ²/k exactly;
+   the steady-state gains of Kalata's alpha-beta filter; the lag behind a constant
+   acceleration (a T²/β and its two companions); two updates one after the other
+   equal one stacked update (information adds up); the continuous noise does not
+   depend on how an interval is split, the piecewise one does; NEES inside its χ²
+   interval over 300 seeded runs, and far outside it for an overconfident filter.
+2. ⏳ **Ground radar** (`jineta/atalaya/radar.py`): range, azimuth and elevation from
+   its site, Gaussian noise, its own rate and maximum range, a seeded random
+   generator of its own; a generic short-range radar profile with open sources.
+   Tests: noise-free = exact geometry; sample mean and covariance converge; the
+   cross-range error is r·σθ; the measurement schedule; no measurement out of range.
+3. ⏳ **EKF and tracks** (`jineta/atalaya/tracker.py`): the spherical measurement
+   enters the filter through its Jacobian (azimuth wrapped); a track starts from two
+   measurements and can be predicted to any time. Tests: the Jacobian against finite
+   differences; NEES consistent on a straight line; the estimate beats the raw
+   measurement; the lag in a turn.
+4. ⏳ **Sensors in the world** (`jineta/arena`): the radar as a rule (the only thing
+   that reads the truth from the snapshot); the guidance reads a knowledge source
+   (perfect or a track); launch when the radar detects the target instead of on the
+   ideal dome. Regression: without sensors the existing cases fly bit for bit.
+5. ⏳ **Scenario files**: a `radar:` block on a site, a `seed`, `knowledge: perfect |
+   radar` per interceptor, with their typical mistakes tested; a new page that flies
+   the same threats with perfect knowledge and with the radar.
+6. ⏳ **Onboard seeker and fusion**: range and angles measured from the interceptor,
+   with a field of view and a maximum range; the interceptor points its nose at the
+   target (loose end 15); the radar and the seeker feed the same filter. A case with
+   the radar alone against radar + seeker.
+7. ⏳ **Viewer**: the measurements, the estimated track, the 3σ uncertainty
+   ellipsoid and the estimation error in the telemetry; checked in headless Chromium.
+8. ⏳ **Close the phase**: this document and the README.
 
 ## 6. Decision log
 
@@ -938,6 +988,26 @@ Phase 8 (scenarios and several entities):
   approach, and a line at the top that counts them all (6 of 11 pairs captured).
   Checked at desktop and phone width (no sideways scroll) in both palettes.
 
+Phase 9 (sensors and tracking):
+- **The Kalman filter is a set of plain functions** (`atalaya/kalman.py`): `predict`
+  and `update` take matrices and return new arrays, and know nothing about targets
+  or sensors; the trackers built on them (step 3) hold the state and the time.
+- **Covariance update in Joseph form**, `(I − KH) P (I − KH)ᵀ + K R Kᵀ`: the same as
+  `(I − KH) P` with the optimal gain, but always symmetric and positive
+  semi-definite, also with rounding errors. The gain is solved with
+  `np.linalg.solve`, not by inverting S.
+- **Continuous white-noise acceleration for tracking** (`white_noise_acceleration`,
+  spectral density q [m²/s³]): predicting an interval in one go or in pieces gives
+  exactly the same covariance, so a track predicted at the simulation step between
+  radar measurements does not depend on the step. The piecewise model (one random
+  acceleration per interval) does depend on it; it is kept because the alpha-beta
+  filter has its closed-form steady state (Kalata) with it, which tests the filter.
+- **Consistency is tested with NEES**, `eᵀ P⁻¹ e`: over N seeded runs its average is
+  a χ² with 6N degrees of freedom divided by N when the filter's model matches the
+  truth (5.67–6.05 against the 99 % interval 5.50–6.53 over 300 runs); an
+  overconfident filter gives 49–304. Every random test uses a seeded
+  `numpy.random.default_rng`, so it gives the same numbers on every computer.
+
 ## 7. Current state
 
 - `jineta/core/integrators.py` — `euler_step`, `rk4_step`, `Derivative` type alias.
@@ -1445,9 +1515,12 @@ Phase 8 (scenarios and several entities):
       viewer shows every pair. Per-pair plots if a study needs them.
   39. All the cases of one page share the step and the capture radius (the viewer
       has one timeline and one capture line); `write_page` refuses otherwise.
-- Next: phase 9 (sensors and a Kalman filter). New chat in the Project: "Seguimos con
-  Jineta, fase 9: sensores y filtro de Kalman". Its step plan is drawn up at the
-  start of the phase and written in section 5.
+- `jineta/atalaya/kalman.py` (phase 9, step 1) — `predict`, `update` (returns the
+  innovation and its covariance too), `nees`, `constant_velocity_transition`,
+  `white_noise_acceleration`, `piecewise_white_acceleration`, `alpha_beta_gains`;
+  20 tests in `tests/test_kalman.py`. The full list above is updated at the close
+  of the phase.
+- Now: phase 9, step 2 (ground radar). The step plan is in section 5.
 
 ## 8. Working with Claude
 
