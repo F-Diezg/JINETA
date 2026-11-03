@@ -1,0 +1,20 @@
+# Slow threat: twice slower than the ordered pursuit speed, it is caught.
+name: Slow threat
+detail: "8 m/s, turning 2 deg/s"
+duration: 120
+environment: {atmosphere: sea_level}
+interceptors:
+  - id: iris
+    vehicle: iris
+    start: {position: [0, 0], altitude: 100}
+    target: threat
+    speed: 16
+    margin: 10
+threats:
+  - id: threat
+    kind: turning
+    position: [150, 60]
+    altitude: 120
+    speed: 8
+    course_deg: 45        # North-East
+    turn_rate_deg_s: 2    # gentle right turn

@@ -139,7 +139,7 @@ class ScenarioSpec:
 # --- Reading helpers ------------------------------------------------------------------
 
 
-class _Reader:
+class Reader:
     """Reads one mapping of the file, remembering where it is for the errors."""
 
     def __init__(self, data: object, where: str, source: str) -> None:
@@ -190,7 +190,7 @@ class _Reader:
     def choice(self, key, options, default=...):
         value = self.text(key, default)
         if value not in options:
-            self.fail(f"unknown {key} '{value}'{_suggest(value, options)}", key)
+            self.fail(f"unknown {key} '{value}'{suggest(value, options)}", key)
         return value
 
     def map_position(self, key="position", altitude_key="altitude", altitude=...):
@@ -209,36 +209,36 @@ class _Reader:
         for key in self.data:
             if key not in self.used:
                 options = sorted(self.used)
-                self.fail(f"unknown key '{key}'{_suggest(str(key), options)}")
+                self.fail(f"unknown key '{key}'{suggest(str(key), options)}")
 
 
-def _suggest(word: str, options) -> str:
+def suggest(word: str, options) -> str:
     close = difflib.get_close_matches(word, list(options), n=1)
     hint = f"; did you mean '{close[0]}'?" if close else ""
     return f"{hint} (valid: {', '.join(sorted(options))})"
 
 
-def _items(reader: _Reader, key: str, required: bool) -> list[_Reader]:
+def _items(reader: Reader, key: str, required: bool) -> list[Reader]:
     values = reader.get(key, [] if not required else ..., "list")
     if required and not values:
         reader.fail("needs at least one entry", key)
     return [
-        _Reader(value, f"{key}[{i}]", reader.source) for i, value in enumerate(values)
+        Reader(value, f"{key}[{i}]", reader.source) for i, value in enumerate(values)
     ]
 
 
 # --- Parsing -----------------------------------------------------------------------
 
 
-def _environment(top: _Reader) -> EnvironmentSpec:
+def _environment(top: Reader) -> EnvironmentSpec:
     if "environment" not in top.data:
         top.used.add("environment")
         return EnvironmentSpec()
-    r = _Reader(top.get("environment"), "environment", top.source)
+    r = Reader(top.get("environment"), "environment", top.source)
     atmosphere = r.choice("atmosphere", ATMOSPHERES, "isa")
     wind = None
     if "wind" in r.data:
-        w = _Reader(r.get("wind"), "environment.wind", r.source)
+        w = Reader(r.get("wind"), "environment.wind", r.source)
         wind = WindSpec(w.number("speed", low=0.0), w.number("from_deg"))
         w.done()
     else:
@@ -247,7 +247,7 @@ def _environment(top: _Reader) -> EnvironmentSpec:
     return EnvironmentSpec(atmosphere, wind)
 
 
-def _site(r: _Reader) -> SiteSpec:
+def _site(r: Reader) -> SiteSpec:
     spec = SiteSpec(
         id=r.text("id"),
         position=r.map_position(altitude=0.0),
@@ -257,11 +257,11 @@ def _site(r: _Reader) -> SiteSpec:
     return spec
 
 
-def _interceptor(r: _Reader) -> InterceptorSpec:
+def _interceptor(r: Reader) -> InterceptorSpec:
     site = r.text("site", None)
     start = None
     if "start" in r.data:
-        s = _Reader(r.get("start"), f"{r.where}.start", r.source)
+        s = Reader(r.get("start"), f"{r.where}.start", r.source)
         start = s.map_position()
         s.done()
     else:
@@ -282,7 +282,7 @@ def _interceptor(r: _Reader) -> InterceptorSpec:
     return spec
 
 
-def _threat(r: _Reader) -> ThreatSpec:
+def _threat(r: Reader) -> ThreatSpec:
     kind = r.choice("kind", THREAT_KINDS)
     common = dict(
         id=r.text("id"),
@@ -296,7 +296,7 @@ def _threat(r: _Reader) -> ThreatSpec:
     if kind == "fixed_wing":
         common["vehicle"] = r.choice("vehicle", FIXED_WING_PROFILES)
         if "orbit" in r.data:
-            o = _Reader(r.get("orbit"), f"{r.where}.orbit", r.source)
+            o = Reader(r.get("orbit"), f"{r.where}.orbit", r.source)
             common["orbit"] = OrbitSpec(
                 center=o.map_position("center", altitude=0.0),
                 radius=o.number("radius", positive=True),
@@ -311,7 +311,7 @@ def _threat(r: _Reader) -> ThreatSpec:
 
 def parse_scenario(data: object, source: str = "<text>") -> ScenarioSpec:
     """A scenario from already-parsed YAML (dicts and lists), validated."""
-    top = _Reader(data, "", source)
+    top = Reader(data, "", source)
     name = top.text("name")
     detail = top.get("detail", "")
     if not isinstance(detail, str):
@@ -335,12 +335,10 @@ def parse_scenario(data: object, source: str = "<text>") -> ScenarioSpec:
     for i, spec in enumerate(interceptors):
         where = f"interceptors[{i}]"
         if spec.site is not None and spec.site not in site_ids:
-            top.fail(
-                f"unknown site '{spec.site}'{_suggest(spec.site, site_ids)}", where
-            )
+            top.fail(f"unknown site '{spec.site}'{suggest(spec.site, site_ids)}", where)
         if spec.target not in threat_ids:
             top.fail(
-                f"unknown target '{spec.target}'{_suggest(spec.target, threat_ids)}",
+                f"unknown target '{spec.target}'{suggest(spec.target, threat_ids)}",
                 where,
             )
     if not duration >= step:

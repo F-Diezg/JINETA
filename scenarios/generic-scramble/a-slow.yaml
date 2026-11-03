@@ -1,0 +1,18 @@
+# A slow threat from the North-West, heading South-South-East in a gentle left
+# turn: the Iris climbs and catches it.
+name: "A · slow threat"
+detail: "8 m/s, turning 1.5 deg/s"
+duration: 120
+environment: {atmosphere: sea_level}
+sites:
+  - {id: pad, position: [0, 0], alert_range: 400}
+interceptors:
+  - {id: iris, vehicle: iris, site: pad, target: threat, speed: 16}
+threats:
+  - id: threat
+    kind: turning
+    position: [420, -250]
+    altitude: 110
+    speed: 8
+    course_deg: 155
+    turn_rate_deg_s: -1.5

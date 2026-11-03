@@ -1,0 +1,18 @@
+# A fast pass, near the fixed wing's top level speed (~32.5 m/s), straight from
+# the South-West: the Iris cannot catch it.
+name: "B · fast pass"
+detail: "30 m/s, straight"
+duration: 90
+environment: {atmosphere: isa}
+sites:
+  - {id: pad, position: [0, 0], alert_range: 400}
+interceptors:
+  - {id: iris, vehicle: iris, site: pad, target: drone, speed: 25}
+threats:
+  - id: drone
+    kind: fixed_wing
+    vehicle: small_fixed_wing
+    position: [-600, -350]
+    altitude: 120
+    speed: 30
+    course_deg: 40

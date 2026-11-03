@@ -1,0 +1,20 @@
+# A loitering drone: it flies in from the North-West and circles over the area,
+# slower than the Iris (~20.7 m/s), which catches it. The Iris is ordered to
+# 25 m/s, more than it can fly, so it flies flat out.
+name: "A · loitering"
+detail: "18 m/s, orbit of 150 m"
+duration: 150
+environment: {atmosphere: isa}
+sites:
+  - {id: pad, position: [0, 0], alert_range: 400}
+interceptors:
+  - {id: iris, vehicle: iris, site: pad, target: drone, speed: 25}
+threats:
+  - id: drone
+    kind: fixed_wing
+    vehicle: small_fixed_wing
+    position: [650, -350]
+    altitude: 100
+    speed: 18
+    course_deg: 140
+    orbit: {center: [60, 40], radius: 150, clockwise: true}

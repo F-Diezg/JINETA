@@ -10,6 +10,7 @@ it) makes it later, a tailwind earlier.
 """
 
 import math
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -18,25 +19,14 @@ import yaml
 from jineta.arena.engagement import CAPTURED, Pairing, fight, pursuit
 from jineta.arena.launch import Dome, LaunchOnAlert
 from jineta.arena.scenario import build, play
-from jineta.arena.spec import parse_scenario
+from jineta.arena.spec import load_scenario, parse_scenario
 from jineta.arena.world import TrackEntity, VehicleEntity, World
 from jineta.jinete.control import Autopilot
 from jineta.jinete.multirotor import Multirotor
 from jineta.jinete.profiles import IRIS, IRIS_GAINS
 from jineta.jinete.targets import TurningTarget
 
-SCRAMBLE = """
-name: "A · slow threat"
-duration: 120
-environment: {atmosphere: sea_level}
-sites:
-  - {id: pad, position: [0, 0], alert_range: 400}
-interceptors:
-  - {id: iris, vehicle: iris, site: pad, target: threat, speed: 16}
-threats:
-  - {id: threat, kind: turning, position: [420, -250], altitude: 110, speed: 8,
-     course_deg: 155, turn_rate_deg_s: -1.5}
-"""
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def scenario(text, **changes):
@@ -46,9 +36,9 @@ def scenario(text, **changes):
 
 
 def test_a_scenario_file_flies_exactly_the_hand_built_world():
-    """The file of the phase 7 scramble (case A) against the same world built by
-    hand from the library pieces: identical to the bit."""
-    _, from_file = play(scenario(SCRAMBLE))
+    """The file of the phase 7 scramble, case A (scenarios/generic-scramble), against
+    the same world built by hand from the library pieces: identical to the bit."""
+    _, from_file = play(load_scenario(ROOT / "scenarios/generic-scramble/a-slow.yaml"))
 
     autopilot = Autopilot(Multirotor(IRIS), IRIS_GAINS, 0.01)
     pad = np.array([0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0], dtype=float)
