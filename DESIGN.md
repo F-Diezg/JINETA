@@ -13,7 +13,25 @@ physics**.
 
 The goal is to **compare coordination strategies** (target assignment, centralised
 vs. distributed command, robustness to comms loss or losing an interceptor) through
-Monte Carlo analysis.
+Monte Carlo analysis, and find which one works best in which scenarios.
+
+**Where it stands (end of phase 8): the stage and the baseline.** Every engagement so
+far is the baseline the strategies will be measured against, with each part in its
+simplest form on purpose, so that each later phase changes one thing:
+- knowledge: perfect, the true position of the threat (phase 9: sensors + Kalman
+  filter);
+- guidance: pure pursuit, straight at where the threat is now (phase 10: guidance
+  that predicts, e.g. proportional navigation);
+- assignment: fixed by hand in the scenario file, one interceptor per threat; it
+  launches when its own threat enters its pad's alert range. There is no assignment
+  logic yet, not even "in order of detection" (phase 11: assignment strategies, the
+  simplest being in order of detection, and re-assignment);
+- coordination: none, each interceptor flies alone (phase 11: centralised vs
+  distributed command, communications);
+- verdict: captured / missed per pair in one run (phase 13: statistics over many
+  runs per strategy and scenario).
+The scenario files make the comparison possible: the same threats, pads and
+interceptors flown with one strategy and then another.
 
 Name: *jineta* = historical Spanish light cavalry — small, agile units that
 coordinated hit-and-run attacks. Team brand: **Ibero**.

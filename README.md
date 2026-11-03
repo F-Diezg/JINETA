@@ -9,12 +9,30 @@ through Monte Carlo analysis.
 The name comes from the *jineta*, the historical Spanish light cavalry: small, agile
 units that coordinated hit-and-run attacks.
 
-> **Status: phase 8 done — scenarios are YAML files, and several interceptors and
-> threats fly in one world.** Each interceptor is assigned its target in the file;
-> perfect information, the simplest guidance law that works. Sensors, smarter
-> guidance, choosing the assignment, real terrain and the coordination strategies —
-> the actual point of the project — come next. See [`DESIGN.md`](DESIGN.md) for the
-> full roadmap and decision log.
+> **Status: phase 8 done.** The stage is built — 6-DOF interceptors and threats,
+> several of them in one world, scenarios written as YAML files — and every
+> engagement so far is the **baseline** the strategies will be compared against:
+> perfect information, pure pursuit, each interceptor assigned its threat by hand in
+> the scenario file, no coordination. See [Today and the goal](#today-and-the-goal)
+> and [`DESIGN.md`](DESIGN.md) for the roadmap and the decision log.
+
+## Today and the goal
+
+The question Jineta is built to answer is **which way of coordinating a swarm of
+interceptors works best, and in which scenarios**. Each row below is one part of
+that question; today every row is in its simplest form, on purpose, so that each
+later phase changes one thing and its effect can be measured against this baseline.
+
+| | Today: the baseline (phases 1–8) | Coming |
+|---|---|---|
+| What an interceptor knows | The true position of its threat, perfectly | Sensors with noise and a Kalman filter that estimates position and velocity (phase 9) |
+| How it flies at it | Pure pursuit: straight at where the threat is now | Guidance that predicts, such as proportional navigation: aim where it will be (phase 10) |
+| Who chases whom | Fixed by hand in the scenario file, one interceptor per threat; it takes off when its own threat enters its pad's alert range | Assignment strategies, from the simplest (in order of detection) to the nearest free interceptor or a cost-based allocation, and re-assignment when a threat gets through or an interceptor is lost (phase 11) |
+| Coordination | None: each interceptor flies alone | Centralised against distributed command, communications and their loss (phase 11) |
+| The verdict | Captured or missed, pair by pair, one run | Statistics over many runs per strategy and scenario: Monte Carlo (phase 13) |
+
+The scenario files are what makes the comparison possible: the same threats, pads
+and interceptors can be flown with one strategy and then another.
 
 ## The MVP
 
