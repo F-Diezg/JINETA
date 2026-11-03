@@ -11,6 +11,7 @@ from typing import NamedTuple
 import numpy as np
 import numpy.typing as npt
 
+from jineta.jinete.contact import LandingGear, box_bottom_corners
 from jineta.jinete.control import (
     AttitudeGains,
     MultirotorGains,
@@ -55,6 +56,27 @@ IRIS = MultirotorParams(
     max_rotor_speed=1100.0,
     rotor_drag_coefficient=0.000175,
     body_drag_area=np.full(3, 1.52 / 100.0),
+)
+
+# Landing gear of the Iris: the four bottom corners of its collision box in the same
+# file (base_link collision: box 0.47 x 0.47 x 0.11 m centred on the centre of
+# mass), so it rests 0.055 m below its centre of mass.
+# - Sink 1 mm at rest: the file's contact min_depth (0.001 m), the depth Gazebo lets
+#   a contact sink before pushing back. Gazebo's contact is nearly rigid (solved as
+#   a constraint, kp = 1e12); a penalty spring cannot be, so it is sized to sink
+#   that much: k = m g / (4 x 0.001) = 3727 N/m per corner.
+# - Friction mu = 1: the file's <friction><ode/> is empty, so the SDF default
+#   (mu = 1) applies.
+# - Damping ratio 0.5 and slip speed 0.2 m/s: chosen, not from the source, so that
+#   RK4 at 100 Hz is stable on the ground (see jinete/contact.py): a damping ratio
+#   of 0.7 or a slip speed of 0.1 m/s already makes it unstable.
+IRIS_LANDING_GEAR = LandingGear.from_damping_ratio(
+    box_bottom_corners([0.47, 0.47, 0.11]),
+    mass=1.52,
+    sink=0.001,
+    damping_ratio=0.5,
+    friction=1.0,
+    slip_speed=0.2,
 )
 
 
@@ -214,6 +236,7 @@ SMALL_FIXED_WING_AUTOPILOT = AutopilotDesign(
 class MultirotorProfile(NamedTuple):
     params: MultirotorParams
     gains: MultirotorGains
+    gear: LandingGear
 
 
 class FixedWingProfile(NamedTuple):
@@ -222,7 +245,7 @@ class FixedWingProfile(NamedTuple):
     autopilot: AutopilotDesign
 
 
-MULTIROTOR_PROFILES = {"iris": MultirotorProfile(IRIS, IRIS_GAINS)}
+MULTIROTOR_PROFILES = {"iris": MultirotorProfile(IRIS, IRIS_GAINS, IRIS_LANDING_GEAR)}
 FIXED_WING_PROFILES = {
     "small_fixed_wing": FixedWingProfile(
         SMALL_FIXED_WING, SMALL_FIXED_WING_PROPULSION, SMALL_FIXED_WING_AUTOPILOT

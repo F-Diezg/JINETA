@@ -190,10 +190,11 @@ jineta/
 ├── jineta/
 │   ├── core/       # physics engine: integrators, point mass, rotating and rigid
 │   │               #   body, quaternions, inertia, environment interfaces, run loop
-│   ├── campo/      # environment: atmosphere.py (ISA), wind.py
+│   ├── campo/      # environment: atmosphere.py (ISA), wind.py, indoor.py (room
+│   │               #   and obstacles by signed distance)
 │   ├── jinete/     # vehicles: aero, multirotor, control (multirotor autopilot),
-│   │               #   fixed_wing, propulsion, trim, stability, fixed_wing_control,
-│   │               #   profiles
+│   │               #   contact (landing gear on the floor), fixed_wing, propulsion,
+│   │               #   trim, stability, fixed_wing_control, profiles
 │   └── atalaya/    # estimation: kalman.py (later: onboard sensors)
 ├── tests/
 ├── examples/       # runnable scripts (python -m examples.<name>)
@@ -302,10 +303,15 @@ ground contact model), and gates are rectangular or circular from the start.
    and 2-3-6-7 triangles); the yaw is a heading (checked at 30°, where its sense
    shows); a distance never changes faster than the point moves; outside a convex
    shape its gradient has length 1.
-2. ⏳ **Ground contact**: a spring-damper at the landing-gear points, with Coulomb
-   friction (penalty method). Tests: at rest it sinks exactly mg/k; a drop bounces
-   with the restitution its damping predicts, e = exp(−ζπ/√(1−ζ²)); a slide brakes
-   at μg; stable at 100 Hz.
+2. ✅ **Ground contact** (`jineta/jinete/contact.py`, `IRIS_LANDING_GEAR`): a
+   spring-damper at the landing-gear points, with smoothed Coulomb friction
+   (penalty method); `Multirotor(..., contact=GroundContact(gear))`. Tests: at rest
+   the Iris sinks exactly mg/(4k) = 1 mm and the state is an equilibrium (1e-12); a
+   drop bounces as the exact solution of the model says (rebound within 0.2 %),
+   with a restitution above the textbook e = exp(−ζπ/√(1−ζ²)) (changed from the
+   plan, see the decision log); a slide brakes in the closed-form time (≈ μg); every
+   mode at rest is stable with RK4 at 100 Hz, and a little more damping or less slip
+   speed is not; a rough landing ends at rest and level.
 3. ⏳ **Take-off and landing with the autopilot**: an "on the ground" detector that
    freezes the integrators. Tests: a clean take-off with no jump; a soft landing
    that stays still.
@@ -326,6 +332,43 @@ ground contact model), and gates are rectangular or circular from the start.
 ## 6. Decision log
 
 Phase 8 (indoor world):
+- **Ground contact by the penalty method**: the floor lets a contact point sink and
+  pushes back with `N = k·depth + c·(sinking speed)`, never pulling (N ≥ 0).
+  Friction `−μN v_t / √(|v_t|² + v_s²)`: Coulomb when sliding, fading to zero below
+  the slip speed v_s, because exact Coulomb friction jumps when the velocity changes
+  sign and a fixed-step integrator cannot follow it. Force and moment in body axes,
+  added by the vehicle to its own (`Multirotor.contact`, any `ForceMomentModel`).
+- **The landing gear is vehicle data** (`jinete/contact.py`, not `campo`): contact
+  points in body axes, like the rotors. `campo` and `jinete` still only import
+  `core`. The floor is the plane z = `floor_z` (0 for the room).
+- **The Iris gear from its PX4 file**: the four bottom corners of its collision box
+  (0.47 × 0.47 × 0.11 m, centred on the CoM); stiffness so that it sinks the file's
+  `min_depth`, 1 mm, at rest (k = 3727 N/m per corner; Gazebo's own contact is
+  nearly rigid, kp = 1e12, which a penalty spring cannot be); μ = 1, the SDF default
+  (the file's friction block is empty).
+- **The damping ratio (0.5) and the slip speed (0.2 m/s) are set by stability at
+  100 Hz, not by the source.** A prototype computed every mode of the resting Iris
+  (Jacobian eigenvalues) and RK4's amplification `|R(λ dt)|` for each: two modes set
+  the limit, the overdamped tilt on the springs (ζ = 0.7 already gives 1.85) and the
+  yaw braked by the friction of the four feet (v_s = 0.1 m/s gives 1.34: its rate is
+  ~ μ N r² / (v_s I_zz)). A test keeps the gear inside the limit and another shows
+  that the neighbouring values are outside it. Price: below 0.2 m/s friction is soft,
+  so a foot under a sideways push creeps slowly instead of sticking.
+- **The rebound is tested against the exact solution, not the textbook
+  restitution** (changed from the plan): e = exp(−ζπ/√(1−ζ²)) assumes a damper that
+  also pulls the body back on the way out; this floor never pulls, so the body
+  leaves a little earlier and faster (e = 0.617 against 0.605 for ζ = 0.16). While
+  touching, the motion is the closed-form damped oscillator around m g / k; it leaves
+  where k x + c x' = 0 (found with `brentq`), and then flies freely. At dt = 1e-4 the
+  rebound matches to 0.1 % (70.18 mm against 70.11 mm). At 100 Hz the same bounce
+  rebounds 68.8 mm (−1.9 %): a hard impact lasts ~5 steps, which is stable but not
+  precise; for landing it does not matter.
+- **The tests were checked by breaking the code** again: five mistakes (pulling
+  floor, friction sign, moment from the NED force, point velocity not rotated,
+  damping not shared between the points). Two passed unnoticed at first, both
+  because a level vehicle heading North has R = I: the moment is now checked exactly
+  with the vehicle banked, and the friction with the vehicle spinning on a heading of
+  30°.
 - **Shapes are described by their signed distance** (positive outside, negative
   inside, the true Euclidean distance): one number tells both whether a sphere of
   radius r touches the shape (distance < r) and how much room is left, and the
@@ -705,10 +748,11 @@ Phase 6c (Kalman filter):
     `reference_density` (1.225). Cached read-only `allocation` / `allocation_inv`.
     Methods: `max_rotor_thrust`, `wrench(thrusts)`, `rotor_thrusts(wrench)`
     (clipped), `rotor_speeds_for(thrusts)` (at the reference density).
-  - `Multirotor(params, density=sea_level_density, wind=no_wind)`: holds
-    `rotor_speed_command` (starts at zero) and a `RigidBody`; `derivative(t, state)`
-    and `force_moment(t, state)` (thrust + reaction torques via the mixer, rotor
-    drag, body drag; all in body axes).
+  - `Multirotor(params, density=sea_level_density, wind=no_wind, contact=None)`:
+    holds `rotor_speed_command` (starts at zero) and a `RigidBody`;
+    `derivative(t, state)` and `force_moment(t, state)` (thrust + reaction torques
+    via the mixer, rotor drag, body drag, plus the contact model if any; all in
+    body axes).
 - `jineta/jinete/control.py` —
   - `RateGains`, `RateController(params, gains, dt)`: `update(rate_command,
     thrust_command, state) -> rotor speeds`, `reset()`.
@@ -723,10 +767,12 @@ Phase 6c (Kalman filter):
     vehicle's `rotor_speed_command`.
 - `jineta/jinete/profiles.py` — `flu_to_frd(vector)`, `IRIS` (PX4 SITL Iris, sources
   in the comments), `IRIS_RATE_GAINS`, `IRIS_ATTITUDE_GAINS`, `IRIS_VELOCITY_GAINS`,
-  `IRIS_GAINS`, `SMALL_FIXED_WING` (generic small fixed-wing UAV, Aerosonde-class
+  `IRIS_GAINS`, `IRIS_LANDING_GEAR` (the corners of its PX4 collision box),
+  `SMALL_FIXED_WING` (generic small fixed-wing UAV, Aerosonde-class
   open data), `SMALL_FIXED_WING_PROPULSION` (its motor and propeller),
   `SMALL_FIXED_WING_AUTOPILOT` (design choices of its autopilot). The profiles by
-  name: `MULTIROTOR_PROFILES` (`"iris"` → `MultirotorProfile(params, gains)`) and
+  name: `MULTIROTOR_PROFILES` (`"iris"` → `MultirotorProfile(params, gains,
+  gear)`) and
   `FIXED_WING_PROFILES` (`"small_fixed_wing"` → `FixedWingProfile(params,
   propulsion, autopilot)`).
 - `jineta/jinete/fixed_wing.py` — `ControlSurfaces(elevator, aileron, rudder)`,
@@ -754,6 +800,11 @@ Phase 6c (Kalman filter):
   `wrap_angle`, `FixedWingAutopilot(vehicle, trim, design, dt)` (callable
   `pre_step`; `course_command`, `altitude_command`, `airspeed_command`; `reset()`)
   and `orbit_course(position, center, radius, clockwise=True, gain=2)`.
+- `jineta/jinete/contact.py` — `LandingGear(points, stiffness, damping, friction,
+  slip_speed)` (frozen, validated, points read-only; `from_damping_ratio(points,
+  mass, sink, damping_ratio, friction, slip_speed)`), `contact_forces(gear, state,
+  floor_z=0)` → (force, moment) in body axes, `GroundContact(gear, floor_z=0)`
+  (callable force model), `box_bottom_corners(size)`.
 - `jineta/campo/indoor.py` — `Box(center, size, yaw=0)` (`to_local`,
   `signed_distance`), `Cylinder(base, radius, height)` (`signed_distance`),
   `Room(size)` (`center`, `clearance`, `contains`), `box_distance(local_points,
@@ -761,7 +812,7 @@ Phase 6c (Kalman filter):
 - `jineta/atalaya/kalman.py` — `predict`, `update` (returns the innovation and its
   covariance too), `nees`, `constant_velocity_transition`,
   `white_noise_acceleration`, `piecewise_white_acceleration`, `alpha_beta_gains`.
-- Tests (390 passing, ruff check + ruff format clean):
+- Tests (417 passing, ruff check + ruff format clean):
   - integrators (2): RK4 exact on free fall; Euler's error shrinks with dt.
   - rotation (5): 90° about z maps North to East; proper orthogonal matrix; steady
     spin about a principal axis; constant torque spins up linearly; torque-free
@@ -894,6 +945,17 @@ Phase 6c (Kalman filter):
     `contains`; rejects invalid input; read-only; for every shape, many points at
     once equal one by one, the distance never changes faster than the point moves
     (1000 random pairs), and outside the convex ones the gradient has length 1.
+  - ground contact (27): the Iris gear's corners and sizes (k = 3727 N/m, ζ = 0.5);
+    rejects invalid gear (7 cases); read-only; no force above or on the floor;
+    normal force = spring + damper and never pulls; friction against the slide,
+    below μN (4 speeds); forces in body axes and their moment exact with the Iris
+    banked 10°; a spinning Iris on a 30° heading braked by its four feet (exact
+    moment); at rest it sinks mg/(4k) and is an equilibrium (1e-12); put down
+    touching, it settles at 100 Hz (1e-6); every mode at rest stable with RK4 at
+    100 Hz, ζ = 0.7 or v_s = 0.1 m/s unstable; the profile carries its gear; a drop
+    matches the exact bounce (rebound 0.2 %, time below the floor 0.3 ms) with a
+    restitution above the textbook one; a slide reaches 1 m/s in the closed-form time
+    (1 %); a rough landing (0.5 m, banked, sliding, spinning) ends at rest and level.
   - Kalman filter (20): the running mean and σ²/k exactly; the steady-state gains of
     Kalata's alpha-beta filter; the lag behind a constant acceleration (a T²/β and
     its two companions); two updates one after the other equal one stacked update
@@ -985,6 +1047,11 @@ Phase 6c (Kalman filter):
   22. Stochastic turbulence (Dryden/von Kármán) is not modelled; indoors it only
       matters as the drone's own wash off walls and floor, which is beyond this
       model.
+  23. Floor contact at 100 Hz is stable but coarse for hard impacts (a bounce lasts
+      ~5 steps; −1.9 % in rebound height), and friction is soft below 0.2 m/s (a
+      foot creeps under a slow sideways push). Both come from the step: sub-steps
+      for the contact, or an implicit friction, if a task needs better.
+  24. Only multirotors have a landing gear; the fixed wing has no contact model.
 - Next: phase 8 (indoor world). New chat in the Project: "Seguimos con Jineta, fase
   8: mundo interior". Its step plan is drawn up at the start of the phase and
   written in section 5.

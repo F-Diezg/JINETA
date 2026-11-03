@@ -28,7 +28,7 @@ import numpy.typing as npt
 
 from jineta.core.environment import DensityModel, WindModel, no_wind, sea_level_density
 from jineta.core.inertia import inertia_tensor
-from jineta.core.rigid_body import RigidBody
+from jineta.core.rigid_body import ForceMomentModel, RigidBody
 from jineta.jinete.aero import body_airspeed
 
 
@@ -173,12 +173,15 @@ class Multirotor:
       density factor makes it grow like sqrt(rho) at constant thrust, as in the
       PX4 EKF2 drag model;
     - body drag, -0.5 * rho * CdA_i * u_i * |u| on each body axis (PX4 EKF2 drag
-      model; with equal CdA on all axes it is the usual isotropic quadratic drag).
+      model; with equal CdA on all axes it is the usual isotropic quadratic drag);
+    - contact, if a `contact` model is given (e.g. `GroundContact` with the
+      vehicle's landing gear): its force and moment are added as they come.
     """
 
     params: MultirotorParams
     density: DensityModel = sea_level_density
     wind: WindModel = no_wind
+    contact: ForceMomentModel | None = None
     rotor_speed_command: np.ndarray = field(init=False)
     body: RigidBody = field(init=False, repr=False)
 
@@ -197,7 +200,8 @@ class Multirotor:
     def force_moment(
         self, t: float, state: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Aerodynamic force and moment in body axes [N], [N·m] (no gravity)."""
+        """Force and moment in body axes [N], [N·m]: rotors, drag and contact (no
+        gravity: the RigidBody adds it)."""
         params = self.params
         speeds = np.clip(self.rotor_speed_command, 0.0, params.max_rotor_speed)
         rho = self.density(-state[2])
@@ -222,5 +226,10 @@ class Multirotor:
         # Body drag on the airframe.
         speed_through_air = np.linalg.norm(airspeed)
         force = force - 0.5 * rho * params.body_drag_area * airspeed * speed_through_air
+
+        if self.contact is not None:
+            contact_force, contact_moment = self.contact(t, state)
+            force = force + contact_force
+            moment = moment + contact_moment
 
         return force, moment
