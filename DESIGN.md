@@ -292,7 +292,59 @@ above); the repository was reduced to the physics engine (core, environment,
 vehicles, Kalman filter) and its examples; README, roadmap and this document were
 rewritten. Tests: 346, ruff clean.
 
+**Phase 8 — in progress.** Plan agreed with the author at the start of the phase
+(each step: tests green, ruff clean, commit + push). Decided with the author: the
+drone starts each lap landed on the floor and takes off (so the phase brings a
+ground contact model), and gates are rectangular or circular from the start.
+1. ✅ **Geometry** (`jineta/campo/indoor.py`): the room (a box: floor, walls,
+   ceiling), obstacles (boxes with a yaw, vertical cylinders), all through their
+   signed distance, for one point or many at once. Tests: distances by hand (3-4-5
+   and 2-3-6-7 triangles); the yaw is a heading (checked at 30°, where its sense
+   shows); a distance never changes faster than the point moves; outside a convex
+   shape its gradient has length 1.
+2. ⏳ **Ground contact**: a spring-damper at the landing-gear points, with Coulomb
+   friction (penalty method). Tests: at rest it sinks exactly mg/k; a drop bounces
+   with the restitution its damping predicts, e = exp(−ζπ/√(1−ζ²)); a slide brakes
+   at μg; stable at 100 Hz.
+3. ⏳ **Take-off and landing with the autopilot**: an "on the ground" detector that
+   freezes the integrators. Tests: a clean take-off with no jump; a soft landing
+   that stays still.
+4. ⏳ **Collisions in flight**: the drone as a sphere against walls, ceiling and
+   obstacles; after take-off, touching the floor is a crash too. The tunnelling
+   limit (a thin obstacle skipped between two samples) is measured and written down.
+5. ⏳ **Gates, rectangular and circular**: crossing between samples, through the
+   opening and in the right direction, with the time interpolated inside the step;
+   touching the frame is a crash (four bars, or a torus).
+6. ⏳ **Course and referee**: gate order, lap time, end by crash, finish or time
+   limit.
+7. ⏳ **Course files in YAML**: a strict format with clear errors, and a first
+   course.
+8. ⏳ **See a flight**: a figure of an Iris that takes off, flies through the gate
+   centres with its autopilot and finishes.
+9. ⏳ **Close the phase**: this document and the README.
+
 ## 6. Decision log
+
+Phase 8 (indoor world):
+- **Shapes are described by their signed distance** (positive outside, negative
+  inside, the true Euclidean distance): one number tells both whether a sphere of
+  radius r touches the shape (distance < r) and how much room is left, and the
+  same function serves collisions, the referee and later the observation of a
+  policy. Formulas: box `|max(q, 0)| + min(max qᵢ, 0)` with `q = |p| − half size`
+  in the box's axes; vertical cylinder the same with two components (radial,
+  vertical).
+- **The room is the inside of a box with one floor corner at the origin**:
+  `0 ≤ x ≤ length`, `0 ≤ y ≤ width`, `−height ≤ z ≤ 0`, so the floor is z = 0 and
+  every position in a room is positive in x and y. Its `clearance` is minus the
+  box's signed distance.
+- **Obstacles turn only about the vertical** (a yaw, as a heading: positive turns
+  North towards East). Tilted obstacles are not needed for a course.
+- **Every shape takes one point (3,) or many (n, 3)** and returns a float or an
+  array: the batch engine of phase 9 can ask for many drones at once.
+- **Tests are checked by breaking the code**: four deliberate mistakes (yaw sign,
+  inside part missing, cylinder upside down, room sign) each made tests fail. The
+  yaw sign was caught by only one test at first (90° and 45° look the same turned
+  either way), so a 30° test was added.
 
 Phase 7 (project goal):
 - **The MVP is a quadrotor learning a timed indoor course**, measured against a
@@ -702,10 +754,14 @@ Phase 6c (Kalman filter):
   `wrap_angle`, `FixedWingAutopilot(vehicle, trim, design, dt)` (callable
   `pre_step`; `course_command`, `altitude_command`, `airspeed_command`; `reset()`)
   and `orbit_course(position, center, radius, clockwise=True, gain=2)`.
+- `jineta/campo/indoor.py` — `Box(center, size, yaw=0)` (`to_local`,
+  `signed_distance`), `Cylinder(base, radius, height)` (`signed_distance`),
+  `Room(size)` (`center`, `clearance`, `contains`), `box_distance(local_points,
+  half_size)`. Frozen, validated, arrays read-only; one point or many.
 - `jineta/atalaya/kalman.py` — `predict`, `update` (returns the innovation and its
   covariance too), `nees`, `constant_velocity_transition`,
   `white_noise_acceleration`, `piecewise_white_acceleration`, `alpha_beta_gains`.
-- Tests (346 passing, ruff check + ruff format clean):
+- Tests (390 passing, ruff check + ruff format clean):
   - integrators (2): RK4 exact on free fall; Euler's error shrinks with dt.
   - rotation (5): 90° about z maps North to East; proper orthogonal matrix; steady
     spin about a principal axis; constant torque spins up linearly; torque-free
@@ -830,6 +886,14 @@ Phase 6c (Kalman filter):
     angle asin(5/25); reset repeats the flight. Orbit guidance: tangent on the circle
     (both directions), at the centre from far away, away from it inside; rejects
     invalid input; the autopilot holds a 150 m orbit (±0.5 m, bank atan(V²/gR) ±1°).
+  - indoor geometry (44): box distances by hand (8 points: centre, face, past a
+    face, edge and corner, inside); the box moves with its centre; yaw 90° turns
+    its length to East, yaw 45° gives a diamond, yaw 30° shows the sense of the
+    turn; turning shape and point together changes nothing (50 random, seeded);
+    cylinder distances by hand (7 points); room clearance by hand (8 points) and
+    `contains`; rejects invalid input; read-only; for every shape, many points at
+    once equal one by one, the distance never changes faster than the point moves
+    (1000 random pairs), and outside the convex ones the gradient has length 1.
   - Kalman filter (20): the running mean and σ²/k exactly; the steady-state gains of
     Kalata's alpha-beta filter; the lag behind a constant acceleration (a T²/β and
     its two companions); two updates one after the other equal one stacked update
