@@ -255,7 +255,8 @@ jineta/
 │   ├── jinete/     # vehicles: aero, multirotor, control (multirotor autopilot),
 │   │               #   fixed_wing, propulsion, trim, stability, fixed_wing_control,
 │   │               #   profiles, guidance, targets
-│   ├── atalaya/    # sensors + Kalman filtering: kalman, radar, profiles
+│   ├── atalaya/    # sensors + Kalman filtering: kalman, radar, tracker,
+│   │               #   profiles
 │   ├── capitan/    # target assignment / threat prioritisation
 │   ├── escuadron/  # inter-unit coordination and communications
 │   └── arena/      # composes the layers: world.py (every entity in one loop),
@@ -446,11 +447,16 @@ alarms; the link from the radar to the interceptor is perfect and instant (phase
    correlation; the sideways spread is r·σθ at 100 m and 1 km; the schedule at
    10 Hz and at 13 Hz in a 100 Hz loop; no measurement out of range; the same seed
    repeats a run.
-3. ⏳ **EKF and tracks** (`jineta/atalaya/tracker.py`): the spherical measurement
-   enters the filter through its Jacobian (azimuth wrapped); a track starts from two
-   measurements and can be predicted to any time. Tests: the Jacobian against finite
-   differences; NEES consistent on a straight line; the estimate beats the raw
-   measurement; the lag in a turn.
+3. ✅ **EKF and tracks** (`jineta/atalaya/tracker.py`): the spherical measurement
+   enters the filter through its Jacobian (azimuth wrapped); a track starts from
+   one measurement and a speed prior (changed from the planned two-point start,
+   which the consistency test showed overconfident for ~2 s; see the decision log)
+   and can be predicted to any time. Tests: the Jacobian against finite
+   differences (3e-9); with q = 0 the track is the least-squares line (its
+   variance σ²·2(2N − 1)/(N(N + 1))); NEES inside its χ² interval over 200 runs of
+   a noisy target 0.8–1.5 km away; 4.4 m against 19 m of the raw points 1 km away;
+   the lag outside a turn (4.6 m with q = 0.1, 0.36 m with q = 10); the azimuth
+   wrapped across South.
 4. ⏳ **Sensors in the world** (`jineta/arena`): the radar as a rule (the only thing
    that reads the truth from the snapshot); the guidance reads a knowledge source
    (perfect or a track); launch when the radar detects the target instead of on the
@@ -1037,6 +1043,38 @@ Phase 9 (sensors and tracking):
 - **The radar owns its random generator**, built from its seed at `reset`, so a run
   repeats exactly and two radars do not share a noise sequence. It draws its noise
   target by target in the order it is given, so that order is fixed by the caller.
+- **The EKF linearises the measurement, not the motion**: the motion model stays
+  linear (constant velocity); h(x) = (range, azimuth, elevation) is replaced around
+  the predicted state by its Jacobian H (3 × 6, zero on the velocities). The
+  innovation uses h itself, with the azimuth wrapped (179° against −179° is 2°). The
+  linear `kalman.update` is reused by giving it `H x + innovation` as the
+  measurement, so its own innovation is the EKF one. Tested: the Jacobian against
+  central differences (3e-9).
+- **A track starts from one measurement and a speed prior** (planned: from two).
+  The two-point start takes the velocity from the difference of two measurements
+  0.1 s apart; 1 km away, with 1° of elevation noise (18 m), that velocity is
+  uncertain by ~250 m/s, and the first updates, linearised that far from the truth,
+  were overconfident: average NEES 9.2 at 0.2 s and 7.7 at 1 s against the interval
+  5.4–6.6, inside it only after ~2 s. Starting from the measured point (with its
+  covariance J R Jᵀ) and a still target with σ = `speed_prior` on each velocity
+  component (30 m/s for the threats so far: "how fast a target of this kind can
+  fly"), the NEES is 4.8 at 0.2 s (conservative, the true speed is 10 m/s) and
+  inside the interval from 1 s on.
+- **With no process noise the track is the least-squares straight line**: the
+  variance at the last of N points is σ²·2(2N − 1)/(N(N + 1)), which the filter's P
+  gives within 2 % in every run (each run is linearised around a slightly wrong
+  point) and the scatter of 400 runs confirms. A test against a closed form for the
+  whole chain: radar, linearisation and filter.
+- **A small bias from the nonlinearity**: turning a (range, azimuth, elevation)
+  point into NED shortens it by about r(σ_az² + σ_el²)/2 on average (0.15 m at
+  800 m for the short-range radar), and the EKF keeps part of it (0.08 m after 40
+  updates in a seeded test, against a spread of 0.6 m). Known for EKFs on
+  spherical measurements; ignored here, written down.
+- **q is a choice about the target, and it trades noise for lag**: a
+  constant-velocity filter stays behind a turning target on the outside of the
+  turn; with a 15 m/s target turning at 0.1 rad/s (1.5 m/s²) the lag is 4.6 m with
+  q = 0.1 and 0.36 m with q = 10, while a larger q lets more of the measurement
+  noise through. The scenario sets it per threat class (step 5).
 
 ## 7. Current state
 
@@ -1555,7 +1593,11 @@ Phase 9 (sensors and tracking):
   `position`), `Radar(params, site, seed)` (`reset`, `next_time`, `due`, `measure`,
   `scan`); `jineta/atalaya/profiles.py` — `SHORT_RANGE_RADAR`, `RADAR_PROFILES`;
   27 tests in `tests/test_radar.py`.
-- Now: phase 9, step 3 (EKF and tracks). The step plan is in section 5.
+- `jineta/atalaya/tracker.py` (phase 9, step 3) — `measurement_jacobian`,
+  `state_jacobian`, `position_covariance`, `Track(target, process_noise,
+  speed_prior)` (`ready`, `update`, `estimate`, `position`, `velocity`); 17 tests in
+  `tests/test_tracker.py`.
+- Now: phase 9, step 4 (sensors in the world). The step plan is in section 5.
 
 ## 8. Working with Claude
 
