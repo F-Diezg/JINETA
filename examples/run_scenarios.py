@@ -6,9 +6,10 @@
 
 Each folder of `scenarios/` with a `page.yaml` is one viewer page in `docs/`: every
 case file of the folder is flown (`jineta.arena.scenario.play`), its verdict is
-printed and it becomes one tab of the page. The examples (`iris_pursuit.py`,
-`iris_scramble.py`, `fixed_wing_scramble.py`) use the same functions and add their
-own plots.
+printed and it becomes one tab of the page. The start menu shows the folders listed
+in `scenarios/menu.yaml`, with the title and text of their `page.yaml`. The examples
+(`iris_pursuit.py`, `iris_scramble.py`, `fixed_wing_scramble.py`) use the same
+functions and add their own plots.
 """
 
 import sys
@@ -20,7 +21,16 @@ from jineta.arena.engagement import CAPTURED, ESCAPED, PASSED
 from jineta.arena.scenario import play
 from viz.app import show, window_requested
 from viz.menu import write_menu
-from viz.pages import Case, PageSpec, load_cases, load_page, page_folders, write_page
+from viz.pages import (
+    Case,
+    PageSpec,
+    load_cases,
+    load_page,
+    menu_entries,
+    menu_folders,
+    page_folders,
+    write_page,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 SCENARIOS = ROOT / "scenarios"
@@ -78,9 +88,11 @@ def report(case: Case) -> None:
 
 def write_folder(page: PageSpec, cases: list[Case]) -> Path:
     """Write the page of one folder and the start menu; return the menu."""
-    path = write_page(page, cases, DOCS)
+    listed = [folder.resolve() for folder in menu_folders(SCENARIOS)]
+    in_menu = page.folder.resolve() in listed
+    path = write_page(page, cases, DOCS, menu=in_menu)
     print(f"\nViewer written to {path}")
-    return write_menu(DOCS)
+    return write_menu(DOCS, menu_entries(SCENARIOS))
 
 
 def main(argv: list[str] | None = None) -> None:

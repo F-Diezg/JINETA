@@ -2,7 +2,9 @@
 
 `docs/index.html` lists the scenario pages, one card each, named by the type of
 threat. The viewer pages link back to it ("Menu"), and `python -m viz.app` opens it.
-It is plain HTML written from `viz/menu_template.html`.
+It is plain HTML written from `viz/menu_template.html`. Which pages it shows, in
+what order and with what text comes from the scenario files (`scenarios/menu.yaml`
+and each folder's `page.yaml`, read by `viz.pages.menu_entries`).
 
 What a card says about its cases (their names and whether each was captured) is
 read from the viewer page itself (`viz.viewer.read_viewer`), never written here by
@@ -26,10 +28,10 @@ MENU_FILE = "index.html"
 class MenuEntry:
     """One scenario page of the menu."""
 
-    kind: str  # type of threat, the card's title ("Generic target", "Fixed wing")
+    kind: str  # the card's title: the type of threat ("Fixed wing · scramble")
     description: str
     page: str  # viewer file name, in the same folder as the menu
-    command: str  # the example that writes the page
+    command: str  # the command that writes the page
 
 
 @dataclass(frozen=True)
@@ -39,28 +41,6 @@ class MenuCase:
     name: str  # "A · slow threat"
     detail: str  # "8 m/s, turning 1.5 deg/s"
     captured: bool
-
-
-ENTRIES = (
-    MenuEntry(
-        kind="Generic target",
-        description=(
-            "A scripted threat: a point that follows a closed-form path (a gentle "
-            "turn or a straight line), with no aircraft behind it."
-        ),
-        page="iris_scramble_viewer.html",
-        command="python -m examples.iris_scramble",
-    ),
-    MenuEntry(
-        kind="Fixed wing",
-        description=(
-            "A simulated fixed-wing drone (6-DOF, generic small-UAV aerodynamics, "
-            "electric propeller) flown by its own autopilot."
-        ),
-        page="fixed_wing_scramble_viewer.html",
-        command="python -m examples.fixed_wing_scramble",
-    ),
-)
 
 
 def page_cases(path: Path) -> tuple[MenuCase, ...]:
@@ -107,7 +87,7 @@ def card(entry: MenuEntry, cases: tuple[MenuCase, ...] | None) -> str:
     )
 
 
-def write_menu(folder: Path, entries: tuple[MenuEntry, ...] = ENTRIES) -> Path:
+def write_menu(folder: Path, entries: tuple[MenuEntry, ...]) -> Path:
     """Write the menu page (`index.html`) into `folder`, next to the viewer pages.
 
     A card whose page exists in `folder` lists the page's cases with their results

@@ -8,12 +8,16 @@ per case (a tab of the viewer).
       A scripted threat: ...
     page: iris_scramble_viewer.html       # the page written into docs/
     subtitle: "generic target · scramble" # the line above the viewer's title
-    menu: true                            # optional: link back to the start menu
     cases: [a-slow.yaml, b-fast.yaml]     # the tabs, in this order
 
-This module reads those files and turns a flown case into the data the viewer
-replays. Like the rest of `viz`, it never runs the physics: whoever flies the
-scenarios (`examples/run_scenarios.py`) hands it the results.
+`scenarios/menu.yaml` lists the folders the start menu shows, in order; their pages
+link back to it.
+
+    pages: [pursuit, generic-scramble, fixed-wing-scramble]
+
+This module reads those files, makes the menu cards and turns a flown case into the
+data the viewer replays. Like the rest of `viz`, it never runs the physics: whoever
+flies the scenarios (`examples/run_scenarios.py`) hands it the results.
 """
 
 from dataclasses import dataclass
@@ -24,12 +28,20 @@ import yaml
 
 from jineta.arena.engagement import Battle, Engagement
 from jineta.arena.scenario import Setup
-from jineta.arena.spec import Reader, ScenarioError, ScenarioSpec, load_scenario
+from jineta.arena.spec import (
+    Reader,
+    ScenarioError,
+    ScenarioSpec,
+    load_scenario,
+    suggest,
+)
 from jineta.arena.world import TrackEntity
 from jineta.jinete.targets import RecordedTrack, TargetTrack
+from viz.menu import MenuEntry
 from viz.viewer import scenario_data, write_viewer
 
 PAGE_FILE = "page.yaml"
+MENU_LIST = "menu.yaml"
 EVERY = 4  # the viewer keeps one sample in 4 (25 Hz at the 100 Hz step)
 THREAT_LABELS = {"fixed_wing": "fixed-wing drone"}  # what the viewer's text calls it
 
@@ -43,7 +55,6 @@ class PageSpec:
     description: str
     page: str  # file name of the viewer page, in docs/
     subtitle: str
-    menu: bool  # the page links back to the start menu
     cases: tuple[Path, ...]  # scenario files, in tab order
 
 
@@ -70,7 +81,6 @@ def load_page(folder: Path | str) -> PageSpec:
         description=r.text("description"),
         page=r.text("page"),
         subtitle=r.text("subtitle"),
-        menu=r.get("menu", True, "bool"),
         cases=tuple(folder / name for name in names),
     )
     r.done()
@@ -78,8 +88,51 @@ def load_page(folder: Path | str) -> PageSpec:
 
 
 def page_folders(root: Path | str) -> list[Path]:
-    """Every folder of `root` with a `page.yaml`, in name order."""
-    return sorted(p.parent for p in Path(root).glob(f"*/{PAGE_FILE}"))
+    """Every folder of `root` with a `page.yaml`: the ones in the menu first, in its
+    order, then the others in name order."""
+    listed = menu_folders(root)
+    others = sorted(p.parent for p in Path(root).glob(f"*/{PAGE_FILE}"))
+    return listed + [folder for folder in others if folder not in listed]
+
+
+def menu_folders(root: Path | str) -> list[Path]:
+    """The folders `menu.yaml` lists, in its order (none if there is no list)."""
+    root = Path(root)
+    path = root / MENU_LIST
+    if not path.is_file():
+        return []
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as error:
+        raise ScenarioError(f"{path}: not valid YAML: {error}") from error
+    r = Reader(data, "", str(path))
+    names = r.get("pages", kind="list")
+    r.done()
+    available = sorted(p.parent.name for p in root.glob(f"*/{PAGE_FILE}"))
+    for name in names:
+        if name not in available:
+            r.fail(
+                f"no scenario folder '{name}'{suggest(str(name), available)}", "pages"
+            )
+    if len(set(names)) != len(names):
+        r.fail("a folder is listed twice", "pages")
+    return [root / name for name in names]
+
+
+def menu_entries(root: Path | str) -> tuple[MenuEntry, ...]:
+    """The cards of the start menu, from the `page.yaml` of each listed folder."""
+    entries = []
+    for folder in menu_folders(root):
+        page = load_page(folder)
+        entries.append(
+            MenuEntry(
+                kind=page.title,
+                description=page.description,
+                page=page.page,
+                command=f"python -m examples.run_scenarios scenarios/{folder.name}",
+            )
+        )
+    return tuple(entries)
 
 
 def load_cases(page: PageSpec) -> list[ScenarioSpec]:
@@ -177,8 +230,11 @@ def case_data(case: Case, every: int = EVERY) -> dict:
     )
 
 
-def write_page(page: PageSpec, cases: list[Case], folder: Path | str) -> Path:
-    """Write the viewer page of a folder of scenarios into `folder` (docs/)."""
+def write_page(
+    page: PageSpec, cases: list[Case], folder: Path | str, menu: bool = False
+) -> Path:
+    """Write the viewer page of a folder of scenarios into `folder` (docs/); with
+    `menu`, the page links back to the start menu."""
     if not cases:
         raise ValueError("a page needs at least one case")
     steps = {case.spec.step for case in cases}
@@ -194,5 +250,5 @@ def write_page(page: PageSpec, cases: list[Case], folder: Path | str) -> Path:
         dt=steps.pop() * EVERY,
         capture_radius=radii.pop(),
         subtitle=page.subtitle,
-        menu="index.html" if page.menu else None,
+        menu="index.html" if menu else None,
     )

@@ -14,10 +14,14 @@ import pytest
 from jineta.arena.engagement import Engagement
 from jineta.core.events import ClosestApproach
 from jineta.jinete.targets import StraightLineTarget, track_positions
-from viz.menu import ENTRIES, MENU_FILE, page_cases, write_menu
+from viz.menu import MENU_FILE, MenuEntry, page_cases, write_menu
 from viz.viewer import read_viewer, scenario_data, write_viewer
 
 TARGET = StraightLineTarget(start=[100.0, 0.0, -50.0], velocity=[-5.0, 0.0, 0.0])
+ENTRIES = (
+    MenuEntry("Kind one", "first page", "one.html", "python -m make one"),
+    MenuEntry("Kind two", "second page", "two.html", "python -m make two"),
+)
 N = 11
 
 
@@ -105,10 +109,6 @@ def test_page_carries_the_subtitle_and_the_menu_link():
         assert meta["menu"] == "index.html"
 
 
-def test_menu_names_the_scenarios_by_threat_type():
-    assert [entry.kind for entry in ENTRIES] == ["Generic target", "Fixed wing"]
-
-
 def test_reading_a_page_gives_back_what_was_written():
     with tempfile.TemporaryDirectory() as folder:
         path = Path(folder) / "viewer.html"
@@ -134,7 +134,7 @@ def test_menu_cases_and_results_come_from_the_page():
             ("A · caught", True),
             ("B · escaped", False),
         ]
-        text = write_menu(folder).read_text(encoding="utf-8")
+        text = write_menu(folder, ENTRIES).read_text(encoding="utf-8")
         caught = text.index("A · caught (detail 0)")
         escaped = text.index("B · escaped (detail 1)")
         assert caught < text.index('class="badge captured"') < escaped
@@ -146,7 +146,7 @@ def test_menu_links_the_pages_that_exist_and_names_the_example_for_the_others():
         folder = Path(folder)
         present, missing = ENTRIES
         write_page(folder / present.page, ("A · caught", True))
-        path = write_menu(folder)
+        path = write_menu(folder, ENTRIES)
         assert path == folder / MENU_FILE
         text = path.read_text(encoding="utf-8")
         assert f'href="{present.page}"' in text

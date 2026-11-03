@@ -12,7 +12,14 @@ import yaml
 
 from examples.run_scenarios import play_folder
 from jineta.arena.spec import ScenarioError
-from viz.pages import load_cases, load_page, page_folders, write_page
+from viz.pages import (
+    load_cases,
+    load_page,
+    menu_entries,
+    menu_folders,
+    page_folders,
+    write_page,
+)
 from viz.viewer import read_viewer
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,19 +27,22 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_every_scenario_file_of_the_repo_loads():
     folders = page_folders(ROOT / "scenarios")
-    assert [f.name for f in folders] == [
-        "fixed-wing-scramble",
-        "generic-scramble",
-        "pursuit",
-    ]
-    pages = {}
+    order = ["pursuit", "generic-scramble", "fixed-wing-scramble"]  # menu.yaml
+    assert [f.name for f in folders] == order
     for folder in folders:
         page = load_page(folder)
-        pages[folder.name] = page
         assert len(load_cases(page)) == len(page.cases) == 2
-    assert pages["pursuit"].page == "iris_pursuit_viewer.html"
-    assert not pages["pursuit"].menu  # the MVP page is not in the menu yet
-    assert pages["fixed-wing-scramble"].menu
+    # the start menu: one card per listed folder, from its page.yaml
+    entries = menu_entries(ROOT / "scenarios")
+    assert [e.kind for e in entries] == [
+        "Generic target · in the air",
+        "Generic target · scramble",
+        "Fixed wing · scramble",
+    ]
+    assert entries[0].page == "iris_pursuit_viewer.html"
+    assert entries[2].command == (
+        "python -m examples.run_scenarios scenarios/fixed-wing-scramble"
+    )
 
 
 def write(folder, name, data):
@@ -97,11 +107,11 @@ def test_a_folder_becomes_a_page_with_one_tab_per_case(tmp_path):
     write(tmp_path, "scramble.yaml", SCRAMBLE)
     write(tmp_path, "drone.yaml", DRONE)
     page, cases = play_folder(tmp_path)
-    path = write_page(page, cases, tmp_path / "docs")
+    path = write_page(page, cases, tmp_path / "docs", menu=True)
     data = read_viewer(path)
 
     assert data["meta"]["subtitle"] == "test"
-    assert data["meta"]["menu"] == "index.html"  # menu: true by default
+    assert data["meta"]["menu"] == "index.html"  # links back to the menu
     assert data["meta"]["dt"] == pytest.approx(0.04)
     scramble, drone = data["scenarios"]
 
@@ -139,3 +149,24 @@ def test_the_cases_of_a_page_share_one_step(tmp_path):
     page, cases = play_folder(tmp_path)
     with pytest.raises(ScenarioError, match="share the step"):
         write_page(page, cases, tmp_path / "docs")
+
+
+def test_the_menu_list_says_which_folders_and_in_what_order(tmp_path):
+    for name in ("b-page", "a-page", "hidden"):
+        (tmp_path / name).mkdir()
+        write(tmp_path / name, "page.yaml", PAGE)
+        write(tmp_path / name, "scramble.yaml", SCRAMBLE)
+        write(tmp_path / name, "drone.yaml", DRONE)
+    assert menu_folders(tmp_path) == []  # no menu.yaml: no cards
+    write(tmp_path, "menu.yaml", {"pages": ["b-page", "a-page"]})
+    assert [f.name for f in menu_folders(tmp_path)] == ["b-page", "a-page"]
+    # the folders of the menu first, in its order; the others still get a page
+    assert [f.name for f in page_folders(tmp_path)] == ["b-page", "a-page", "hidden"]
+    assert len(menu_entries(tmp_path)) == 2
+
+    write(tmp_path, "menu.yaml", {"pages": ["b-pag"]})
+    with pytest.raises(ScenarioError, match="did you mean 'b-page'"):
+        menu_folders(tmp_path)
+    write(tmp_path, "menu.yaml", {"pages": ["a-page", "a-page"]})
+    with pytest.raises(ScenarioError, match="listed twice"):
+        menu_folders(tmp_path)
