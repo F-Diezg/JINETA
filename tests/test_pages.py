@@ -12,7 +12,7 @@ import yaml
 
 from examples.run_scenarios import play_folder
 from jineta.arena.spec import ScenarioError
-from viz.menu import MenuCase
+from viz.menu import MenuEntry, page_cases, write_menu
 from viz.pages import (
     load_cases,
     load_page,
@@ -247,8 +247,22 @@ def test_a_case_with_several_entities_exports_them_all(tmp_path):
     assert case["domes"] == [{"site": [100.0, 0.0, 0.0], "range": 400.0}]
 
 
-def test_the_menu_badge_counts_the_captured_pairs():
-    assert MenuCase("A", "", captured=1).badge == ("captured", "captured")
-    assert MenuCase("A", "", captured=0).badge == ("missed", "missed")
-    assert MenuCase("A", "", captured=2, pairs=3).badge == ("partial", "2/3 captured")
-    assert MenuCase("A", "", captured=3, pairs=3).badge == ("captured", "captured")
+def test_the_menu_shows_how_every_pair_ended(tmp_path):
+    """A case with several pairs lists one row per pair, coloured by its outcome,
+    and the page's strip has one segment per pair."""
+    write(tmp_path, "page.yaml", {**PAGE, "cases": ["two.yaml"]})
+    write(tmp_path, "two.yaml", TWO_PADS)
+    page, cases = play_folder(tmp_path)
+    docs = tmp_path / "docs"
+    write_page(page, cases, docs)
+    entry = MenuEntry("Two", "test", page.page, "python -m make")
+    (case,) = page_cases(docs / page.page)
+    assert [(p.label, p.outcome) for p in case.pairs] == [
+        ("n → a", "open"),
+        ("s → b", "open"),
+    ]
+    text = write_menu(docs, (entry,)).read_text(encoding="utf-8")
+    assert text.count('<tr class="pair">') == 2
+    assert text.count('<span class="o-open"></span>') == 2  # the strip
+    assert "0 of 2 pairs captured, 1 case" in text
+    assert text.count('class="result o-open">still open') == 2

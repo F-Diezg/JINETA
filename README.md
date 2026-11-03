@@ -153,8 +153,9 @@ was destroyed by someone else loses it.
 The new **two pads** page shows it: in case A, three threats against two pads, one
 Iris assigned to each (two caught, one escapes); in case B, two Iris from different
 pads chase the same loitering drone, one catches it and the other is left with no
-target. The viewer draws every vehicle and lets you choose which pair to follow
-(key **N**).
+target. The viewer draws every vehicle and shows every pair's range, status and
+closest approach at once; clicking a pair (or key **N**) moves the camera and the
+detailed telemetry to it. The start menu lists every case and pair with its result.
 
 ```powershell
 python -m examples.run_scenarios          # every scenario folder, then the menu

@@ -131,14 +131,18 @@ def test_menu_cases_and_results_come_from_the_page():
         write_page(folder / entry.page, ("A · caught", True), ("B · escaped", False))
         cases = page_cases(folder / entry.page)
         assert [(c.name, c.captured) for c in cases] == [
-            ("A · caught", True),
-            ("B · escaped", False),
+            ("A · caught", 1),
+            ("B · escaped", 0),
         ]
+        assert cases[1].pairs[0].distance == 3.0  # the closest approach of the page
         text = write_menu(folder, ENTRIES).read_text(encoding="utf-8")
-        caught = text.index("A · caught (detail 0)")
-        escaped = text.index("B · escaped (detail 1)")
-        assert caught < text.index('class="badge captured"') < escaped
-        assert escaped < text.index('class="badge missed"')
+        caught = text.index("<b>A · caught</b><small>detail 0</small>")
+        escaped = text.index("<b>B · escaped</b><small>detail 1</small>")
+        assert caught < text.index('class="result o-captured">captured') < escaped
+        assert escaped < text.index('class="result o-missed">missed')
+        assert "1 of 2 pairs captured, 2 cases" in text
+        assert "<b>1</b> scenario page, <b>2</b> cases: <b>1</b> of 2" in text
+        assert "1 more page is not generated" in text  # ENTRIES[1]
 
 
 def test_menu_links_the_pages_that_exist_and_names_the_example_for_the_others():

@@ -202,11 +202,15 @@ code should be clear and every concept explained before it is used.
 - **Viewer pages and the start menu:** `docs/index.html` (written by
   `viz.menu.write_menu` from the scenario files) lists the scenario pages by type of
   threat and start ("Generic target · scramble", "Fixed wing · scramble", ...), never
-  by phase number; the cases and their captured / missed badges are read from the
+  by phase number; the cases and how each of their pairs ended are read from the
   pages themselves. The export says what the target is (`target_kind`: "generic" or
   "fixed_wing") and may carry its attitude. A case with several entities adds
   `others` (every entity outside the first pair), `pairs` (each pair and its end) and
-  `domes`; a case with one pair is exported exactly as before.
+  `domes`; a case with one pair is exported exactly as before. In the viewer, the key
+  data of every pair (range, status, closest approach) is always shown at once;
+  choosing a pair only moves the camera and the detailed telemetry to it. The menu
+  lists, for each page, every case and every pair with its result and closest
+  approach.
 - **Viewers read exported data in the simulator's conventions** (NED, quaternion
   body → NED, SI). Any change of axes happens inside the viewer, never in the
   export: the three.js viewer maps NED to (East, Up, −North).
@@ -372,9 +376,14 @@ alert, not on any threat's (step 7).
    MVP page has its card and links back. Checked in headless Chromium; the author
    checks pywebview.
 7. ✅ **Several entities in the viewer, and a scenario that needs them**
-   (`scenarios/two-pads`): every vehicle drawn, a pair selector (key N), every alert
-   dome; the menu badge counts the captured pairs.
+   (`scenarios/two-pads`): every vehicle drawn, every alert dome, every pair's data at
+   once in a pair board (clicking a row, or key N, follows that pair).
 8. ✅ **Close the phase**: this document and the README.
+
+After the close, at the author's request (he tried the app): in a case with several
+pairs the closest approach and the status were only visible for the selected pair, so
+every pair's key data is now always on screen, and the start menu was redesigned to
+read like the index of a test campaign.
 
 Result: three threats against two pads (case A): the north Iris catches the slow
 scripted threat (0.49 m at T+61.02 s, launched T+33.83 s), a south Iris the
@@ -895,6 +904,21 @@ Phase 8 (scenarios and several entities):
   the old code, so the figure differs only in the font, not in its data.
 - For the browser checks Claude's workspace cannot reach the CDN, raw GitHub files
   or the npm registry; a sparse `git clone` of three.js r160 does work.
+- **Every pair at once, the selection only for detail** (asked by the author after
+  trying the app): the pair board lists every pair with its live range, status and
+  closest approach; the scene shows every pair's closest-approach marker (once it has
+  happened) and line of sight (while it is active); the range plot draws every
+  pair's curve, the followed one bright; the event log merges every pair's events.
+  Choosing a pair moves the camera (Follow) and the right-hand telemetry to it. The
+  status rule is one function for the chip and the board.
+- **The start menu reads like the index of a test campaign**, not like a game
+  screen: no scanlines or corner ticks, sentence case, IBM Plex Sans for the text
+  (Plex Mono only for the numbers), the same colour tokens and palettes as the
+  viewer. One block per page: what it is and an outcome strip on the left (one
+  segment per pair, coloured by how it ended: captured, missed or escaped, target
+  lost, still open), the cases on the right with every pair's result and closest
+  approach, and a line at the top that counts them all (6 of 11 pairs captured).
+  Checked at desktop and phone width (no sideways scroll) in both palettes.
 
 ## 7. Current state
 
@@ -1048,13 +1072,16 @@ Phase 8 (scenarios and several entities):
   replaces the `"__ENGAGEMENT_DATA__"` placeholder with the data. Draws a scripted
   target as a dart and a fixed wing as an aircraft with its attitude (and its bank
   in the telemetry); "Menu" button and key M when the page has a menu. With several
-  entities: every vehicle with its track and label, every alert dome, a pair
-  selector (key N) that switches the telemetry, range plot, text and event log.
-- `viz/menu.py` — `MenuEntry(kind, description, page, command)`, `MenuCase(name,
-  detail, captured, pairs)` (`badge`: captured / missed / "2/3 captured"),
-  `page_cases(path)` (read from the page), `card`, `write_menu(folder, entries)`
-  (writes `index.html` from `viz/menu_template.html`; a missing page shows the
-  command that writes it).
+  entities: every vehicle with its track and label, every alert dome, and a pair
+  board with every pair's range, status and closest approach (its marker and line of
+  sight in the scene, its curve on the range plot, its events in the log); clicking a
+  row (or key N) moves the camera and the detailed telemetry to that pair.
+- `viz/menu.py` — `OUTCOMES` (colour and words of each outcome), `MenuEntry(kind,
+  description, page, command)`, `MenuPair(label, outcome, distance, time)`,
+  `MenuCase(name, detail, pairs)` (`captured`), `page_cases(path)` (read from the
+  page), `case_rows`, `card` (one page's block: outcome strip, cases table),
+  `tally`, `write_menu(folder, entries)` (writes `index.html` from
+  `viz/menu_template.html`; a missing page shows the command that writes it).
 - `viz/app.py` — `show(path)` (desktop window or browser), `MENU` (the start menu,
   opened by `python -m viz.app` with no page), `window_requested`, `main`.
 - Tests (463 passing, ruff check + ruff format clean):
@@ -1188,8 +1215,8 @@ Phase 8 (scenarios and several entities):
     fixed-wing label and attitude); page mistakes say where; the cases of a page
     share one step; the menu list says which folders and in what order (errors with
     suggestions); a case with several entities exports them all (`others`, `pairs`,
-    `domes`, an interceptor that never launched); the menu badge counts the captured
-    pairs.
+    `domes`, an interceptor that never launched); the menu lists every pair of a case
+    with its outcome and a strip segment for each.
   - fixed wing (23): no air, no load; reference condition at α = 0 exact; lift
     perpendicular to the air and drag along it (α = −5, 4, 12° — 3 cases); loads
     scale with the dynamic pressure (speed, density); lift-curve slope = C_L_alpha;
@@ -1244,8 +1271,9 @@ Phase 8 (scenarios and several entities):
   - viz viewer and menu (7): a scripted target has no attitude; a fixed-wing target
     carries its attitude, downsampled; rejects an unknown kind or wrong attitudes;
     the page carries the subtitle and the menu link (none by default); reading a page
-    gives back what was written; the menu's cases and results come from the page; it
-    links the pages that exist and names the command for the others.
+    gives back what was written; the menu's cases, results and closest approaches
+    come from the page, with the strip note and the count at the top; it links the
+    pages that exist and names the command for the others.
 - Examples (all run, `python -m examples.<name>`):
   - `projectile_drag.py` — vacuum vs drag.
   - `density_comparison.py` — constant vs exponential vs ISA density (~1.7 km apogee:

@@ -3,7 +3,8 @@
 title: Two pads · several threats
 description: >-
   Two launch pads, several Iris and several threats in the same sky, each Iris
-  assigned to one threat in the file. Choose which pair to follow.
+  assigned to one threat in the file. Every pair's range, status and closest
+  approach at once; click one to follow it.
 page: two_pads_viewer.html
 subtitle: "two pads · several threats"
 cases: [a-three-threats.yaml, b-two-on-one.yaml]

@@ -129,9 +129,27 @@ a.ctl:focus-visible { outline: 1px solid var(--event); outline-offset: 2px; }
 .tab small { font-family: var(--font-data); font-weight: 400; font-size: 10.5px; letter-spacing: 0; text-transform: none; }
 .tab[aria-selected="true"] { color: var(--ink); border-color: var(--friendly); background: var(--friendly-wash); }
 .tab:hover { color: var(--ink); }
-.pairs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
-.pairs button { font-size: 10.5px; padding: 3px 7px; }
-.pairs .gone { opacity: 0.6; }
+#info.multi { width: min(400px, calc(100vw - var(--gutter-l) - var(--gutter-r))); }
+#info.multi #log { max-height: 26vh; overflow-y: auto; }
+/* every pair of a case at a glance; clicking a row follows that pair */
+.board { display: grid; gap: 2px; font-size: 11.5px; }
+.board .row {
+  display: grid; grid-template-columns: 1fr 58px 104px 74px; gap: 6px; align-items: baseline;
+  padding: 4px 6px; border: 1px solid transparent; cursor: pointer; color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.board .row:hover { border-color: var(--line); }
+.board .row[aria-pressed="true"] { border-color: var(--friendly); background: var(--friendly-wash); }
+.board .row:focus-visible { outline: 1px solid var(--event); outline-offset: 1px; }
+.board .head { cursor: default; color: var(--dim); font-size: 10.5px; padding-bottom: 2px; }
+.board .head:hover { border-color: transparent; }
+.board .num { text-align: right; }
+.board .st[data-state="standby"] { color: var(--event); }
+.board .st[data-state="closing"] { color: var(--friendly); }
+.board .st[data-state="opening"], .board .st[data-state="miss"] { color: var(--hostile); }
+.board .st[data-state="intercept"] { color: var(--good); }
+.board .cpa { color: var(--dim); }
+.board .cpa.seen { color: var(--event); }
 .tag.o { opacity: 0.6; }
 .tab:focus-visible, button:focus-visible, input:focus-visible { outline: 1px solid var(--event); outline-offset: 2px; }
 #summary { margin: 0; color: var(--ink); line-height: 1.5; font-size: 12px; }
@@ -238,7 +256,7 @@ button.ctl[aria-pressed="true"] { border-color: var(--friendly); color: var(--fr
   <div class="eyebrow" id="eyebrow">Jineta · phase 7 MVP · pure pursuit</div>
   <h1>Engagement <span>viewer</span></h1>
   <div class="tabs" role="tablist" id="tabs"></div>
-  <div class="pairs" role="group" aria-label="Pair to follow" id="pairs" hidden></div>
+  <div class="board" role="group" aria-label="Every pair; click one to follow it" id="pairs" hidden></div>
   <p id="summary"></p>
   <ol id="log"></ol>
 </section>
@@ -288,7 +306,7 @@ button.ctl[aria-pressed="true"] { border-color: var(--friendly); color: var(--fr
       <button class="ctl" id="pal-amber" type="button" aria-pressed="false" title="Amber CRT palette (P)">Amber</button>
     </div>
     <span class="spacer"></span>
-    <span id="hint">Drag: orbit · Wheel: zoom · Right-drag: pan · Space · ← → · P: palette<span id="hint-pairs" hidden> · N: next pair</span><span id="hint-menu" hidden> · M: menu</span></span>
+    <span id="hint">Drag: orbit · Wheel: zoom · Right-drag: pan · Space · ← → · P: palette<span id="hint-pairs" hidden> · N: follow the next pair</span><span id="hint-menu" hidden> · M: menu</span></span>
   </div>
   <div id="track">
     <canvas id="spark" aria-hidden="true"></canvas>
@@ -678,6 +696,83 @@ const ui = {
   tspeed: el("tspeed"), talt: el("talt"), tbank: el("tbank"), scrub: el("scrub"), play: el("play"),
 };
 
+// [state, long label, short label] of a pair at the current time
+function statusOf(w, closure) {
+  const passed = time >= w.closest.time;
+  const ended = w.pairCount && time >= w.end_time;
+  if (w.launch && time < w.launch.time) return ["standby", "STANDBY · ON THE PAD", "on the pad"];
+  if (passed && w.captured) return ["intercept", "INTERCEPT", "captured"];
+  if (ended && w.outcome === "target lost") return ["miss", "TARGET LOST · DESTROYED BY ANOTHER", "target lost"];
+  if (ended && w.outcome === "escaped") return ["miss", "MISS · TARGET ESCAPED", "escaped"];
+  if (passed) return ["miss", "MISS · TARGET ESCAPING", "missed"];
+  if (closure >= 0) return ["closing", "CLOSING", "closing"];
+  return ["opening", "OPENING", "opening"];
+}
+
+// every pair of the tab: a row of the board, and (for the pairs not followed) a CPA
+// marker and a line of sight in the scene
+let board = [];
+function buildBoard() {
+  for (const b of board) { if (b.marker) dispose(b.marker); if (b.los) dispose(b.los); if (b.tag) b.tag.remove(); }
+  const views = SCEN[tab].views, box = el("pairs");
+  box.innerHTML = ""; box.hidden = views.length < 2;
+  el("info").classList.toggle("multi", views.length > 1);
+  board = [];
+  if (views.length < 2) return;
+  const head = document.createElement("div");
+  head.className = "row head";
+  head.innerHTML = "<span>Pair</span><span class=num>Range</span><span>Status</span><span class=num>CPA</span>";
+  box.appendChild(head);
+  board = views.map((w, j) => {
+    const row = document.createElement("div");
+    row.className = "row"; row.tabIndex = 0; row.setAttribute("role", "button");
+    row.title = `Follow ${w.interceptor.id} → ${w.target.id}`;
+    row.innerHTML = `<span>${w.interceptor.id} → ${w.target.id}</span><span class=num></span><span class=st></span><span class="num cpa"></span>`;
+    row.addEventListener("click", () => selectView(j, true));
+    row.addEventListener("keydown", (e) => { if (e.key === "Enter") selectView(j, true); });
+    box.appendChild(row);
+    const [, range, st, cpaCell] = row.children;
+    const entry = { w, j, row, range, st, cpaCell };
+    if (j !== view) {   // the followed pair has the main marker and line of sight
+      entry.marker = new THREE.Mesh(new THREE.RingGeometry(3.2, 3.8, 4),
+        tint(new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.7, side: THREE.DoubleSide, depthWrite: false }), "event"));
+      entry.marker.position.copy(w.caI.clone().add(w.caT).multiplyScalar(0.5));
+      entry.los = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
+        tint(new THREE.LineDashedMaterial({ dashSize: 4, gapSize: 4, transparent: true, opacity: 0.3 }), "ink"));
+      entry.tag = tag("e o", `CPA<small>${w.closest.distance.toFixed(2)} m</small>`);
+      scene.add(entry.marker, entry.los);
+    }
+    return entry;
+  });
+}
+function updateBoard(i, a) {
+  for (const b of board) {
+    const w = b.w, pI = lerp(w.ip, i, a), pT = lerp(w.tp, i, a);
+    const gone = (e) => e.destroyed_at != null && time > e.destroyed_at;
+    const vI = gone(w.interceptor) ? new THREE.Vector3() : lerp(w.iv, i, a);
+    const vT = gone(w.target) ? new THREE.Vector3() : lerp(w.tv, i, a);
+    const r = pI.distanceTo(pT);
+    const closure = r > 1e-6 ? -pT.clone().sub(pI).dot(vT.clone().sub(vI)) / r : 0;
+    const [state, , short] = statusOf(w, closure);
+    const active = state !== "standby" && !(w.pairCount && time >= w.end_time);
+    b.row.setAttribute("aria-pressed", String(b.j === view));
+    b.range.textContent = `${fmtRange(r)} m`;
+    b.st.dataset.state = state; b.st.textContent = short;
+    const seen = time >= w.closest.time;
+    b.cpaCell.classList.toggle("seen", seen);
+    b.cpaCell.textContent = seen ? `${fmtRange(w.closest.distance)} m` : "—";
+    if (b.marker) {
+      b.marker.visible = seen;
+      b.los.visible = active;
+      if (active) {
+        const pa = b.los.geometry.attributes.position;
+        pa.setXYZ(0, pI.x, pI.y, pI.z); pa.setXYZ(1, pT.x, pT.y, pT.z); pa.needsUpdate = true;
+        b.los.computeLineDistances();
+      }
+    }
+  }
+}
+
 const prevIris = new THREE.Vector3();
 function update() {
   const [i, a] = locate(time);
@@ -747,14 +842,9 @@ function update() {
     ui.tbank.innerHTML = `${fmt(Math.abs(bank) < 0.05 ? 0 : bank)} <small>deg</small>`;  // no "-0.0"
   }
 
-  let state, label;
-  if (S.launch && time < S.launch.time) { state = "standby"; label = "STANDBY · ON THE PAD"; }
-  else if (passed && S.captured) { state = "intercept"; label = "INTERCEPT"; }
-  else if (S.outcome === "target lost" && time >= S.end_time) { state = "miss"; label = "TARGET LOST · DESTROYED BY ANOTHER"; }
-  else if (passed) { state = "miss"; label = "MISS · TARGET ESCAPING"; }
-  else if (closure >= 0) { state = "closing"; label = "CLOSING"; }
-  else { state = "opening"; label = "OPENING"; }
+  const [state, label] = statusOf(S, closure);
   ui.status.dataset.state = state; ui.status.textContent = label;
+  updateBoard(i, a);
 
   cpa.visible = passed;
   irisTag.querySelector("small").textContent = `${fmt(vI.length())} m/s`;
@@ -781,6 +871,12 @@ function placeTags() {
     x.model.scale.setScalar(Math.max(1, camDist(x.model.position) * 0.04));
     place(x.tag, x.model.position);
   }
+  for (const b of board) {
+    if (!b.marker) continue;
+    b.marker.quaternion.copy(camera.quaternion);
+    b.marker.scale.setScalar(Math.max(0.3, camDist(b.marker.position) * 0.006));
+    place(b.tag, b.marker.position, b.marker.visible);
+  }
   place(cpaTag, cpa.position, cpa.visible);
   place(losTag, iris.position.clone().lerp(threat.position, 0.5), iris.position.distanceTo(threat.position) > 25);
   place(northTag, rings.position.clone().add(new THREE.Vector3(0, 0, -490)));
@@ -800,7 +896,8 @@ function drawSpark() {
   sctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   sctx.clearRect(0, 0, w, h);
   const top = 4, bottom = h - 12;
-  const lo = Math.log10(0.2), hi = Math.log10(Math.max(...S.range) * 1.3);
+  const peers = board.filter((b) => b.j !== view).map((b) => b.w);
+  const lo = Math.log10(0.2), hi = Math.log10(Math.max(...S.range, ...peers.flatMap((w) => w.range)) * 1.3);
   const X = (t) => (t / S.duration) * w;
   const Y = (r) => bottom - ((Math.log10(Math.max(r, 0.2)) - lo) / (hi - lo)) * (bottom - top);
 
@@ -820,7 +917,16 @@ function drawSpark() {
   sctx.fillText(`capture ${DATA.meta.capture_radius} m`, w - 4, Y(DATA.meta.capture_radius) - 7);
   sctx.textAlign = "left";
 
-  // whole curve dim, traveled part bright, with a soft area under it
+  // the other pairs: thin and dim, with their closest approach
+  for (const w of peers) {
+    sctx.strokeStyle = COLOR.dim; sctx.globalAlpha = 0.45; sctx.lineWidth = 1;
+    sctx.beginPath(); w.t.forEach((t, k) => (k ? sctx.lineTo(X(t), Y(w.range[k])) : sctx.moveTo(X(t), Y(w.range[k])))); sctx.stroke();
+    sctx.globalAlpha = 0.8; sctx.fillStyle = COLOR.event;
+    const px = X(w.closest.time), py = Y(w.closest.distance);
+    sctx.beginPath(); sctx.moveTo(px, py - 3.5); sctx.lineTo(px + 3.5, py); sctx.lineTo(px, py + 3.5); sctx.lineTo(px - 3.5, py); sctx.closePath(); sctx.fill();
+    sctx.globalAlpha = 1;
+  }
+  // the followed pair: whole curve dim, traveled part bright, with a soft area under it
   const path = () => { sctx.beginPath(); S.t.forEach((t, k) => (k ? sctx.lineTo(X(t), Y(S.range[k])) : sctx.moveTo(X(t), Y(S.range[k])))); };
   sctx.strokeStyle = COLOR.friendly; sctx.globalAlpha = 0.3; sctx.lineWidth = 1.2; path(); sctx.stroke();
   sctx.save(); sctx.beginPath(); sctx.rect(0, 0, X(time), h); sctx.clip();
@@ -862,7 +968,10 @@ function describePair(s, cpaText) {
     "passed": `It misses by ${cpaText} and the range opens past the margin.`,
     "interceptor lost": `${me} is destroyed in another pair at T+${s.end_time.toFixed(2)}; closest approach ${cpaText}.`,
   }[s.outcome] || `Still chasing when the run ends; closest approach ${cpaText}.`;
-  return `Following <b>${me} → ${it}</b>, one of ${s.pairCount} pairs. ` + start + end;
+  const views = SCEN[tab].views, count = (o) => views.filter((w) => w.outcome === o).length;
+  const tally = [["captured", count("captured")], ["escaped", count("escaped")], ["target lost", count("target lost")],
+    ["passed", count("passed")], ["still open", count("open")]].filter(([, n]) => n).map(([o, n]) => `${n} ${o}`).join(", ");
+  return `${s.pairCount} pairs: ${tally}. Following <b>${me} → ${it}</b>: ` + start + end;
 }
 function describe(s) {
   const top = s.ispeed[s.peak];
@@ -884,7 +993,23 @@ function describe(s) {
   return `Ordered to ${s.commanded_speed} m/s against a ${s.target_speed} m/s threat, the Iris tops out at ${top.toFixed(1)} m/s. ` +
     `It crosses the threat nearly head-on, misses by <b>${s.closest.distance.toFixed(2)} m at T+${s.closest.time.toFixed(2)}</b>, and has to turn around behind a faster target.`;
 }
+function pairEvents(w) {
+  const who = `${w.interceptor.id} → ${w.target.id}`;
+  const events = [];
+  if (w.launch) events.push({ t: w.launch.time, text: `${who}: ${w.target.id} inside ${w.launch.range} m, launch` });
+  events.push({ t: w.closest.time, key: w.captured, text: w.captured
+    ? `${who}: intercept, CPA ${w.closest.distance.toFixed(2)} m`
+    : `${who}: closest approach ${w.closest.distance.toFixed(2)} m` });
+  const end = { "target lost": "target destroyed by another interceptor", "escaped": "target left the dome",
+    "passed": "range opening past the margin", "interceptor lost": "interceptor destroyed in another pair" }[w.outcome];
+  if (end) events.push({ t: w.end_time, text: `${who}: ${end}` });
+  return events;
+}
 function buildLog(s) {
+  if (s.pairCount) return showLog([
+    { t: 0, text: `${s.pairCount} pairs, the assignment fixed in the scenario file` },
+    ...SCEN[tab].views.flatMap(pairEvents),
+  ]);
   const events = s.launch ? [
     { t: 0, text: `On the pad, rotors stopped. Threat at ${fmtRange(s.range[0])} m` },
     { t: s.launch.time, key: true, text: `Threat inside ${s.launch.range} m: launch` },
@@ -909,6 +1034,9 @@ function buildLog(s) {
       ? `Threat outside ${s.launch.range} m: run stopped`
       : "Range opening: run stopped" });
   }
+  showLog(events);
+}
+function showLog(events) {
   events.sort((a, b) => a.t - b.t);
   const ol = el("log"); ol.innerHTML = "";
   logItems = events.map((e) => {
@@ -964,24 +1092,13 @@ let tab = 0, view = 0;
 function selectScenario(k) {
   tab = k;
   [...tabs.children].forEach((b, j) => b.setAttribute("aria-selected", String(j === k)));
-  const box = el("pairs"); box.innerHTML = "";
-  const views = SCEN[k].views;
-  box.hidden = views.length < 2;
-  el("hint-pairs").hidden = views.length < 2;
-  views.forEach((w, j) => {
-    const b = document.createElement("button");
-    b.className = "ctl"; b.type = "button";
-    b.textContent = `${w.interceptor.id} → ${w.target.id} · ${w.captured ? "captured" : w.outcome}`;
-    if (!w.captured) b.classList.add("gone");
-    b.addEventListener("click", () => selectView(j, true));
-    box.appendChild(b);
-  });
+  el("hint-pairs").hidden = SCEN[k].views.length < 2;
   selectView(0, false);
 }
 function selectView(j, keepTime) {
   view = j;
   S = SCEN[tab].views[j];
-  [...el("pairs").children].forEach((b, k) => b.setAttribute("aria-pressed", String(k === j)));
+  buildBoard();
   dart.visible = !S.tq; plane.visible = !!S.tq;
   rings.position.set(S.ip[0].x, 0, S.ip[0].z);
   const kind = S.target_kind === "fixed_wing" ? "Fixed wing" : "Threat";
@@ -997,7 +1114,7 @@ function selectView(j, keepTime) {
   if (!keepTime) {
     time = 0; playing = false; ui.play.textContent = "Play";
     overview();
-  }
+  } else if (follow) setFollow(true);   // the camera moves to the newly followed Iris
   update();
 }
 
