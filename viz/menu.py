@@ -87,11 +87,14 @@ def page_cases(path: Path) -> tuple[MenuCase, ...]:
                 )
                 for pair in scenario["pairs"]
             )
-        else:  # one pair: the case itself
+        else:  # one pair: the case itself; a run that hit its time limit is open
+            outcome = "captured" if scenario["captured"] else "missed"
+            if scenario.get("outcome") == "open":
+                outcome = "open"
             pairs = (
                 MenuPair(
                     label="",
-                    outcome="captured" if scenario["captured"] else "missed",
+                    outcome=outcome,
                     distance=scenario["closest"]["distance"],
                     time=scenario["closest"]["time"],
                 ),

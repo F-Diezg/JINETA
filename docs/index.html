@@ -147,7 +147,7 @@ footer code { font-family: var(--font-data); color: var(--ink); }
       where its threat is, flies straight at it (pure pursuit) and is assigned it by
       hand in the scenario file, with no coordination between them. Each page replays
       its cases in 3D.</p>
-    <p class="tally"><b>4</b> scenario pages, <b>8</b> cases: <b>6</b> of 11 interceptor → threat pairs end in a capture.</p>
+    <p class="tally"><b>5</b> scenario pages, <b>12</b> cases: <b>8</b> of 15 interceptor → threat pairs end in a capture.</p>
     <ul class="legend" aria-label="Outcome colours">
       <li class="o-captured">Captured</li>
       <li class="o-missed">Missed or escaped</li>
@@ -226,6 +226,25 @@ footer code { font-family: var(--font-data); color: var(--ink); }
         <tr><td class="case" colspan="3"><b>B · two on one</b><small>a drone loitering between the pads</small></td></tr>
         <tr class="pair"><td class="case"><small>iris-n → drone</small></td><td class="result o-captured">captured</td><td class="num">0.49 m at T+71.3 s</td></tr>
         <tr class="pair"><td class="case"><small>iris-s → drone</small></td><td class="result o-lost">target lost</td><td class="num">48.05 m at T+71.3 s</td></tr>
+      </tbody>
+    </table>
+  </article>
+  <article class="page">
+    <div class="about">
+      <h2>Radar · scramble</h2>
+      <p>A short-range radar on the pad tracks the threat with a Kalman filter. Each threat is flown twice: the Iris guided by the truth, and by the radar&#x27;s track, which also raises the alert.</p>
+      <div class="strip" aria-hidden="true"><span class="o-captured"></span><span class="o-missed"></span><span class="o-captured"></span><span class="o-open"></span></div>
+      <span class="strip-note">2 of 4 pairs captured, 4 cases</span>
+      <a class="ctl open" href="radar_scramble_viewer.html">Open the viewer</a>
+    </div>
+    <table>
+      <colgroup><col class="c-case"><col class="c-result"><col class="c-cpa"></colgroup>
+      <thead><tr><th>Case</th><th>Result</th><th class="num">Closest approach</th></tr></thead>
+      <tbody>
+        <tr><td class="case"><b>A · slow, perfect</b><small>8 m/s turning, guided by the truth</small></td><td class="result o-captured">captured</td><td class="num">0.48 m at T+36.9 s</td></tr>
+        <tr><td class="case"><b>B · slow, radar</b><small>8 m/s turning, guided by the radar</small></td><td class="result o-missed">missed</td><td class="num">0.82 m at T+64.2 s</td></tr>
+        <tr><td class="case"><b>C · loiter, perfect</b><small>18 m/s orbit, guided by the truth</small></td><td class="result o-captured">captured</td><td class="num">0.48 m at T+62.1 s</td></tr>
+        <tr><td class="case"><b>D · loiter, radar</b><small>18 m/s orbit, guided by the radar</small></td><td class="result o-open">still open</td><td class="num">6.01 m at T+125.2 s</td></tr>
       </tbody>
     </table>
   </article>

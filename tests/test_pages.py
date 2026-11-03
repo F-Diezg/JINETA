@@ -5,6 +5,7 @@ broken file fails the tests rather than the next run of the examples. The cases
 flown here are short made-up ones: the real ones are flown by the examples.
 """
 
+import copy
 from pathlib import Path
 
 import pytest
@@ -28,11 +29,17 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_every_scenario_file_of_the_repo_loads():
     folders = page_folders(ROOT / "scenarios")
-    order = ["pursuit", "generic-scramble", "fixed-wing-scramble", "two-pads"]
+    order = [
+        "pursuit",
+        "generic-scramble",
+        "fixed-wing-scramble",
+        "two-pads",
+        "radar-scramble",
+    ]
     assert [f.name for f in folders] == order
     for folder in folders:
         page = load_page(folder)
-        assert len(load_cases(page)) == len(page.cases) == 2
+        assert len(load_cases(page)) == len(page.cases) >= 2
     # the start menu: one card per listed folder, from its page.yaml
     entries = menu_entries(ROOT / "scenarios")
     assert [e.kind for e in entries] == [
@@ -40,6 +47,7 @@ def test_every_scenario_file_of_the_repo_loads():
         "Generic target · scramble",
         "Fixed wing · scramble",
         "Two pads · several threats",
+        "Radar · scramble",
     ]
     assert entries[0].page == "iris_pursuit_viewer.html"
     assert entries[2].command == (
@@ -266,3 +274,21 @@ def test_the_menu_shows_how_every_pair_ended(tmp_path):
     assert text.count('<span class="o-open"></span>') == 2  # the strip
     assert "0 of 2 pairs captured, 1 case" in text
     assert text.count('class="result o-open">still open') == 2
+
+
+def test_a_case_says_how_it_ended_and_what_guided_its_interceptor(tmp_path):
+    """Every case exports its first pair's outcome and end time, and whether the
+    interceptor flew on the truth or on a radar's track (the viewer tells it)."""
+    radar = copy.deepcopy(SCRAMBLE)
+    radar["sites"][0]["radar"] = "short_range"
+    radar["interceptors"][0]["knowledge"] = "radar"
+    write(tmp_path, "page.yaml", PAGE)
+    write(tmp_path, "scramble.yaml", radar)
+    write(tmp_path, "drone.yaml", DRONE)
+    page, cases = play_folder(tmp_path)
+    data = read_viewer(write_page(page, cases, tmp_path / "docs"))
+    scramble, drone = data["scenarios"]
+    assert (scramble["knowledge"], drone["knowledge"]) == ("radar", "perfect")
+    assert drone["outcome"] == "open"  # 1 s from hover: the run's time limit
+    assert drone["end_time"] == pytest.approx(1.0)
+    assert scramble["outcome"] == cases[0].result.outcome

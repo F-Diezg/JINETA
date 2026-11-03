@@ -310,6 +310,10 @@ def case_data(case: Case, every: int = EVERY) -> dict:
         "detail": case.spec.detail,
         "target_speed": case.threat.speed,
         "commanded_speed": case.interceptor.speed,
+        # how the first pair ended and when, and what guided the interceptor
+        "outcome": case.result.outcome,
+        "end_time": case.result.end_time,
+        "knowledge": case.interceptor.knowledge,
     }
     if case.threat.kind in THREAT_LABELS:
         info["threat_label"] = THREAT_LABELS[case.threat.kind]

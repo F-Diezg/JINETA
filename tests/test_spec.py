@@ -10,7 +10,13 @@ import math
 import pytest
 import yaml
 
-from jineta.arena.spec import ScenarioError, load_scenario, parse_scenario
+from jineta.arena.sensing import TrackSettings
+from jineta.arena.spec import (
+    DEFAULT_TRACKING,
+    ScenarioError,
+    load_scenario,
+    parse_scenario,
+)
 
 FULL = """
 name: "Two pads"
@@ -119,6 +125,29 @@ def test_defaults_of_a_minimal_file():
     assert spec.environment.atmosphere == "isa"
     assert spec.environment.wind is None
     assert spec.sites == ()
+    assert spec.seed == 0
+    assert spec.interceptors[0].knowledge == "perfect"
+    assert spec.threats[0].tracking == DEFAULT_TRACKING
+
+
+def test_reads_radars_knowledge_tracking_and_seed():
+    """Phase 9: a radar on a site, an interceptor guided by it, how a threat is
+    tracked, and the seed of the sensor noise; everything else keeps its default."""
+    data = base()
+    data["seed"] = 12
+    data["sites"][0]["radar"] = "short_range"
+    data["interceptors"][0]["knowledge"] = "radar"
+    data["threats"][2]["tracking"] = {"process_noise": 4}
+    data["threats"][1]["tracking"] = {"process_noise": 0.5, "speed_prior": 20}
+    spec = parse_scenario(data)
+    assert spec.seed == 12
+    assert [s.radar for s in spec.sites] == ["short_range", None]
+    assert [i.knowledge for i in spec.interceptors] == ["radar", "perfect"]
+    assert [t.tracking for t in spec.threats] == [
+        DEFAULT_TRACKING,
+        TrackSettings(process_noise=0.5, speed_prior=20.0),
+        TrackSettings(process_noise=4.0, speed_prior=DEFAULT_TRACKING.speed_prior),
+    ]
 
 
 def edit(path, value):
@@ -179,6 +208,37 @@ DELETE = object()
         (edit(["threats"], {"id": "x"}), "threats: must be a list"),
         (edit(["duration"], 0.001), "shorter than one step"),
         (edit(["detail"], 5), "detail: must be a text"),
+        (
+            edit(["sites", 0, "radar"], "long_range"),
+            "sites[0].radar: unknown radar 'long_range'; did you mean 'short_range'?",
+        ),
+        (
+            edit(["interceptors", 0, "knowledge"], "radar"),
+            "interceptors[0]: knowledge: radar needs the interceptor on a site with",
+        ),
+        (
+            edit(["interceptors", 1, "knowledge"], "radar"),
+            "interceptors[1]: knowledge: radar needs",
+        ),
+        (
+            edit(["interceptors", 0, "knowledge"], "psychic"),
+            "unknown knowledge 'psychic'",
+        ),
+        (edit(["seed"], -1), "seed: must be a whole number >= 0"),
+        (edit(["seed"], 1.5), "seed: must be a whole number >= 0"),
+        (edit(["seed"], True), "seed: must be a whole number >= 0"),
+        (
+            edit(["threats", 0, "tracking"], {"process_noise": -1}),
+            "threats[0].tracking.process_noise: must be >= 0",
+        ),
+        (
+            edit(["threats", 0, "tracking"], {"speed_prior": 0}),
+            "threats[0].tracking.speed_prior: must be > 0",
+        ),
+        (
+            edit(["threats", 0, "tracking"], {"q": 1}),
+            "threats[0].tracking: unknown key 'q'",
+        ),
     ],
 )
 def test_every_mistake_says_where_and_what(change, message):

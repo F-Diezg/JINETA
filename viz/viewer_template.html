@@ -389,6 +389,7 @@ function makeViews(s) {
   }));
 }
 const SCEN = DATA.scenarios.map((s) => ({ id: s.id, name: s.name, detail: s.detail,
+  outcome: s.outcome,
   captured: s.pairs ? s.pairs.filter((p) => p.captured).length : Number(s.captured),
   pairs: s.pairs ? s.pairs.length : 1, views: makeViews(s) }));
 if (DATA.meta.subtitle) document.getElementById("eyebrow").textContent = `Jineta · ${DATA.meta.subtitle}`;
@@ -697,7 +698,8 @@ function statusOf(w, closure) {
   if (passed && w.captured) return ["intercept", "INTERCEPT", "captured"];
   if (ended && w.outcome === "target lost") return ["miss", "TARGET LOST · DESTROYED BY ANOTHER", "target lost"];
   if (ended && w.outcome === "escaped") return ["miss", "MISS · TARGET ESCAPED", "escaped"];
-  if (passed) return ["miss", "MISS · TARGET ESCAPING", "missed"];
+  if (w.outcome === "open" && time >= w.end_time - 1e-9) return ["miss", "TIME LIMIT · NOT CAUGHT", "open"];
+  if (passed && w.outcome !== "open") return ["miss", "MISS · TARGET ESCAPING", "missed"];
   if (closure >= 0) return ["closing", "CLOSING", "closing"];
   return ["opening", "OPENING", "opening"];
 }
@@ -971,13 +973,20 @@ function describe(s) {
   const cpaText = `<b>${s.closest.distance.toFixed(2)} m at T+${s.closest.time.toFixed(2)}</b>`;
   if (s.pairCount) return describePair(s, cpaText);
   if (s.launch) {
-    const intro = `The Iris waits on the pad at rest, rotors stopped. The ${s.threat_label || "threat"} comes within ${s.launch.range} m ` +
-      `at T+${s.launch.time.toFixed(2)}: the Iris launches and flies pure pursuit, ordered to ` +
-      `${s.commanded_speed} m/s against a ${s.target_speed} m/s ${s.threat_label || "threat"}. `;
-    return intro + (s.captured
-      ? `It climbs to the threat and catches it: ${cpaText}.`
-      : `The ${s.threat_label || "threat"} is past before the Iris can catch it: it misses by ${cpaText}, ` +
-        `keeps chasing and falls behind until the ${s.threat_label || "threat"} leaves the ${s.launch.range} m dome.`);
+    const label = s.threat_label || "threat", radar = s.knowledge === "radar";
+    const intro = `The Iris waits on the pad at rest, rotors stopped. ` +
+      (radar ? `The radar's track puts the ${label} within ${s.launch.range} m `
+             : `The ${label} comes within ${s.launch.range} m `) +
+      `at T+${s.launch.time.toFixed(2)}: the Iris launches and flies pure pursuit` +
+      (radar ? ` at the radar's estimate` : ``) + `, ordered to ` +
+      `${s.commanded_speed} m/s against a ${s.target_speed} m/s ${label}. `;
+    if (s.captured) return intro + `It climbs to the threat and catches it: ${cpaText}.`;
+    if (s.outcome === "open") {
+      return intro + `It never gets within the capture radius: closest approach ${cpaText}. ` +
+        `The run ends at its time limit, T+${s.end_time.toFixed(2)}, with the ${label} still inside the dome.`;
+    }
+    return intro + `The ${label} is past before the Iris can catch it: it misses by ${cpaText}, ` +
+      `keeps chasing and falls behind until the ${label} leaves the ${s.launch.range} m dome.`;
   }
   if (s.captured) {
     return `Pure pursuit: every step the Iris is ordered to fly at ${s.commanded_speed} m/s straight at where the threat is now. ` +
@@ -1005,7 +1014,9 @@ function buildLog(s) {
   ]);
   const events = s.launch ? [
     { t: 0, text: `On the pad, rotors stopped. Threat at ${fmtRange(s.range[0])} m` },
-    { t: s.launch.time, key: true, text: `Threat inside ${s.launch.range} m: launch` },
+    { t: s.launch.time, key: true, text: s.knowledge === "radar"
+        ? `Radar track inside ${s.launch.range} m: launch`
+        : `Threat inside ${s.launch.range} m: launch` },
   ] : [
     { t: 0, text: `Launch from hover. Range ${fmtRange(s.range[0])} m` },
   ];
@@ -1022,6 +1033,8 @@ function buildLog(s) {
       "passed": "Range opening: pair ended",
       "interceptor lost": "Interceptor destroyed in another pair",
     }[s.outcome] || "End of the run" });
+  } else if (!s.captured && s.outcome === "open") {
+    events.push({ t: s.end_time, text: "Time limit: run stopped" });
   } else if (!s.captured) {
     events.push({ t: s.duration, text: s.launch
       ? `Threat outside ${s.launch.range} m: run stopped`
@@ -1076,7 +1089,8 @@ const tabs = el("tabs");
 SCEN.forEach((s, k) => {
   const b = document.createElement("button");
   b.className = "tab"; b.type = "button"; b.setAttribute("role", "tab"); b.id = "tab-" + s.id;
-  const result = s.pairs > 1 ? `${s.captured}/${s.pairs} captured` : s.captured ? "captured" : "missed";
+  const result = s.pairs > 1 ? `${s.captured}/${s.pairs} captured`
+    : s.captured ? "captured" : s.outcome === "open" ? "open" : "missed";
   b.innerHTML = `${s.name}<small>${s.detail} · ${result}</small>`;
   b.addEventListener("click", () => selectScenario(k));
   tabs.appendChild(b);

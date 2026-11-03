@@ -60,10 +60,11 @@ def report(case: Case) -> None:
     closest = result.closest
 
     print(f"\n{case.spec.name} ({case.spec.detail})")
+    believed = " (the radar's track)" if case.interceptor.knowledge == "radar" else ""
     if case.dome is not None and case.launched:
         print(
-            f"  alert: threat within {case.dome.radius:.0f} m at T+{t_launch:.2f} s, "
-            "launch"
+            f"  alert: threat within {case.dome.radius:.0f} m{believed} "
+            f"at T+{t_launch:.2f} s, launch"
         )
     elif case.dome is not None:
         print(f"  the threat never came within {case.dome.radius:.0f} m: no launch")

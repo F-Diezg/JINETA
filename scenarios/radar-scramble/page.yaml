@@ -1,0 +1,10 @@
+# Phase 9: the same scrambles with the pad's radar. Each threat is flown twice, the
+# Iris guided by the truth (as in the pages before) and by the radar's track.
+title: Radar · scramble
+description: >-
+  A short-range radar on the pad tracks the threat with a Kalman filter. Each
+  threat is flown twice: the Iris guided by the truth, and by the radar's track,
+  which also raises the alert.
+page: radar_scramble_viewer.html
+subtitle: "radar · scramble"
+cases: [a-slow-perfect.yaml, b-slow-radar.yaml, c-loiter-perfect.yaml, d-loiter-radar.yaml]

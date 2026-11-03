@@ -78,6 +78,12 @@ code should be clear and every concept explained before it is used.
   requirements.txt`. PowerShell's `>` writes UTF-16, and `Out-File -Encoding utf8`
   in Windows PowerShell 5 adds a BOM (an invisible mark at the start of the file;
   pip tolerates it, but it does not belong there). Package names are ASCII.
+- The pages in `docs/` are generated, and each viewer page carries the whole
+  template inside it. After changing anything in `viz/` (a template, an export) or in
+  `scenarios/`, regenerate them (`python -m examples.run_scenarios --no-window`)
+  and commit them with the change (in phase 8 the menu template changed and
+  `docs/index.html` was left behind until phase 9). Regenerated on another computer
+  they may differ only in signed zeros (`-0.0` against `0.0`).
 - A block of commands pasted into PowerShell does not stop when one line fails:
   the next lines still run (in phase 8 a commit and push went ahead after
   `pytest -n auto` failed on the computer without pytest-xdist). So the checks come
@@ -222,8 +228,13 @@ code should be clear and every concept explained before it is used.
   `turn_rate_deg_s`); one atmosphere and one uniform wind for the whole scenario;
   vehicles by profile name; an interceptor starts on a `site` (waiting for its
   target's alert when the site has an `alert_range`) or at a `start` (hovering, from
-  t = 0). `load_scenario(path)` → frozen `ScenarioSpec`; `build(spec)` → `Setup`
-  (world, pairings); `play(spec)` → `(Setup, Battle)`. Errors are `ScenarioError`
+  t = 0). Since phase 9: a site may carry a `radar` (a name in `RADAR_PROFILES`; it
+  tracks every threat of the file), an interceptor `knowledge: radar` (guided and
+  launched by its site's radar, which it must have) or `perfect` (the default), a
+  threat `tracking: {process_noise, speed_prior}` (default q = 1, 30 m/s), and the
+  file a `seed` (default 0) from which every radar gets its own noise stream.
+  `load_scenario(path)` → frozen `ScenarioSpec`; `build(spec)` → `Setup` (world,
+  pairings, stations by site); `play(spec)` → `(Setup, Battle)`. Errors are `ScenarioError`
   and say the file, the place and, when a name is close to a valid one, the
   suggestion.
 - **Scenario pages:** a folder of `scenarios/` is one viewer page: `page.yaml`
@@ -237,7 +248,9 @@ code should be clear and every concept explained before it is used.
   pages themselves. The export says what the target is (`target_kind`: "generic" or
   "fixed_wing") and may carry its attitude. A case with several entities adds
   `others` (every entity outside the first pair), `pairs` (each pair and its end) and
-  `domes`; a case with one pair is exported exactly as before. In the viewer, the key
+  `domes`; a case with one pair is exported as before, plus (since phase 9) its
+  `outcome`, `end_time` and the interceptor's `knowledge`, so the viewer and the menu
+  say how it really ended (a run stopped by its time limit is "open", not a miss). In the viewer, the key
   data of every pair (range, status, closest approach) is always shown at once;
   choosing a pair only moves the camera and the detailed telemetry to it. The menu
   lists, for each page, every case and every pair with its result and closest
@@ -481,9 +494,16 @@ alarms; the link from the radar to the interceptor is perfect and instant (phase
    is the old path bit for bit; a near-perfect radar gives the perfect engagement
    (same capture step, 1e-5 m); with a 300 m radar the Iris holds still and its
    launch waits for the scan at 23.5 s instead of the 400 m crossing at 6.74 s.
-5. ⏳ **Scenario files**: a `radar:` block on a site, a `seed`, `knowledge: perfect |
-   radar` per interceptor, with their typical mistakes tested; a new page that flies
-   the same threats with perfect knowledge and with the radar.
+5. ✅ **Scenario files**: `radar:` on a site, `knowledge: perfect | radar` per
+   interceptor, `tracking: {process_noise, speed_prior}` per threat and a `seed`,
+   with 10 more typical mistakes tested; one station per radar site, stations first
+   among the rules, a seed per radar drawn from the scenario's. New page
+   `scenarios/radar-scramble` (four cases): the slow scripted threat and the
+   loitering fixed wing, each guided by the truth (bit for bit the earlier cases A)
+   and by the radar. With the default seed both radar cases fail: B misses by
+   0.82 m, D chases the drone round its orbit for the whole run (6.01 m, still open
+   at the time limit). Over five seeds: B captured 3 times (q = 1), D never (any q).
+   The viewer tells the end truthfully (time limit, radar alert).
 6. ⏳ **Onboard seeker and fusion**: range and angles measured from the interceptor,
    with a field of view and a maximum range; the interceptor points its nose at the
    target (loose end 15); the radar and the seeker feed the same filter. A case with
@@ -1118,6 +1138,35 @@ Phase 9 (sensors and tracking):
   Without it a second flight would continue the first one's tracks and noise.
 - **The referee keeps the truth**: captures, passes and escapes are judged on the
   true positions, whatever the participants believe.
+- **Radars in the files are a site's equipment, and knowledge is a choice of the
+  interceptor**: `radar: short_range` on a site makes a station that tracks every
+  threat; `knowledge: radar` on an interceptor makes it fly and launch on that
+  station's track. An interceptor on a site with a radar can still fly on the truth
+  (the default): radar-scramble case A is generic-scramble case A to the last bit
+  while its radar runs (a test), so the effect of the radar is measured by changing
+  one line. A radar-guided interceptor must sit on a site with a radar (an airborne
+  one would need its radar named; not needed yet).
+- **One seed per file, one stream per radar**: `seed` (default 0) goes through
+  `numpy.random.SeedSequence(seed).spawn(n)`, one child per radar, so the radars draw
+  independent noise, a file always flies the same way, and the Monte Carlo of phase
+  13 only changes the seed. The pages use the default seed, not a seed picked for a
+  good-looking result.
+- **q = 1 m²/s³ by default** (`DEFAULT_TRACKING`, speed prior 30 m/s), from five
+  seeds of the two capture cases flown on the radar: the slow scripted threat was
+  caught 1, 3 and 2 times in 5 with q = 0.1, 1 and 5 (misses of 0.5–3 m); the
+  loitering fixed wing never, with any of them (closest 4.4–9.5 m in 150 s; with the
+  truth it is caught at 62 s). A file can set it per threat.
+- **The radar alone is not enough for a 0.5 m capture** (the result of this step):
+  the track lags the drone round its orbit and carries metres of cross-range noise,
+  and pure pursuit aims at the track; the Iris circles inside the orbit, never
+  closing. That is the case the onboard seeker (step 6) has to answer.
+- **The viewer says how a single-pair case really ended**: the export carries the
+  first pair's `outcome`, `end_time` and the interceptor's `knowledge`; the viewer
+  tells a time limit as such ("TIME LIMIT · NOT CAUGHT", "still inside the dome")
+  instead of the escape it used to assume for every miss, says when the alert came
+  from the radar, and the menu shows that case as "still open". Pages written before
+  read as they did (the keys are optional). Found by looking at the new page in
+  headless Chromium.
 
 ## 7. Current state
 
@@ -1645,7 +1694,13 @@ Phase 9 (sensors and tracking):
   `RadarStation(radar, targets)` (`reset`, `tracks`, `measurements`, `history`,
   `knowledge`); `LaunchOnTrack` in `launch.py`; `pursuit(..., knowledge=None)`;
   `World.reset` resets rules with memory; 9 tests in `tests/test_sensing.py`.
-- Now: phase 9, step 5 (scenario files). The step plan is in section 5.
+- Phase 9, step 5 — `spec.py`: `KNOWLEDGE`, `DEFAULT_TRACKING`, `SiteSpec.radar`,
+  `InterceptorSpec.knowledge`, `ThreatSpec.tracking`, `ScenarioSpec.seed`;
+  `scenario.py`: `radar_seeds`, `stations`, `Setup.stations`; `scenarios/radar-scramble`
+  (page `docs/radar_scramble_viewer.html`, ~1.3 MB, in the menu after two-pads);
+  tests: 10 more mistakes and the new entries in `test_spec.py`, 7 in
+  `tests/test_scenario_sensing.py`, 1 in `test_pages.py`, 1 in `test_viz_viewer.py`.
+- Now: phase 9, step 6 (onboard seeker and fusion). The step plan is in section 5.
 
 ## 8. Working with Claude
 

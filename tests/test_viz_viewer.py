@@ -157,3 +157,27 @@ def test_menu_links_the_pages_that_exist_and_names_the_example_for_the_others():
         assert f'href="{missing.page}"' not in text
         assert missing.command in text
         assert "__MENU_CARDS__" not in text
+
+
+def test_a_run_stopped_by_its_time_limit_is_still_open_in_the_menu():
+    """A single-pair case exports how it ended; one that hit the time limit (the
+    radar-guided Iris chasing a loitering drone) is "still open", not "missed"."""
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "one.html"
+        scenarios = [
+            scenario_data(
+                dataclasses.replace(engagement(), captured=False),
+                TARGET,
+                id=f"case-{i}",
+                name=name,
+                outcome=outcome,
+            )
+            for i, (name, outcome) in enumerate(
+                [("A · escaped", "escaped"), ("B · time limit", "open")]
+            )
+        ]
+        write_viewer(scenarios, path, dt=0.4, capture_radius=0.5)
+        cases = page_cases(path)
+        assert [c.pairs[0].outcome for c in cases] == ["missed", "open"]
+        text = write_menu(Path(folder), ENTRIES[:1]).read_text(encoding="utf-8")
+        assert 'class="result o-open">still open' in text

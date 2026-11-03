@@ -8,6 +8,7 @@ map, `[north, east]` plus an `altitude` (up); they become NED here (down = -alti
     detail: "8 m/s, turning 1.5 deg/s"     # optional
     duration: 120                           # longest run [s]
     step: 0.01                              # optional, default 0.01 [s]
+    seed: 7                                 # optional, default 0: sensor noise
     environment:                            # optional
       atmosphere: sea_level                 # isa (default) or sea_level
       wind: {speed: 5, from_deg: 270}       # optional, uniform; FROM where
@@ -16,6 +17,7 @@ map, `[north, east]` plus an `altitude` (up); they become NED here (down = -alti
         position: [0, 0]
         altitude: 0                         # optional, default 0
         alert_range: 400                    # optional: the alert dome
+        radar: short_range                  # optional: a name in RADAR_PROFILES
     interceptors:
       - id: iris
         vehicle: iris                       # a name in MULTIROTOR_PROFILES
@@ -25,6 +27,7 @@ map, `[north, east]` plus an `altitude` (up); they become NED here (down = -alti
         speed: 16                           # ordered pursuit speed
         capture_radius: 0.5                 # optional, default 0.5
         margin: 10                          # optional: a pass ends the pair
+        knowledge: radar                    # optional: perfect (default) or radar
     threats:
       - id: threat
         kind: turning                       # straight, turning or fixed_wing
@@ -33,6 +36,8 @@ map, `[north, east]` plus an `altitude` (up); they become NED here (down = -alti
         speed: 8
         course_deg: 155                     # clockwise from North
         turn_rate_deg_s: -1.5               # turning only; > 0 turns right
+        tracking: {process_noise: 1, speed_prior: 30}   # optional: how radars
+                                            # track it (q [m^2/s^3], [m/s])
       - id: drone
         kind: fixed_wing
         vehicle: small_fixed_wing           # a name in FIXED_WING_PROFILES
@@ -45,6 +50,14 @@ map, `[north, east]` plus an `altitude` (up); they become NED here (down = -alti
 An interceptor on a site with an `alert_range` waits until its target comes within
 that range, and its pair ends if the target leaves the dome; on a site without one
 it takes off at t = 0. Without `margin`, a pass never ends a pair.
+
+A site with a `radar` tracks every threat of the file. An interceptor with
+`knowledge: radar` must be on such a site: it is guided by that radar's track of
+its target and launched when the track puts the target inside the dome. With
+`knowledge: perfect` (the default) it sees the truth, as before, even if its site
+has a radar. The `seed` fixes the noise of every radar of the scenario (each radar
+gets its own stream drawn from it), so a file always flies the same way; another
+seed is another run of the same scenario.
 
 Every mistake is an error that says where it is: an unknown or missing key (with a
 suggestion when the name is close to a valid one), a wrong type, a value out of
@@ -59,11 +72,17 @@ from pathlib import Path
 
 import yaml
 
+from jineta.arena.sensing import TrackSettings
+from jineta.atalaya.profiles import RADAR_PROFILES
 from jineta.jinete.profiles import FIXED_WING_PROFILES, MULTIROTOR_PROFILES
 
 Vector = tuple[float, float, float]  # NED [m]
 THREAT_KINDS = ("straight", "turning", "fixed_wing")
 ATMOSPHERES = ("isa", "sea_level")
+KNOWLEDGE = ("perfect", "radar")
+# How a radar tracks a threat when its file does not say: q = 1 m^2/s^3 and a
+# speed prior of 30 m/s (above the threats of these scenarios, 8-30 m/s).
+DEFAULT_TRACKING = TrackSettings(process_noise=1.0, speed_prior=30.0)
 
 
 class ScenarioError(ValueError):
@@ -90,6 +109,7 @@ class SiteSpec:
     id: str
     position: Vector  # NED [m]
     alert_range: float | None  # radius of the alert dome [m]
+    radar: str | None = None  # key of RADAR_PROFILES
 
 
 @dataclass(frozen=True)
@@ -102,6 +122,7 @@ class InterceptorSpec:
     speed: float  # ordered pursuit speed [m/s]
     capture_radius: float  # [m]
     margin: float | None  # None: a pass never ends the pair [m]
+    knowledge: str = "perfect"  # "perfect" or "radar" (its site's radar)
 
 
 @dataclass(frozen=True)
@@ -121,6 +142,7 @@ class ThreatSpec:
     turn_rate: float = 0.0  # turning only [rad/s]
     vehicle: str | None = None  # fixed_wing only: key of FIXED_WING_PROFILES
     orbit: OrbitSpec | None = None  # fixed_wing only
+    tracking: TrackSettings = DEFAULT_TRACKING  # how radars track it
 
 
 @dataclass(frozen=True)
@@ -134,6 +156,7 @@ class ScenarioSpec:
     interceptors: tuple[InterceptorSpec, ...]
     threats: tuple[ThreatSpec, ...]
     source: str  # where it came from (a file path, or "<text>")
+    seed: int = 0  # seeds the noise of every sensor
 
 
 # --- Reading helpers ------------------------------------------------------------------
@@ -252,7 +275,9 @@ def _site(r: Reader) -> SiteSpec:
         id=r.text("id"),
         position=r.map_position(altitude=0.0),
         alert_range=r.number("alert_range", None, positive=True),
+        radar=r.choice("radar", RADAR_PROFILES, None) if "radar" in r.data else None,
     )
+    r.used.add("radar")
     r.done()
     return spec
 
@@ -277,6 +302,7 @@ def _interceptor(r: Reader) -> InterceptorSpec:
         speed=r.number("speed", low=0.0),
         capture_radius=r.number("capture_radius", 0.5, positive=True),
         margin=r.number("margin", None, positive=True),
+        knowledge=r.choice("knowledge", KNOWLEDGE, "perfect"),
     )
     r.done()
     return spec
@@ -305,6 +331,19 @@ def _threat(r: Reader) -> ThreatSpec:
             o.done()
         else:
             r.used.add("orbit")
+    if "tracking" in r.data:
+        k = Reader(r.get("tracking"), f"{r.where}.tracking", r.source)
+        common["tracking"] = TrackSettings(
+            process_noise=k.number(
+                "process_noise", DEFAULT_TRACKING.process_noise, low=0.0
+            ),
+            speed_prior=k.number(
+                "speed_prior", DEFAULT_TRACKING.speed_prior, positive=True
+            ),
+        )
+        k.done()
+    else:
+        r.used.add("tracking")
     r.done()
     return ThreatSpec(**common)
 
@@ -318,6 +357,9 @@ def parse_scenario(data: object, source: str = "<text>") -> ScenarioSpec:
         top.fail(f"must be a text, not {detail!r}", "detail")
     duration = top.number("duration", positive=True)
     step = top.number("step", 0.01, positive=True)
+    seed = top.get("seed", 0)
+    if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+        top.fail(f"must be a whole number >= 0, not {seed!r}", "seed")
     environment = _environment(top)
     sites = tuple(_site(r) for r in _items(top, "sites", required=False))
     interceptors = tuple(_interceptor(r) for r in _items(top, "interceptors", True))
@@ -332,10 +374,16 @@ def parse_scenario(data: object, source: str = "<text>") -> ScenarioSpec:
         if repeated:
             top.fail(f"repeated {label} id {repeated}")
     threat_ids = [t.id for t in threats]
+    radar_sites = {s.id for s in sites if s.radar is not None}
     for i, spec in enumerate(interceptors):
         where = f"interceptors[{i}]"
         if spec.site is not None and spec.site not in site_ids:
             top.fail(f"unknown site '{spec.site}'{suggest(spec.site, site_ids)}", where)
+        if spec.knowledge == "radar" and spec.site not in radar_sites:
+            top.fail(
+                "knowledge: radar needs the interceptor on a site with a radar",
+                where,
+            )
         if spec.target not in threat_ids:
             top.fail(
                 f"unknown target '{spec.target}'{suggest(spec.target, threat_ids)}",
@@ -354,6 +402,7 @@ def parse_scenario(data: object, source: str = "<text>") -> ScenarioSpec:
         interceptors=interceptors,
         threats=threats,
         source=source,
+        seed=seed,
     )
 
 

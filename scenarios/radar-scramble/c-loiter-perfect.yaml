@@ -1,0 +1,19 @@
+# The loitering fixed wing of the fixed-wing scramble, with the radar on the pad but
+# the Iris guided by the truth: the fixed-wing-scramble case A, to the last bit.
+name: "C · loiter, perfect"
+detail: "18 m/s orbit, guided by the truth"
+duration: 150
+environment: {atmosphere: isa}
+sites:
+  - {id: pad, position: [0, 0], alert_range: 400, radar: short_range}
+interceptors:
+  - {id: iris, vehicle: iris, site: pad, target: drone, speed: 25}
+threats:
+  - id: drone
+    kind: fixed_wing
+    vehicle: small_fixed_wing
+    position: [650, -350]
+    altitude: 100
+    speed: 18
+    course_deg: 140
+    orbit: {center: [60, 40], radius: 150, clockwise: true}

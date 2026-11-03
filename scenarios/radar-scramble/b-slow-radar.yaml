@@ -1,0 +1,18 @@
+# Case A, the Iris guided by the radar's track and launched on it. With the default
+# seed it misses; over five seeds it catches the threat three times (q = 1).
+name: "B · slow, radar"
+detail: "8 m/s turning, guided by the radar"
+duration: 120
+environment: {atmosphere: sea_level}
+sites:
+  - {id: pad, position: [0, 0], alert_range: 400, radar: short_range}
+interceptors:
+  - {id: iris, vehicle: iris, site: pad, target: threat, speed: 16, knowledge: radar}
+threats:
+  - id: threat
+    kind: turning
+    position: [420, -250]
+    altitude: 110
+    speed: 8
+    course_deg: 155
+    turn_rate_deg_s: -1.5
