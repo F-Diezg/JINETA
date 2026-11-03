@@ -114,6 +114,7 @@ button:focus-visible, a:focus-visible { outline: 1px solid var(--event); outline
 }
 .badge.captured { color: var(--good); background: var(--good-wash); }
 .badge.missed { color: var(--hostile); background: var(--hostile-wash); }
+.badge.partial { color: var(--event); background: transparent; }
 .open { justify-self: start; color: var(--friendly); border-color: var(--friendly); }
 .missing { color: var(--dim); font-size: 12px; }
 .missing code { color: var(--ink); }
@@ -167,6 +168,16 @@ footer { color: var(--dim); font-size: 11px; line-height: 1.5; }
         <li><span>B · fast pass (30 m/s, straight)</span><b class="badge missed">missed</b></li>
       </ul>
       <a class="ctl open" href="fixed_wing_scramble_viewer.html">Open viewer &rsaquo;</a>
+    </article>
+    <article class="card">
+      <div class="eyebrow">Threat</div>
+      <h2>Two pads · several threats</h2>
+      <p>Two launch pads, several Iris and several threats in the same sky, each Iris assigned to one threat in the file. Choose which pair to follow.</p>
+      <ul class="cases">
+        <li><span>A · three threats (two pads, one Iris for each threat)</span><b class="badge partial">2/3 captured</b></li>
+        <li><span>B · two on one (a drone loitering between the pads)</span><b class="badge partial">1/2 captured</b></li>
+      </ul>
+      <a class="ctl open" href="two_pads_viewer.html">Open viewer &rsaquo;</a>
     </article>
   </section>
   <footer>Every track is simulation output (6-DOF, 100 Hz). Pages that are missing are

@@ -26,7 +26,7 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-from jineta.arena.engagement import Battle, Engagement
+from jineta.arena.engagement import CAPTURED, Battle, DuelResult, Engagement
 from jineta.arena.scenario import Setup
 from jineta.arena.spec import (
     Reader,
@@ -38,12 +38,13 @@ from jineta.arena.spec import (
 from jineta.arena.world import TrackEntity
 from jineta.jinete.targets import RecordedTrack, TargetTrack
 from viz.menu import MenuEntry
-from viz.viewer import scenario_data, write_viewer
+from viz.viewer import keep_indices, rounded, scenario_data, write_viewer
 
 PAGE_FILE = "page.yaml"
 MENU_LIST = "menu.yaml"
 EVERY = 4  # the viewer keeps one sample in 4 (25 Hz at the 100 Hz step)
 THREAT_LABELS = {"fixed_wing": "fixed-wing drone"}  # what the viewer's text calls it
+TRACK_KEYS = ("pos", "vel", "quat")  # the arrays of an entity; the rest is about it
 
 
 @dataclass(frozen=True)
@@ -139,10 +140,17 @@ def load_cases(page: PageSpec) -> list[ScenarioSpec]:
     return [load_scenario(path) for path in page.cases]
 
 
+def launch_time(flight, name: str) -> float:
+    """When an entity launched; the end of the run if it never did."""
+    launched = flight.launched_at[name]
+    return float(flight.times[-1] if launched is None else launched)
+
+
 @dataclass(frozen=True)
 class Case:
-    """One flown scenario of a page, seen through its first pair (every current
-    scenario has one interceptor and one threat; phase 8 step 7 shows them all)."""
+    """One flown scenario of a page. The properties without an argument look at its
+    first pair, the one the viewer shows first; `case_data` exports every entity and
+    every pair."""
 
     file: Path
     setup: Setup
@@ -166,21 +174,40 @@ class Case:
         return self.battle.results[0]
 
     @property
+    def launched(self) -> bool:
+        """False when the interceptor never left its pad (its target never came
+        within the alert range)."""
+        return self.battle.flight.launched_at[self.interceptor.id] is not None
+
+    @property
     def launch_time(self) -> float:
-        return float(self.battle.flight.launched_at[self.interceptor.id])
+        """When the first pair's interceptor launched (the end of the run if it
+        never did: it waited the whole time)."""
+        return launch_time(self.battle.flight, self.interceptor.id)
 
     @property
     def dome(self):
         return self.result.pairing.dome
 
-    def target_track(self) -> TargetTrack:
-        """The threat as a track: its script, or its simulated flight replayed."""
-        entity = self.setup.world.entity(self.threat.id)
+    def target_track(self, name: str | None = None) -> TargetTrack:
+        """A threat as a track (the first pair's by default): its script, or its
+        simulated flight replayed."""
+        name = self.threat.id if name is None else name
+        entity = self.setup.world.entity(name)
         if isinstance(entity, TrackEntity):
             return entity.track
         flight = self.battle.flight
-        state = flight.state(self.threat.id)
+        state = flight.state(name)
         return RecordedTrack(flight.times, state[:, 0:3], state[:, 3:6])
+
+    def destroyed_at(self) -> dict[str, float]:
+        """When each destroyed entity was hit (the capture of its pair) [s]."""
+        times: dict[str, float] = {}
+        for result in self.battle.results:
+            if result.outcome == CAPTURED:
+                for name in (result.pairing.interceptor, result.pairing.target):
+                    times[name] = min(times.get(name, np.inf), result.end_time)
+        return times
 
     def engagement(self) -> Engagement:
         """The first pair as an `Engagement` (one interceptor, one target)."""
@@ -196,8 +223,87 @@ class Case:
         )
 
 
+def entity_data(case: Case, name: str, keep: np.ndarray) -> dict:
+    """One entity of the world, downsampled, for the viewer to draw: its track,
+    velocity and attitude (a vehicle), when it was launched and destroyed."""
+    spec = case.spec
+    flight = case.battle.flight
+    entity = case.setup.world.entity(name)
+    interceptors = {i.id for i in spec.interceptors}
+    threat_kinds = {t.id: t.kind for t in spec.threats}
+    if name in interceptors:
+        role, kind = "interceptor", "multirotor"
+    else:
+        role = "threat"
+        kind = "fixed_wing" if threat_kinds[name] == "fixed_wing" else "generic"
+    times = flight.times[keep]
+    data = {"id": name, "role": role, "kind": kind}
+    data["pos"] = rounded(flight.positions(name)[keep], 3)
+    if isinstance(entity, TrackEntity):  # a stopped (destroyed) track has no speed
+        empty = np.empty(0)
+        data["vel"] = rounded([entity.velocity(t, empty) for t in times], 3)
+    else:
+        state = flight.state(name)[keep]
+        data["vel"] = rounded(state[:, 3:6], 3)
+        data["quat"] = rounded(state[:, 6:10], 5)
+    launched = flight.launched_at[name]
+    if launched is not None and launched > 0.0:
+        data["launch_time"] = round(float(launched), 4)
+    destroyed = case.destroyed_at().get(name)
+    if destroyed is not None:
+        data["destroyed_at"] = round(float(destroyed), 4)
+    return data
+
+
+def pair_data(case: Case, result: DuelResult) -> dict:
+    """One pair (interceptor -> target) and how it ended, for the viewer."""
+    pair = result.pairing
+    flight = case.battle.flight
+    interceptor = next(i for i in case.spec.interceptors if i.id == pair.interceptor)
+    threat = next(t for t in case.spec.threats if t.id == pair.target)
+    t_ca = result.closest.time
+
+    def at_closest(name):
+        track = flight.positions(name)
+        return [float(np.interp(t_ca, flight.times, track[:, i])) for i in range(3)]
+
+    target_speed = float(np.linalg.norm(case.target_track(threat.id)(0.0)[1]))
+    data = {
+        "interceptor": pair.interceptor,
+        "target": pair.target,
+        "outcome": result.outcome,
+        "captured": result.captured,
+        "end_time": round(result.end_time, 4),
+        "closest": {
+            "time": round(t_ca, 4),
+            "distance": round(result.closest.distance, 4),
+            "interceptor": rounded(at_closest(pair.interceptor), 3),
+            "target": rounded(at_closest(pair.target), 3),
+        },
+        "commanded_speed": interceptor.speed,
+        "target_speed": threat.speed,
+        "target_kind": "fixed_wing" if threat.kind == "fixed_wing" else "generic",
+        "pursuit_feasible": interceptor.speed > target_speed,
+    }
+    if threat.kind in THREAT_LABELS:
+        data["threat_label"] = THREAT_LABELS[threat.kind]
+    if pair.dome is not None:
+        data["launch"] = {
+            "time": round(launch_time(flight, pair.interceptor), 4),
+            "range": pair.dome.radius,
+            "site": rounded(pair.dome.site, 3),
+        }
+    return data
+
+
 def case_data(case: Case, every: int = EVERY) -> dict:
-    """The viewer data of one case (one tab)."""
+    """The viewer data of one case (one tab).
+
+    The first pair is exported as the viewer has always read it (`interceptor`,
+    `target`, `closest`, ...). A case with more entities adds `others` (every entity
+    outside that pair), and one with several pairs adds `pairs` (each pair and its
+    end, so the viewer can follow any of them) and `domes` (every alert dome).
+    """
     info = {
         "id": case.file.stem,
         "name": case.spec.name,
@@ -219,7 +325,7 @@ def case_data(case: Case, every: int = EVERY) -> dict:
     if case.threat.kind == "fixed_wing":
         target_kind = "fixed_wing"
         attitudes = case.battle.flight.state(case.threat.id)[:, 6:10]
-    return scenario_data(
+    data = scenario_data(
         case.engagement(),
         case.target_track(),
         every,
@@ -228,6 +334,32 @@ def case_data(case: Case, every: int = EVERY) -> dict:
         target_attitudes=attitudes,
         **info,
     )
+    world = case.setup.world
+    results = case.battle.results
+    first = {case.interceptor.id, case.threat.id}
+    if len(world.entities) == len(first) and len(results) == 1:
+        return data  # one interceptor, one threat: the page reads as it always did
+
+    keep = keep_indices(len(case.battle.flight.times), every)
+    for key, name in (("interceptor", case.interceptor.id), ("target", case.threat.id)):
+        meta = entity_data(case, name, keep)  # id, role, kind, launch and hit times
+        data[key].update({k: v for k, v in meta.items() if k not in TRACK_KEYS})
+    data["others"] = [
+        entity_data(case, entity.name, keep)
+        for entity in world.entities
+        if entity.name not in first
+    ]
+    data["pairs"] = [pair_data(case, result) for result in results]
+    domes = {}
+    for result in results:
+        dome = result.pairing.dome
+        if dome is not None:
+            domes[(tuple(dome.site), dome.radius)] = {
+                "site": rounded(dome.site, 3),
+                "range": dome.radius,
+            }
+    data["domes"] = list(domes.values())
+    return data
 
 
 def write_page(

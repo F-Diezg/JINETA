@@ -60,11 +60,13 @@ def report(case: Case) -> None:
     closest = result.closest
 
     print(f"\n{case.spec.name} ({case.spec.detail})")
-    if case.dome is not None:
+    if case.dome is not None and case.launched:
         print(
             f"  alert: threat within {case.dome.radius:.0f} m at T+{t_launch:.2f} s, "
             "launch"
         )
+    elif case.dome is not None:
+        print(f"  the threat never came within {case.dome.radius:.0f} m: no launch")
     after = f" ({closest.time - t_launch:.2f} s after the launch)" if t_launch else ""
     print(
         f"  {verdict}: closest approach {closest.distance:.2f} m "
@@ -84,6 +86,17 @@ def report(case: Case) -> None:
         PASSED: "a pass (it opened up past the margin)",
     }.get(case.result.outcome, "the time limit")
     print(f"  run ended at T+{result.times[-1]:.2f} s: {end}")
+    if len(case.battle.results) > 1:
+        print("  every pair (the lines above follow the first one):")
+        launched = case.battle.flight.launched_at
+        for pair in case.battle.results:
+            p = pair.pairing
+            launch = launched[p.interceptor]
+            when = f", launched T+{launch:.2f} s" if launch else ""
+            print(
+                f"    {p.interceptor} -> {p.target}: {pair.outcome}, closest "
+                f"{pair.closest.distance:.2f} m at T+{pair.closest.time:.2f} s{when}"
+            )
 
 
 def write_folder(page: PageSpec, cases: list[Case]) -> Path:

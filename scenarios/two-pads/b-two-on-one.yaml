@@ -1,0 +1,22 @@
+# Two Iris, one from each pad, both assigned to the same drone, which loiters
+# between the pads. Whoever catches it first destroys it; the other one is left
+# with no target ("target lost").
+name: "B · two on one"
+detail: "a drone loitering between the pads"
+duration: 120
+environment: {atmosphere: isa}
+sites:
+  - {id: north-pad, position: [400, 0], alert_range: 600}
+  - {id: south-pad, position: [-400, 0], alert_range: 600}
+interceptors:
+  - {id: iris-n, vehicle: iris, site: north-pad, target: drone, speed: 25}
+  - {id: iris-s, vehicle: iris, site: south-pad, target: drone, speed: 25}
+threats:
+  - id: drone
+    kind: fixed_wing
+    vehicle: small_fixed_wing
+    position: [1000, 300]
+    altitude: 90
+    speed: 18
+    course_deg: 200
+    orbit: {center: [100, 0], radius: 150, clockwise: false}

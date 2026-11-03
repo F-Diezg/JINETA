@@ -12,6 +12,7 @@ import yaml
 
 from examples.run_scenarios import play_folder
 from jineta.arena.spec import ScenarioError
+from viz.menu import MenuCase
 from viz.pages import (
     load_cases,
     load_page,
@@ -27,7 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_every_scenario_file_of_the_repo_loads():
     folders = page_folders(ROOT / "scenarios")
-    order = ["pursuit", "generic-scramble", "fixed-wing-scramble"]  # menu.yaml
+    order = ["pursuit", "generic-scramble", "fixed-wing-scramble", "two-pads"]
     assert [f.name for f in folders] == order
     for folder in folders:
         page = load_page(folder)
@@ -38,6 +39,7 @@ def test_every_scenario_file_of_the_repo_loads():
         "Generic target · in the air",
         "Generic target · scramble",
         "Fixed wing · scramble",
+        "Two pads · several threats",
     ]
     assert entries[0].page == "iris_pursuit_viewer.html"
     assert entries[2].command == (
@@ -170,3 +172,83 @@ def test_the_menu_list_says_which_folders_and_in_what_order(tmp_path):
     write(tmp_path, "menu.yaml", {"pages": ["a-page", "a-page"]})
     with pytest.raises(ScenarioError, match="listed twice"):
         menu_folders(tmp_path)
+
+
+TWO_PADS = {
+    "name": "C · two pads",
+    "duration": 2,
+    "environment": {"atmosphere": "sea_level"},
+    "sites": [
+        {"id": "north", "position": [100, 0], "alert_range": 400},
+        {"id": "south", "position": [-100, 0]},
+    ],
+    "interceptors": [
+        {"id": "n", "vehicle": "iris", "site": "north", "target": "a", "speed": 10},
+        {"id": "s", "vehicle": "iris", "site": "south", "target": "b", "speed": 10},
+    ],
+    "threats": [
+        {
+            "id": "a",
+            "kind": "straight",
+            "position": [600, 0],
+            "altitude": 50,
+            "speed": 20,
+            "course_deg": 180,
+        },
+        {
+            "id": "b",
+            "kind": "turning",
+            "position": [-300, 200],
+            "altitude": 50,
+            "speed": 5,
+            "course_deg": 0,
+            "turn_rate_deg_s": 3,
+        },
+        {
+            "id": "lone",
+            "kind": "straight",
+            "position": [0, 500],
+            "altitude": 80,
+            "speed": 10,
+            "course_deg": 270,
+        },
+    ],
+}
+
+
+def test_a_case_with_several_entities_exports_them_all(tmp_path):
+    """Two pads, two pairs and an unassigned threat: the first pair as always, every
+    other entity in `others`, every pair in `pairs`, the one dome in `domes`."""
+    write(tmp_path, "page.yaml", {**PAGE, "cases": ["two.yaml"]})
+    write(tmp_path, "two.yaml", TWO_PADS)
+    page, cases = play_folder(tmp_path)
+    data = read_viewer(write_page(page, cases, tmp_path / "docs"))
+    (case,) = data["scenarios"]
+
+    assert (case["interceptor"]["id"], case["target"]["id"]) == ("n", "a")
+    assert case["interceptor"]["role"] == "interceptor"
+    assert case["target"]["kind"] == "generic"
+    others = {o["id"]: o for o in case["others"]}
+    assert set(others) == {"s", "b", "lone"}  # the unassigned threat is drawn too
+    assert (others["s"]["role"], others["s"]["kind"]) == ("interceptor", "multirotor")
+    assert "quat" in others["s"] and "quat" not in others["lone"]
+    assert "launch_time" not in others["s"]  # no dome: it flies from t = 0
+    for other in case["others"]:
+        assert len(other["pos"]) == len(other["vel"]) == len(case["t"])
+
+    pairs = case["pairs"]
+    assert [(p["interceptor"], p["target"]) for p in pairs] == [("n", "a"), ("s", "b")]
+    assert all(p["outcome"] == "open" for p in pairs)  # 2 s: nobody got there
+    assert pairs[0]["launch"]["range"] == 400.0 and "launch" not in pairs[1]
+    # "a" is still 460 m from the north pad at the end: "n" never launched, and the
+    # viewer shows it waiting until the end of the run
+    assert pairs[0]["launch"]["time"] == case["t"][-1] == pytest.approx(2.0)
+    assert case["launch"]["time"] == pytest.approx(2.0)
+    assert case["domes"] == [{"site": [100.0, 0.0, 0.0], "range": 400.0}]
+
+
+def test_the_menu_badge_counts_the_captured_pairs():
+    assert MenuCase("A", "", captured=1).badge == ("captured", "captured")
+    assert MenuCase("A", "", captured=0).badge == ("missed", "missed")
+    assert MenuCase("A", "", captured=2, pairs=3).badge == ("partial", "2/3 captured")
+    assert MenuCase("A", "", captured=3, pairs=3).badge == ("captured", "captured")

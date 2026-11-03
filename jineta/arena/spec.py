@@ -42,9 +42,9 @@ map, `[north, east]` plus an `altitude` (up); they become NED here (down = -alti
         course_deg: 140
         orbit: {center: [60, 40], radius: 150, clockwise: true}   # optional
 
-An interceptor on a site with an `alert_range` waits until a threat comes within
-that range (any threat), and its pair ends if its target leaves the dome; on a site
-without one it takes off at t = 0. Without `margin`, a pass never ends a pair.
+An interceptor on a site with an `alert_range` waits until its target comes within
+that range, and its pair ends if the target leaves the dome; on a site without one
+it takes off at t = 0. Without `margin`, a pass never ends a pair.
 
 Every mistake is an error that says where it is: an unknown or missing key (with a
 suggestion when the name is close to a valid one), a wrong type, a value out of

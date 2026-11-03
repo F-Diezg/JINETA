@@ -1,0 +1,9 @@
+# Several interceptors and threats in one world, the assignment fixed in each file
+# (choosing it is phase 11).
+title: Two pads · several threats
+description: >-
+  Two launch pads, several Iris and several threats in the same sky, each Iris
+  assigned to one threat in the file. Choose which pair to follow.
+page: two_pads_viewer.html
+subtitle: "two pads · several threats"
+cases: [a-three-threats.yaml, b-two-on-one.yaml]

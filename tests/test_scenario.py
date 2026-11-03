@@ -100,9 +100,9 @@ threats:
     drone = world.entity("drone").initial_state
     assert np.linalg.norm(drone[3:6]) == pytest.approx(22.0, rel=1e-3)  # trimmed
     assert np.allclose(drone[0:3], [600.0, 100.0, -120.0], rtol=0, atol=1e-6)
-    # only the pad with a dome has an alert, and it watches every threat
+    # only the pad with a dome has an alert, and it watches the interceptor's target
     (rule,) = world.rules
-    assert (rule.interceptor, list(rule.threats)) == ("a", ["dart", "drone"])
+    assert (rule.interceptor, list(rule.threats)) == ("a", ["drone"])
     pa, pb, pc = setup.pairings
     assert (pa.target, pa.margin, pa.dome.radius) == ("drone", math.inf, 300.0)
     assert (pb.margin, pb.dome) == (10.0, None)

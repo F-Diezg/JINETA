@@ -40,19 +40,33 @@ class MenuCase:
 
     name: str  # "A · slow threat"
     detail: str  # "8 m/s, turning 1.5 deg/s"
-    captured: bool
+    captured: int  # pairs that ended in a capture
+    pairs: int = 1  # pairs of the case
+
+    @property
+    def badge(self) -> tuple[str, str]:
+        """(style, text) of its badge: every pair captured, none, or some."""
+        if self.captured == self.pairs:
+            return "captured", "captured"
+        if self.captured == 0:
+            return "missed", "missed"
+        return "partial", f"{self.captured}/{self.pairs} captured"
 
 
 def page_cases(path: Path) -> tuple[MenuCase, ...]:
     """The cases of a viewer page and their results, read from the page."""
-    return tuple(
-        MenuCase(
-            name=scenario.get("name", scenario.get("id", "")),
-            detail=scenario.get("detail", ""),
-            captured=bool(scenario["captured"]),
+    cases = []
+    for scenario in read_viewer(path)["scenarios"]:
+        pairs = scenario.get("pairs", [scenario])  # one pair: the case itself
+        cases.append(
+            MenuCase(
+                name=scenario.get("name", scenario.get("id", "")),
+                detail=scenario.get("detail", ""),
+                captured=sum(bool(pair["captured"]) for pair in pairs),
+                pairs=len(pairs),
+            )
         )
-        for scenario in read_viewer(path)["scenarios"]
-    )
+    return tuple(cases)
 
 
 def card(entry: MenuEntry, cases: tuple[MenuCase, ...] | None) -> str:
@@ -68,8 +82,7 @@ def card(entry: MenuEntry, cases: tuple[MenuCase, ...] | None) -> str:
         rows = "\n".join(
             f"        <li><span>{e(case.name)}"
             f"{f' ({e(case.detail)})' if case.detail else ''}</span>"
-            f'<b class="badge {"captured" if case.captured else "missed"}">'
-            f"{'captured' if case.captured else 'missed'}</b></li>"
+            f'<b class="badge {case.badge[0]}">{e(case.badge[1])}</b></li>'
             for case in cases
         )
         listing = f'      <ul class="cases">\n{rows}\n      </ul>\n'

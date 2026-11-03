@@ -107,7 +107,6 @@ def build(spec: ScenarioSpec) -> Setup:
     """The world, rules and pairs of a scenario (fresh vehicles every time)."""
     density, wind = environment(spec)
     sites = {site.id: site for site in spec.sites}
-    threat_ids = [threat.id for threat in spec.threats]
 
     entities: list[Entity] = []
     rules = []
@@ -124,7 +123,7 @@ def build(spec: ScenarioSpec) -> Setup:
             )
         )
         if dome is not None:
-            rules.append(LaunchOnAlert(interceptor.id, dome, threat_ids))
+            rules.append(LaunchOnAlert(interceptor.id, dome, [interceptor.target]))
         margin = math.inf if interceptor.margin is None else interceptor.margin
         pairings.append(
             Pairing(

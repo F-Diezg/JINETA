@@ -34,6 +34,15 @@ PAGE = """<!doctype html>
 """
 
 
+def keep_indices(n: int, every: int) -> np.ndarray:
+    """The samples the viewer keeps: one in `every`, and always the last one (the
+    end of the run)."""
+    keep = np.arange(0, n, every)
+    if keep[-1] != n - 1:
+        keep = np.append(keep, n - 1)
+    return keep
+
+
 def rounded(array: npt.ArrayLike, decimals: int) -> list:
     """Nested lists with fewer digits: the file stays small, the eye sees no change."""
     return np.round(np.asarray(array, dtype=float), decimals).tolist()
@@ -68,9 +77,7 @@ def scenario_data(
     if target_kind not in ("generic", "fixed_wing"):
         raise ValueError(f"unknown target kind {target_kind!r}")
     n = len(result.times)
-    keep = np.arange(0, n, every)
-    if keep[-1] != n - 1:
-        keep = np.append(keep, n - 1)  # always keep the last sample (end of the run)
+    keep = keep_indices(n, every)
 
     times = result.times[keep]
     states = result.states[keep]

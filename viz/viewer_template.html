@@ -122,6 +122,10 @@ a.ctl:focus-visible { outline: 1px solid var(--event); outline-offset: 2px; }
 .tab small { font-family: var(--font-data); font-weight: 400; font-size: 10.5px; letter-spacing: 0; text-transform: none; }
 .tab[aria-selected="true"] { color: var(--ink); border-color: var(--friendly); background: var(--friendly-wash); }
 .tab:hover { color: var(--ink); }
+.pairs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.pairs button { font-size: 10.5px; padding: 3px 7px; }
+.pairs .gone { opacity: 0.6; }
+.tag.o { opacity: 0.6; }
 .tab:focus-visible, button:focus-visible, input:focus-visible { outline: 1px solid var(--event); outline-offset: 2px; }
 #summary { margin: 0; color: var(--ink); line-height: 1.5; font-size: 12px; }
 #summary b { color: var(--event); font-weight: 500; }
@@ -227,6 +231,7 @@ button.ctl[aria-pressed="true"] { border-color: var(--friendly); color: var(--fr
   <div class="eyebrow" id="eyebrow">Jineta · phase 7 MVP · pure pursuit</div>
   <h1>Engagement <span>viewer</span></h1>
   <div class="tabs" role="tablist" id="tabs"></div>
+  <div class="pairs" role="group" aria-label="Pair to follow" id="pairs" hidden></div>
   <p id="summary"></p>
   <ol id="log"></ol>
 </section>
@@ -239,7 +244,7 @@ button.ctl[aria-pressed="true"] { border-color: var(--friendly); color: var(--fr
     <dt>Closure</dt><dd id="closure">—</dd>
   </dl>
   <div class="group">
-    <span class="eyebrow">Interceptor · Iris</span>
+    <span class="eyebrow" id="ikind">Interceptor · Iris</span>
     <dl>
       <dt>Speed</dt><dd class="f" id="ispeed">—</dd>
       <dt>Ordered</dt><dd id="icmd">—</dd>
@@ -276,7 +281,7 @@ button.ctl[aria-pressed="true"] { border-color: var(--friendly); color: var(--fr
       <button class="ctl" id="pal-amber" type="button" aria-pressed="false" title="Amber CRT palette (P)">Amber</button>
     </div>
     <span class="spacer"></span>
-    <span id="hint">Drag: orbit · Wheel: zoom · Right-drag: pan · Space · ← → · P: palette<span id="hint-menu" hidden> · M: menu</span></span>
+    <span id="hint">Drag: orbit · Wheel: zoom · Right-drag: pan · Space · ← → · P: palette<span id="hint-pairs" hidden> · N: next pair</span><span id="hint-menu" hidden> · M: menu</span></span>
   </div>
   <div id="track">
     <canvas id="spark" aria-hidden="true"></canvas>
@@ -342,12 +347,32 @@ function prepare(s) {
   const range = ip.map((p, i) => p.distanceTo(tp[i]));
   const ispeed = iv.map((v) => v.length());
   let peak = 0; for (let i = 1; i < n; i++) if (ispeed[i] > ispeed[peak]) peak = i;
-  return { ...s, n, ip, tp, iv, tv, iq, tq, tbank, range, ispeed, peak,
+  // the other entities of the case: drawn, not followed
+  const others = (s.others || []).map((o) => ({ ...o,
+    p: o.pos.map(toThree), v: o.vel.map(toThree), q: o.quat ? o.quat.map(toThreeQuat) : null }));
+  const launch = s.launch ? { ...s.launch, site: toThree(s.launch.site) } : null;
+  const domes = s.domes ? s.domes.map((d) => ({ ...d, site: toThree(d.site) })) : (launch ? [launch] : []);
+  return { ...s, n, ip, tp, iv, tv, iq, tq, tbank, range, ispeed, peak, others, domes,
     duration: s.t[n - 1],
-    caI: toThree(s.closest.interceptor), caT: toThree(s.closest.target),
-    launch: s.launch ? { ...s.launch, site: toThree(s.launch.site) } : null };
+    caI: toThree(s.closest.interceptor), caT: toThree(s.closest.target), launch };
 }
-const SCEN = DATA.scenarios.map(prepare);
+// A case with several pairs has one view per pair: the same tab, followed through
+// another interceptor and its target. A case with one pair has one view.
+function makeViews(s) {
+  if (!s.pairs) return [prepare(s)];
+  const table = { [s.interceptor.id]: s.interceptor, [s.target.id]: s.target };
+  for (const o of s.others) table[o.id] = o;
+  return s.pairs.map((pair) => prepare({
+    ...s, ...pair,
+    interceptor: table[pair.interceptor], target: table[pair.target],
+    others: Object.values(table).filter((o) => o.id !== pair.interceptor && o.id !== pair.target),
+    launch: pair.launch || null, threat_label: pair.threat_label || null,
+    pairCount: s.pairs.length,
+  }));
+}
+const SCEN = DATA.scenarios.map((s) => ({ id: s.id, name: s.name, detail: s.detail,
+  captured: s.pairs ? s.pairs.filter((p) => p.captured).length : Number(s.captured),
+  pairs: s.pairs ? s.pairs.length : 1, views: makeViews(s) }));
 if (DATA.meta.subtitle) document.getElementById("eyebrow").textContent = `Jineta · ${DATA.meta.subtitle}`;
 if (DATA.meta.menu) {
   const m = document.getElementById("menu"); m.href = DATA.meta.menu; m.hidden = false;
@@ -405,17 +430,20 @@ for (let x = -2000; x <= 2000; x += 50) {
 }
 ground.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(gridPoints),
   tint(new THREE.LineBasicMaterial({ transparent: true, opacity: 0.45 }), "line")));
+// range rings and the north arrow sit on the followed interceptor's pad (its start)
+const rings = new THREE.Group();
+ground.add(rings);
 const ringMat = tint(new THREE.LineBasicMaterial({ transparent: true, opacity: 0.22 }), "friendly");
 for (const r of [100, 200, 300, 400]) {
   const pts = [];
   for (let k = 0; k <= 128; k++) { const a = (k / 128) * Math.PI * 2; pts.push(new THREE.Vector3(Math.cos(a) * r, 0.2, Math.sin(a) * r)); }
-  ground.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), ringMat));
+  rings.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), ringMat));
 }
 const north = new THREE.Line(
   new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0.3, 0), new THREE.Vector3(0, 0.3, -470)]),
   tint(new THREE.LineBasicMaterial({ transparent: true, opacity: 0.6 }), "dim")
 );
-ground.add(north);
+rings.add(north);
 
 // ---------------------------------------------------------------------------------
 // Vehicle models (icons). Interceptor in body axes: x forward, y right, z down.
@@ -552,16 +580,25 @@ function alertDome(site, range) {
   return dome;
 }
 
-// per-scenario objects (tracks, alert dome)
-let tracks = null;
-function buildTracks(s) {
-  if (tracks) {
-    for (const o of tracks.objects) {
-      scene.remove(o); o.geometry.dispose(); o.material.dispose();
+// per-scenario objects (tracks, alert domes, the other entities)
+function dispose(root) {
+  scene.remove(root);
+  root.traverse((o) => {
+    if (o.geometry) o.geometry.dispose();
+    if (o.material) {
+      o.material.dispose();
       const k = fatMaterials.indexOf(o.material);
       if (k >= 0) fatMaterials.splice(k, 1);
+      const j = paints.findIndex(([m]) => m === o.material);
+      if (j >= 0) paints.splice(j, 1);
     }
-  }
+  });
+}
+let tracks = null;
+let extras = [];
+function buildTracks(s) {
+  if (tracks) for (const o of tracks.objects) dispose(o);
+  for (const x of extras) { dispose(x.model); x.tag.remove(); }
   const ground = (pts) => pts.map((p) => new THREE.Vector3(p.x, 0.5, p.z));
   const objects = [
     fatLine(s.ip, COLOR.friendly, 1.2, 0.28),
@@ -572,7 +609,16 @@ function buildTracks(s) {
   const iDone = fatLine(s.ip, COLOR.friendly, 3);
   const tDone = fatLine(s.tp, COLOR.hostile, 3);
   objects.push(iDone, tDone);
-  if (s.launch) objects.push(alertDome(s.launch.site, s.launch.range));
+  for (const d of s.domes) objects.push(alertDome(d.site, d.range));
+  extras = s.others.map((o) => {
+    const key = o.role === "interceptor" ? "friendly" : "hostile";
+    objects.push(fatLine(o.p, COLOR[key], 1.2, 0.35));
+    const model = o.role === "interceptor" ? quadModel(key)
+      : o.kind === "fixed_wing" ? planeModel(key) : dartModel(key);
+    scene.add(model);
+    const tagEl = tag((key === "friendly" ? "f" : "h") + " o", `${o.id.toUpperCase()}<small></small>`);
+    return { o, model, tag: tagEl };
+  });
   scene.add(...objects);
   tracks = { objects, iDone, tDone };
   resize();
@@ -605,7 +651,7 @@ function place(el, p, show = true) {
 // ---------------------------------------------------------------------------------
 // State, interpolation
 // ---------------------------------------------------------------------------------
-let S = SCEN[0], time = 0, playing = false, rate = 1, follow = false;
+let S = SCEN[0].views[0], time = 0, playing = false, rate = 1, follow = false;
 function locate(t) {
   const ts = S.t; let lo = 0, hi = S.n - 1;
   if (t <= ts[0]) return [0, 0];
@@ -629,7 +675,20 @@ const prevIris = new THREE.Vector3();
 function update() {
   const [i, a] = locate(time);
   const pI = lerp(S.ip, i, a), pT = lerp(S.tp, i, a);
-  const vI = lerp(S.iv, i, a), vT = lerp(S.tv, i, a);
+  // a destroyed vehicle stays where it was hit and no longer moves
+  const gone = (e) => e.destroyed_at != null && time > e.destroyed_at;
+  const vI = gone(S.interceptor) ? new THREE.Vector3() : lerp(S.iv, i, a);
+  const vT = gone(S.target) ? new THREE.Vector3() : lerp(S.tv, i, a);
+  for (const x of extras) {
+    const o = x.o, p = lerp(o.p, i, a);
+    x.model.position.copy(p);
+    if (o.q) x.model.quaternion.copy(o.q[i].clone().slerp(o.q[i + 1], a));
+    else {
+      const vel = lerp(o.v, i, a);
+      if (vel.lengthSq() > 1e-6) x.model.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), vel.normalize());
+    }
+    x.speed = gone(o) ? 0 : lerp(o.v, i, a).length();
+  }
   const q = S.iq[i].clone().slerp(S.iq[i + 1], a);
 
   if (follow) {  // carry the camera along with the interceptor, keeping the user's orbit
@@ -684,6 +743,7 @@ function update() {
   let state, label;
   if (S.launch && time < S.launch.time) { state = "standby"; label = "STANDBY · ON THE PAD"; }
   else if (passed && S.captured) { state = "intercept"; label = "INTERCEPT"; }
+  else if (S.outcome === "target lost" && time >= S.end_time) { state = "miss"; label = "TARGET LOST · DESTROYED BY ANOTHER"; }
   else if (passed) { state = "miss"; label = "MISS · TARGET ESCAPING"; }
   else if (closure >= 0) { state = "closing"; label = "CLOSING"; }
   else { state = "opening"; label = "OPENING"; }
@@ -692,6 +752,7 @@ function update() {
   cpa.visible = passed;
   irisTag.querySelector("small").textContent = `${fmt(vI.length())} m/s`;
   threatTag.querySelector("small").textContent = `${fmt(vT.length())} m/s`;
+  for (const x of extras) x.tag.querySelector("small").textContent = `${fmt(x.speed)} m/s`;
   losTag.textContent = `LOS ${fmtRange(r)} m`;
 
   for (const li of logItems) li.el.classList.toggle("past", time >= li.t - 1e-9);
@@ -709,12 +770,16 @@ function placeTags() {
   cpa.scale.setScalar(Math.max(0.3, camDist(cpa.position) * 0.006));
   place(irisTag, iris.position);
   place(threatTag, threat.position);
+  for (const x of extras) {
+    x.model.scale.setScalar(Math.max(1, camDist(x.model.position) * 0.04));
+    place(x.tag, x.model.position);
+  }
   place(cpaTag, cpa.position, cpa.visible);
   place(losTag, iris.position.clone().lerp(threat.position, 0.5), iris.position.distanceTo(threat.position) > 25);
-  place(northTag, new THREE.Vector3(0, 0, -490));
+  place(northTag, rings.position.clone().add(new THREE.Vector3(0, 0, -490)));
   if (S.launch) place(alertTag, S.launch.site.clone().add(new THREE.Vector3(0, S.launch.range, 0)));
   else alertTag.hidden = true;
-  [100, 200, 300, 400].forEach((r, k) => place(ringTags[k], new THREE.Vector3(r * Math.SQRT1_2, 0, r * Math.SQRT1_2)));
+  [100, 200, 300, 400].forEach((r, k) => place(ringTags[k], rings.position.clone().add(new THREE.Vector3(r * Math.SQRT1_2, 0, r * Math.SQRT1_2))));
 }
 
 // ---------------------------------------------------------------------------------
@@ -778,9 +843,24 @@ function drawSpark() {
 // Scenario: tabs, summary, event log, camera framing
 // ---------------------------------------------------------------------------------
 let logItems = [];
+function describePair(s, cpaText) {
+  const me = s.interceptor.id.toUpperCase(), it = s.target.id.toUpperCase();
+  const start = s.launch
+    ? `${me} waits on its pad and launches at T+${s.launch.time.toFixed(2)}, when ${it} comes within ${s.launch.range} m. `
+    : `${me} flies from the start. `;
+  const end = {
+    "captured": `Ordered to ${s.commanded_speed} m/s against a ${s.target_speed} m/s target, it catches it: ${cpaText}.`,
+    "target lost": `Another interceptor destroys ${it} first, at T+${s.end_time.toFixed(2)}; the closest ${me} came was ${cpaText}.`,
+    "escaped": `${it} leaves the ${s.launch ? s.launch.range : ""} m dome at T+${s.end_time.toFixed(2)}; closest approach ${cpaText}.`,
+    "passed": `It misses by ${cpaText} and the range opens past the margin.`,
+    "interceptor lost": `${me} is destroyed in another pair at T+${s.end_time.toFixed(2)}; closest approach ${cpaText}.`,
+  }[s.outcome] || `Still chasing when the run ends; closest approach ${cpaText}.`;
+  return `Following <b>${me} → ${it}</b>, one of ${s.pairCount} pairs. ` + start + end;
+}
 function describe(s) {
   const top = s.ispeed[s.peak];
   const cpaText = `<b>${s.closest.distance.toFixed(2)} m at T+${s.closest.time.toFixed(2)}</b>`;
+  if (s.pairCount) return describePair(s, cpaText);
   if (s.launch) {
     const intro = `The Iris waits on the pad at rest, rotors stopped. The ${s.threat_label || "threat"} comes within ${s.launch.range} m ` +
       `at T+${s.launch.time.toFixed(2)}: the Iris launches and flies pure pursuit, ordered to ` +
@@ -810,7 +890,14 @@ function buildLog(s) {
         ? `Intercept: CPA ${s.closest.distance.toFixed(2)} m (< ${DATA.meta.capture_radius} m)`
         : `Closest approach ${s.closest.distance.toFixed(2)} m. Miss` },
   );
-  if (!s.captured) {
+  if (!s.captured && s.pairCount) {
+    events.push({ t: s.end_time, text: {
+      "target lost": "Target destroyed by another interceptor",
+      "escaped": `Target outside ${s.launch ? s.launch.range : ""} m: pair ended`,
+      "passed": "Range opening: pair ended",
+      "interceptor lost": "Interceptor destroyed in another pair",
+    }[s.outcome] || "End of the run" });
+  } else if (!s.captured) {
     events.push({ t: s.duration, text: s.launch
       ? `Threat outside ${s.launch.range} m: run stopped`
       : "Range opening: run stopped" });
@@ -831,6 +918,7 @@ function bounds(s) {
   const box = new THREE.Box3();
   for (const p of s.ip) box.expandByPoint(p);
   for (const p of s.tp) box.expandByPoint(p);
+  for (const o of s.others) for (const p of o.p) box.expandByPoint(p);
   return box;
 }
 function overview() {
@@ -860,24 +948,49 @@ const tabs = el("tabs");
 SCEN.forEach((s, k) => {
   const b = document.createElement("button");
   b.className = "tab"; b.type = "button"; b.setAttribute("role", "tab"); b.id = "tab-" + s.id;
-  b.innerHTML = `${s.name}<small>${s.detail} · ${s.captured ? "captured" : "missed"}</small>`;
+  const result = s.pairs > 1 ? `${s.captured}/${s.pairs} captured` : s.captured ? "captured" : "missed";
+  b.innerHTML = `${s.name}<small>${s.detail} · ${result}</small>`;
   b.addEventListener("click", () => selectScenario(k));
   tabs.appendChild(b);
 });
+let tab = 0, view = 0;
 function selectScenario(k) {
-  S = SCEN[k];
+  tab = k;
   [...tabs.children].forEach((b, j) => b.setAttribute("aria-selected", String(j === k)));
+  const box = el("pairs"); box.innerHTML = "";
+  const views = SCEN[k].views;
+  box.hidden = views.length < 2;
+  el("hint-pairs").hidden = views.length < 2;
+  views.forEach((w, j) => {
+    const b = document.createElement("button");
+    b.className = "ctl"; b.type = "button";
+    b.textContent = `${w.interceptor.id} → ${w.target.id} · ${w.captured ? "captured" : w.outcome}`;
+    if (!w.captured) b.classList.add("gone");
+    b.addEventListener("click", () => selectView(j, true));
+    box.appendChild(b);
+  });
+  selectView(0, false);
+}
+function selectView(j, keepTime) {
+  view = j;
+  S = SCEN[tab].views[j];
+  [...el("pairs").children].forEach((b, k) => b.setAttribute("aria-pressed", String(k === j)));
   dart.visible = !S.tq; plane.visible = !!S.tq;
+  rings.position.set(S.ip[0].x, 0, S.ip[0].z);
   const kind = S.target_kind === "fixed_wing" ? "Fixed wing" : "Threat";
-  el("tkind").textContent = kind;
-  threatTag.firstChild.textContent = kind.toUpperCase();
+  el("tkind").textContent = S.pairCount ? `${kind} · ${S.target.id}` : kind;
+  el("ikind").textContent = S.pairCount ? `Interceptor · ${S.interceptor.id}` : "Interceptor · Iris";
+  irisTag.firstChild.textContent = S.pairCount ? S.interceptor.id.toUpperCase() : "IRIS";
+  threatTag.firstChild.textContent = S.pairCount ? S.target.id.toUpperCase() : kind.toUpperCase();
   for (const id of ["tbank", "tbank-label"]) el(id).hidden = !S.tbank;
   el("summary").innerHTML = describe(S);
   alertTag.querySelector("small").textContent = S.launch ? `${S.launch.range} m` : "";
   buildLog(S);
   buildTracks(S);
-  time = 0; playing = false; ui.play.textContent = "Play";
-  overview();
+  if (!keepTime) {
+    time = 0; playing = false; ui.play.textContent = "Play";
+    overview();
+  }
   update();
 }
 
@@ -940,7 +1053,8 @@ window.addEventListener("keydown", (e) => {
   else if (e.key === "f" || e.key === "F") setFollow(!follow);
   else if (e.key === "o" || e.key === "O") overview();
   else if (e.key === "t" || e.key === "T") topView();
-  else if (e.key === "1" || e.key === "2") selectScenario(Number(e.key) - 1);
+  else if (e.key >= "1" && e.key <= "9" && Number(e.key) <= SCEN.length) selectScenario(Number(e.key) - 1);
+  else if ((e.key === "n" || e.key === "N") && SCEN[tab].views.length > 1) selectView((view + 1) % SCEN[tab].views.length, true);
   else if (e.key === "p" || e.key === "P") applyPalette(palette === "tac" ? "amber" : "tac");
   else if ((e.key === "m" || e.key === "M") && DATA.meta.menu) window.location.href = DATA.meta.menu;
 });
