@@ -255,7 +255,7 @@ jineta/
 │   ├── jinete/     # vehicles: aero, multirotor, control (multirotor autopilot),
 │   │               #   fixed_wing, propulsion, trim, stability, fixed_wing_control,
 │   │               #   profiles, guidance, targets
-│   ├── atalaya/    # sensors (radar, EO, IMU) + Kalman filtering
+│   ├── atalaya/    # sensors + Kalman filtering: kalman, radar, profiles
 │   ├── capitan/    # target assignment / threat prioritisation
 │   ├── escuadron/  # inter-unit coordination and communications
 │   └── arena/      # composes the layers: world.py (every entity in one loop),
@@ -437,11 +437,15 @@ alarms; the link from the radar to the interceptor is perfect and instant (phase
    equal one stacked update (information adds up); the continuous noise does not
    depend on how an interval is split, the piecewise one does; NEES inside its χ²
    interval over 300 seeded runs, and far outside it for an overconfident filter.
-2. ⏳ **Ground radar** (`jineta/atalaya/radar.py`): range, azimuth and elevation from
-   its site, Gaussian noise, its own rate and maximum range, a seeded random
-   generator of its own; a generic short-range radar profile with open sources.
-   Tests: noise-free = exact geometry; sample mean and covariance converge; the
-   cross-range error is r·σθ; the measurement schedule; no measurement out of range.
+2. ✅ **Ground radar** (`jineta/atalaya/radar.py`, `jineta/atalaya/profiles.py`):
+   range, azimuth and elevation from its site, Gaussian noise, its own rate and
+   maximum range, a seeded random generator of its own; the generic short-range
+   radar profile (`SHORT_RANGE_RADAR`: 1 m, 0.5°, 1.0°, 10 Hz, 2 km) from two public
+   datasheets. Tests: known directions and the round trip to NED; noise-free =
+   exact geometry; over 20 000 measurements the mean, the spread (±0.2 %) and no
+   correlation; the sideways spread is r·σθ at 100 m and 1 km; the schedule at
+   10 Hz and at 13 Hz in a 100 Hz loop; no measurement out of range; the same seed
+   repeats a run.
 3. ⏳ **EKF and tracks** (`jineta/atalaya/tracker.py`): the spherical measurement
    enters the filter through its Jacobian (azimuth wrapped); a track starts from two
    measurements and can be predicted to any time. Tests: the Jacobian against finite
@@ -1007,6 +1011,32 @@ Phase 9 (sensors and tracking):
   truth (5.67–6.05 against the 99 % interval 5.50–6.53 over 300 runs); an
   overconfident filter gives 49–304. Every random test uses a seeded
   `numpy.random.default_rng`, so it gives the same numbers on every computer.
+- **A radar measures in spherical coordinates around its site** (`atalaya/radar.py`):
+  range, azimuth (clockwise from North, in (−π, π]) and elevation (above the
+  horizon), each with independent Gaussian noise. The angle noise becomes a
+  sideways distance r·σθ that grows with the range (0.9 m at 100 m, 8.7 m at 1 km
+  for 0.5°), while the range noise does not: the cloud of measured points is a thin
+  plate across the line of sight. That is why the filter (step 3) works with the
+  spherical measurement itself and not with a converted NED point.
+- **Sensor profiles live in `atalaya/profiles.py`** (`RADAR_PROFILES`), like the
+  vehicles in `jinete/profiles.py`: data with their sources, named by the scenario
+  files. They are not in `jinete/profiles.py` so that `jinete` (vehicles) does not
+  import `atalaya` (sensors).
+- **`SHORT_RANGE_RADAR`**: a generic short-range 3D surveillance radar for small
+  drones, inside two public datasheets (Echodyne EchoGuard: < 1° azimuth, < 1.5°
+  elevation, 10 Hz; Kongsberg DR 100 for C-UAS: < 0.5 m range, < 0.5° azimuth,
+  < 1.0° elevation, 0.1–13 Hz, 2 km tracking range for a 0.5 m² target). Taken as
+  1σ per measurement: 1 m, 0.5°, 1.0°, 10 Hz, 2 km. The datasheets do not say
+  whether their accuracy is 1σ, RMS or a bound, nor per measurement or per track:
+  an assumption, written down. Field of view: the whole sky.
+- **The radar keeps its own rate** in the 100 Hz loop: scan k is due at k / rate
+  and happens at the first step at or after it, with that step's truth. The time of
+  the next scan is computed from the count of scans, not by adding the period again
+  and again (that would pile up rounding errors). At 13 Hz with 0.01 s steps every
+  scan is less than one step late.
+- **The radar owns its random generator**, built from its seed at `reset`, so a run
+  repeats exactly and two radars do not share a noise sequence. It draws its noise
+  target by target in the order it is given, so that order is fixed by the caller.
 
 ## 7. Current state
 
@@ -1520,7 +1550,12 @@ Phase 9 (sensors and tracking):
   `white_noise_acceleration`, `piecewise_white_acceleration`, `alpha_beta_gains`;
   20 tests in `tests/test_kalman.py`. The full list above is updated at the close
   of the phase.
-- Now: phase 9, step 2 (ground radar). The step plan is in section 5.
+- `jineta/atalaya/radar.py` (phase 9, step 2) — `wrap_angle`, `spherical`,
+  `cartesian`, `RadarParams` (`noise_covariance`), `Measurement` (`values`,
+  `position`), `Radar(params, site, seed)` (`reset`, `next_time`, `due`, `measure`,
+  `scan`); `jineta/atalaya/profiles.py` — `SHORT_RANGE_RADAR`, `RADAR_PROFILES`;
+  27 tests in `tests/test_radar.py`.
+- Now: phase 9, step 3 (EKF and tracks). The step plan is in section 5.
 
 ## 8. Working with Claude
 
