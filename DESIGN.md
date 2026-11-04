@@ -444,9 +444,15 @@ riders moving together).
    commands of the reference lap replayed by three drones (open loop): each within
    1e-9 of the reference states (measured 2.1e-13), the three identical bit for
    bit.
-4. **Batch rate loop**: integrators, anti-windup, mixer clipping, reset per drone.
-   Tests: step by step against `RateController`; closed-loop runs with random
-   command sequences within 1e-9.
+4. ✅ **Batch rate loop** (`escuadron/control.py`: `BatchRateController`,
+   `rotor_speeds_for_wrench`): integrators, anti-windup, mixer clipping, reset per
+   drone. Tests: the mixer's inverse with both clips against the reference (500
+   wrenches); 300 updates of 50 drones with random commands and states, rotor speeds
+   and integrals equal to the reference's, the anti-windup reached; 3 s of flight
+   of 12 drones with commands changing every 0.5 s, each within 1e-9 of its
+   reference flight (measured 1.6e-14, up to 29 m/s and 4 rad/s); the exact
+   discrete first order of the P-only loop on each axis; a drone alone or among
+   1000 bit for bit; reset of some drones (indices, mask) or all.
 5. **Batch attitude and velocity loops, landed state and land detection**: the
    whole `Autopilot` for N drones. Tests: against the reference loops; the lap of
    the first course flown by N drones in the batch, each within 1e-9 of the
@@ -538,6 +544,20 @@ Phase 9 (fast batch engine):
   feet counted above the floor, rotor commands not clipped, a rotor left out of the
   mixer, the rotor drag out of plane, airspeed rotated the wrong way, no rotor drag
   moment, the wind's sign, the density ignored); each made a test fail.
+- **Controllers in the batch keep one memory per drone** (integrals (n, 3)), and
+  `reset(drones)` takes the drones to reset: all, a boolean mask or indices. In
+  training each drone starts a new lap when its own ends, so a reset of all of
+  them at once is not enough.
+- **The batch loops take the reference gains** (`RateGains`, ...): the gains are
+  profile data, one set per batch like the rest of the profile.
+- **The step 4 tests were checked by breaking the code** (7 mistakes: a column of
+  the mixer left out, no thrust clip, a looser anti-windup, the gyroscopic term
+  with the wrong sign, a reset of every drone, no integral, the moment without the
+  inertia); each made a test fail. A first version of one test drew moments of ~2 N·m,
+  far beyond the Iris's yaw authority (at most ~0.85 N·m: two rotors at full
+  thrust times the moment constant, 0.06 m), so 496 of 500 wrenches were clipped
+  and the free case was hardly tested; with ~0.3 N·m, 320 are clipped, and the test
+  now checks that both cases occur.
 - **First speed of the batch dynamics** (step 3, Claude's workspace; Iris forces,
   floor contact, RK4 and renormalisation, no control or collisions): ~300
   drone-steps/s at N = 1 (slower than the reference: every line is an array
@@ -1547,8 +1567,8 @@ Phase 6c (Kalman filter):
   28. The demonstration guidance (straight at each gate centre) only works slowly
       (3 m/s; it hits gate 2 at 4 m/s). The classical baseline of phase 10 must plan
       through the gates (look ahead to the next one, a position loop: loose end 10).
-- Next: phase 9 (fast batch engine), step 4 (batch rate loop); the plan is in
-  section 5.
+- Next: phase 9 (fast batch engine), step 5 (batch attitude and velocity loops,
+  landed state, the first course flown in the batch); the plan is in section 5.
 
 ## 8. Working with Claude
 
