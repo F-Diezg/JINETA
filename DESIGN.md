@@ -432,10 +432,18 @@ riders moving together).
    or among 1000 gives the same numbers bit for bit; free fall of tumbling bodies
    exact; one time per drone reaches the force model; invalid mass and inertia
    rejected, inertia read-only.
-3. **Batch multirotor forces and floor contact**: rotors through the mixer, rotor
-   drag, body drag, the landing gear. Tests: every drone against `Multirotor` with
-   `GroundContact` (saturated rotors, feet below the floor); the rotor commands of
-   the reference lap replayed in the batch within 1e-9.
+3. ✅ **Batch multirotor forces and floor contact** (`escuadron/multirotor.py`,
+   `escuadron/contact.py`): rotors through the mixer, rotor drag, body drag, the
+   landing gear. Tests: every drone against `Multirotor` with `GroundContact`
+   (400 states from 0.3 m up to 0.1 m below the floor, any attitude, rotor
+   commands below zero and above the maximum; with the defaults, and with a density
+   changing with height and a constant wind; 1e-12), and without contact; the
+   contact alone against the reference on two floor heights (feet touching, in the
+   air, and sinking points the floor does not push); the Iris standing on its gear
+   is at rest (1e-12); a drone alone or among 1000 bit for bit; the 882 rotor
+   commands of the reference lap replayed by three drones (open loop): each within
+   1e-9 of the reference states (measured 2.1e-13), the three identical bit for
+   bit.
 4. **Batch rate loop**: integrators, anti-windup, mixer clipping, reset per drone.
    Tests: step by step against `RateController`; closed-loop runs with random
    command sequences within 1e-9.
@@ -505,6 +513,36 @@ Phase 9 (fast batch engine):
   the original, restored within the same second, left a stale `__pycache__` that
   Python kept using (it checks the file's time in seconds and its size); delete
   `__pycache__` after breaking code on purpose.
+- **Sums over rotors and gear points are loops over them, each line acting on all
+  the drones** (four rotors, four feet for the Iris): the terms are added one after
+  the other as in the reference, and no operation mixes the drones. A sum along an
+  axis of a (N, 4, 3) array would also work, but how NumPy orders such a sum is its
+  own business.
+- **The batch contact computes every foot of every drone**; a foot that does not
+  touch gets exactly zero force (the reference skips it). Adding zero changes
+  nothing, so the results are the same, and every drone follows the same
+  operations whether it flies or stands.
+- **Environment models are the reference ones, called with arrays**: the density
+  gets the altitudes (N,), the wind the positions (N, 3), and each may return one
+  value for all or one per drone. `sea_level_density`, `no_wind` and
+  `ConstantWind` work as they are; the ISA functions do not (loose end 2), and
+  indoors they are not needed.
+- **The batch multirotor knows its number of drones** (`BatchMultirotor(params,
+  n, ...)`), so its commands start as zeros (n, rotors), motors off, as the
+  reference starts at zero.
+- **The lap replay records the reference commands by wrapping `run`** in the test
+  (monkeypatch of `examples.iris_course.run`), so the example does not change for
+  the test's sake.
+- **The step 3 tests were checked by breaking the code** (11 mistakes: the floor
+  pulling, the foot velocity not rotated, the contact moment from the NED force,
+  feet counted above the floor, rotor commands not clipped, a rotor left out of the
+  mixer, the rotor drag out of plane, airspeed rotated the wrong way, no rotor drag
+  moment, the wind's sign, the density ignored); each made a test fail.
+- **First speed of the batch dynamics** (step 3, Claude's workspace; Iris forces,
+  floor contact, RK4 and renormalisation, no control or collisions): ~300
+  drone-steps/s at N = 1 (slower than the reference: every line is an array
+  operation), ~4 600 at 16, ~40 000 at 256, ~98 000 at 4096. The real measure, with
+  everything, is step 8.
 - **A prototype of the batch dynamics was measured before planning** (Claude's
   workspace, dynamics + RK4 only): per derivative within 5e-15 of the reference;
   the 882 rotor commands of the reference lap replayed in it within 1.2e-13 m;
@@ -1509,8 +1547,8 @@ Phase 6c (Kalman filter):
   28. The demonstration guidance (straight at each gate centre) only works slowly
       (3 m/s; it hits gate 2 at 4 m/s). The classical baseline of phase 10 must plan
       through the gates (look ahead to the next one, a position loop: loose end 10).
-- Next: phase 9 (fast batch engine), step 3 (batch multirotor forces and floor
-  contact); the plan is in section 5.
+- Next: phase 9 (fast batch engine), step 4 (batch rate loop); the plan is in
+  section 5.
 
 ## 8. Working with Claude
 
