@@ -242,12 +242,45 @@ def _attitude_from(body_z: np.ndarray, yaw: float) -> np.ndarray:
 
 
 @dataclass(frozen=True)
+class LandDetection:
+    """When the autopilot takes off and when it decides it has landed.
+
+    Take-off: a vehicle on the ground takes off when it is asked to climb faster
+    than `takeoff_speed` [m/s].
+    Landing: a flying vehicle has landed when, for `hold_time` [s] in a row, it
+    moves slower than `max_speed` [m/s] while the velocity loop asks for less than
+    `thrust_fraction` of its weight. A vehicle in the air cannot do that for long:
+    with 70 % of its weight in thrust it falls faster and faster (0.3 g), past
+    0.1 m/s in a few hundredths of a second. Only the floor holding it up can. (A
+    vehicle asked to climb asks for more than its weight, so it never qualifies.)
+    These are the quantities a real autopilot has (its velocity estimate and its
+    own thrust command), not the contact force, which no sensor measures.
+    """
+
+    takeoff_speed: float = 0.2
+    max_speed: float = 0.1
+    thrust_fraction: float = 0.7
+    hold_time: float = 0.5
+
+    def __post_init__(self) -> None:
+        if not self.takeoff_speed > 0.0:
+            raise ValueError("takeoff_speed must be > 0")
+        if not self.max_speed > 0.0:
+            raise ValueError("max_speed must be > 0")
+        if not 0.0 < self.thrust_fraction < 1.0:
+            raise ValueError("thrust_fraction must be in (0, 1)")
+        if not self.hold_time > 0.0:
+            raise ValueError("hold_time must be > 0")
+
+
+@dataclass(frozen=True)
 class MultirotorGains:
-    """All the gains of the cascade for one vehicle profile."""
+    """All the gains of the cascade for one vehicle profile, and its land detection."""
 
     rate: RateGains
     attitude: AttitudeGains
     velocity: VelocityGains
+    land: LandDetection = LandDetection()
 
 
 @dataclass
@@ -257,6 +290,14 @@ class Autopilot:
     Set `velocity_command` (NED [m/s]) and `yaw_command` ([rad]); pass the autopilot
     itself as `pre_step` to `run`. Each call runs velocity -> attitude -> rate and
     writes the rotor speed commands into the vehicle.
+
+    On the ground (`landed`): the motors are stopped and every integrator is held at
+    zero, so waiting on the ground leaves nothing behind (an integrator charged
+    against the floor would make the take-off late or crooked). Asked to climb
+    faster than the take-off speed, it takes off with the loops starting from zero.
+    In flight it watches for a landing (see `LandDetection`) and, once landed,
+    stops the motors. A vehicle that starts on the floor is built with
+    `landed=True`; the default, False, is a vehicle already in the air.
     """
 
     vehicle: Multirotor
@@ -264,6 +305,7 @@ class Autopilot:
     dt: float  # control period [s]: the simulation step
     velocity_command: np.ndarray = field(default_factory=lambda: np.zeros(3))
     yaw_command: float = 0.0
+    landed: bool = False
     velocity_loop: VelocityController = field(init=False, repr=False)
     attitude_loop: AttitudeController = field(init=False, repr=False)
     rate_loop: RateController = field(init=False, repr=False)
@@ -273,9 +315,27 @@ class Autopilot:
         self.velocity_loop = VelocityController(params, self.gains.velocity, self.dt)
         self.attitude_loop = AttitudeController(self.gains.attitude)
         self.rate_loop = RateController(params, self.gains.rate, self.dt)
+        self._still_time = 0.0  # how long the landing conditions have held [s]
+
+    def reset(self) -> None:
+        """Forget the integrators and the landing timer."""
+        self.velocity_loop.reset()
+        self.rate_loop.reset()
+        self._still_time = 0.0
 
     def __call__(self, t: float, state: np.ndarray) -> None:
         """The pre_step hook: update the rotor speed commands of the vehicle."""
+        land = self.gains.land
+        if self.landed:
+            self.reset()
+            if self.velocity_command[2] < -land.takeoff_speed:
+                self.landed = False  # take off, from clean integrators
+            else:
+                self.vehicle.rotor_speed_command = np.zeros(
+                    len(self.vehicle.params.rotors)
+                )
+                return
+
         attitude_command, thrust = self.velocity_loop.update(
             self.velocity_command, self.yaw_command, state
         )
@@ -283,3 +343,12 @@ class Autopilot:
         self.vehicle.rotor_speed_command = self.rate_loop.update(
             rate_command, thrust, state
         )
+
+        weight = self.vehicle.params.mass * GRAVITY
+        still = (
+            np.linalg.norm(state[3:6]) < land.max_speed
+            and thrust < land.thrust_fraction * weight
+        )
+        self._still_time = self._still_time + self.dt if still else 0.0
+        if self._still_time >= land.hold_time:
+            self.landed = True  # from the next step: motors stopped, loops reset

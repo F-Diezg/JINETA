@@ -312,9 +312,14 @@ ground contact model), and gates are rectangular or circular from the start.
    plan, see the decision log); a slide brakes in the closed-form time (≈ μg); every
    mode at rest is stable with RK4 at 100 Hz, and a little more damping or less slip
    speed is not; a rough landing ends at rest and level.
-3. ⏳ **Take-off and landing with the autopilot**: an "on the ground" detector that
-   freezes the integrators. Tests: a clean take-off with no jump; a soft landing
-   that stays still.
+3. ✅ **Take-off and landing with the autopilot** (`LandDetection`,
+   `Autopilot(..., landed=True)`): on the ground the motors are stopped and the
+   integrators held at zero; asked to climb faster than 0.2 m/s it takes off; in
+   flight it detects a landing from its speed and its own thrust. Tests: waiting 1 s
+   or 5 s on the ground gives the same take-off to the last bit; the take-off is
+   the climb it would fly in the air (within 0.005 m/s after 1 s), straight up; a
+   0.5 m/s landing is detected 1.3 s after touching and ends exactly at rest; never
+   a landing in the air (hover, braking, a 5 m/s descent).
 4. ⏳ **Collisions in flight**: the drone as a sphere against walls, ceiling and
    obstacles; after take-off, touching the floor is a crash too. The tunnelling
    limit (a thin obstacle skipped between two samples) is measured and written down.
@@ -332,6 +337,29 @@ ground contact model), and gates are rectangular or circular from the start.
 ## 6. Decision log
 
 Phase 8 (indoor world):
+- **The autopilot has a landed state, as PX4 does** (measured first: without it,
+  an Iris on the floor with a zero command spun its motors at hover speed and
+  floated 3.5 mm up; 3 s pressed down charged the vertical integrator with 3 m/s²
+  and the next climb was still 15 % slow 3 s later; after a landing the motors kept
+  spinning at 491 rad/s). Landed: motors stopped, every integrator held at zero, so
+  waiting on the ground leaves nothing behind (an integrator charged against the
+  floor makes a take-off late, or crooked if the rate loop is involved). Take-off:
+  a climb command faster than `takeoff_speed` (0.2 m/s).
+- **The landing is detected from what a real autopilot knows**, not from the
+  contact force: speed below 0.1 m/s while the velocity loop asks for less than 70 %
+  of the weight, for 0.5 s. In the air that is impossible for long (at 0.7 g of
+  thrust it falls past 0.1 m/s within a few hundredths of a second); only the floor
+  holding it up allows it. 50 % was the first choice and took 3.3 s to notice a
+  landing (the integrator has to unwind further); 70 % takes 1.3 s. The speed
+  condition is what keeps a fast descent (5 m/s asked, thrust below 70 % for most of
+  a second while it speeds up) from looking like a landing. A "not asked to climb"
+  condition was written first and removed: a climb command always asks for more
+  than the weight, so it could never decide anything (a deliberate mistake there
+  changed no test).
+- **The default is `landed=False`**, a vehicle already in the air: every earlier
+  test and example flies exactly as before. A vehicle that starts on the floor is
+  built with `landed=True`; one built airborne on the floor finds out by itself
+  when asked to descend.
 - **Ground contact by the penalty method**: the floor lets a contact point sink and
   pushes back with `N = k·depth + c·(sinking speed)`, never pulling (N ≥ 0).
   Friction `−μN v_t / √(|v_t|² + v_s²)`: Coulomb when sliding, fading to zero below
@@ -761,10 +789,13 @@ Phase 6c (Kalman filter):
   - `VelocityGains` (kp, ki, integral_limit, max_tilt, thrust_range),
     `VelocityController(params, gains, dt)`: `update(velocity_command, yaw_command,
     state) -> (attitude command, total thrust)`, `max_thrust`, `reset()`.
-  - `MultirotorGains(rate, attitude, velocity)`.
-  - `Autopilot(vehicle, gains, dt)`: callable `pre_step` hook with
-    `velocity_command` and `yaw_command`; runs the three loops and writes the
-    vehicle's `rotor_speed_command`.
+  - `LandDetection(takeoff_speed=0.2, max_speed=0.1, thrust_fraction=0.7,
+    hold_time=0.5)` (validated).
+  - `MultirotorGains(rate, attitude, velocity, land=LandDetection())`.
+  - `Autopilot(vehicle, gains, dt, landed=False)`: callable `pre_step` hook with
+    `velocity_command`, `yaw_command` and `landed`; runs the three loops and writes
+    the vehicle's `rotor_speed_command` (zero while landed); `reset()` clears the
+    integrators and the landing timer.
 - `jineta/jinete/profiles.py` — `flu_to_frd(vector)`, `IRIS` (PX4 SITL Iris, sources
   in the comments), `IRIS_RATE_GAINS`, `IRIS_ATTITUDE_GAINS`, `IRIS_VELOCITY_GAINS`,
   `IRIS_GAINS`, `IRIS_LANDING_GEAR` (the corners of its PX4 collision box),
@@ -812,7 +843,7 @@ Phase 6c (Kalman filter):
 - `jineta/atalaya/kalman.py` — `predict`, `update` (returns the innovation and its
   covariance too), `nees`, `constant_velocity_transition`,
   `white_noise_acceleration`, `piecewise_white_acceleration`, `alpha_beta_gains`.
-- Tests (417 passing, ruff check + ruff format clean):
+- Tests (435 passing, ruff check + ruff format clean):
   - integrators (2): RK4 exact on free fall; Euler's error shrinks with dt.
   - rotation (5): 90° about z maps North to East; proper orthogonal matrix; steady
     spin about a principal axis; constant torque spins up linearly; torque-free
@@ -956,6 +987,17 @@ Phase 6c (Kalman filter):
     matches the exact bounce (rebound 0.2 %, time below the floor 0.3 ms) with a
     restitution above the textbook one; a slide reaches 1 m/s in the closed-form time
     (1 %); a rough landing (0.5 m, banked, sliding, spinning) ends at rest and level.
+  - take-off and landing (18): land detection rejects invalid settings (4 cases);
+    every gain set has one; on the ground (holding, pushing down, climbing too
+    slowly) the motors are stopped, the integrators zero and the state exactly at
+    rest; waiting 1 s or 5 s before a take-off gives the same flight bit for bit;
+    the take-off matches the same climb in the air (0.02 m/s after 0.3 s, 0.005 after
+    1 s), straight up, never below the resting height; a 0.5 m/s landing touches at
+    2 s, does not bounce, is detected within 2 s and ends at rest, motors stopped; a
+    take-off after a landing (same autopilot) equals a fresh one (1e-6); an
+    autopilot told it is flying finds the floor when asked to descend, and really
+    hovers when asked to hold; no landing in the air (hover, cruise and brake, drop
+    and stop, a 5 m/s descent); take off, land and take off again.
   - Kalman filter (20): the running mean and σ²/k exactly; the steady-state gains of
     Kalata's alpha-beta filter; the lag behind a constant acceleration (a T²/β and
     its two companions); two updates one after the other equal one stacked update
@@ -1052,9 +1094,9 @@ Phase 6c (Kalman filter):
       foot creeps under a slow sideways push). Both come from the step: sub-steps
       for the contact, or an implicit friction, if a task needs better.
   24. Only multirotors have a landing gear; the fixed wing has no contact model.
-- Next: phase 8 (indoor world). New chat in the Project: "Seguimos con Jineta, fase
-  8: mundo interior". Its step plan is drawn up at the start of the phase and
-  written in section 5.
+- Next: phase 8, step 4 (collisions in flight). New chat in the Project:
+  "Seguimos con Jineta, fase 8: paso 4 (colisiones en vuelo)". The step plan is in
+  section 5.
 
 ## 8. Working with Claude
 
