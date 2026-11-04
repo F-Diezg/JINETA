@@ -7,11 +7,12 @@ vehicle.
 
 *Jineta* is a working name.
 
-> **Status: phase 7 done.** The physics engine is built and validated (rigid body,
-> atmosphere and wind, a quadrotor with its cascaded autopilot, a fixed-wing
-> aircraft, a Kalman filter; 346 tests against analytic results). The indoor
-> world, the training loop and the viewer come next. See [`DESIGN.md`](DESIGN.md)
-> for the roadmap and the decision log.
+> **Status: phase 8 done.** The physics engine is built and validated, and the
+> indoor world is in place: rooms, obstacles and gates read from course files, a
+> drone that takes off from the floor, collisions and a referee that times a lap.
+> The Iris flies a first course with its autopilot (594 tests). The fast batch
+> engine and the training loop come next. See [`DESIGN.md`](DESIGN.md) for the
+> roadmap and the decision log.
 
 ## The goal
 
@@ -37,6 +38,10 @@ inertia, rotors, limits) they need, and trains a drone for their purpose.
 | Quadrotor autopilot | Cascaded velocity → attitude → rate control at 100 Hz, PX4-like gains |
 | Fixed wing | Aerodynamic coefficients, electric propeller, trim, dynamic modes, autopilot |
 | Estimation | Linear Kalman filter (constant-velocity model, consistency by NEES) |
+| Indoor world | Room, boxes and pillars by signed distance; rectangular and round gates |
+| Ground and take-off | Landing gear on the floor (spring-damper with friction); the autopilot's landed state, take-off and landing detection |
+| Collisions | The drone as spheres (13 for the Iris) against walls, ceiling, obstacles and gate frames; the gear against the floor after take-off; contact moment interpolated |
+| Courses | Strict YAML course files; a referee for gates in order, lap time, crash or time limit |
 
 Every physics module is tested against known results: closed-form motion,
 published reference values, exact discrete solutions of the control loops.
@@ -50,22 +55,25 @@ python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 pytest -n auto
-python -m examples.iris_velocity_step
+python -m examples.iris_course
 ```
 
 The examples in `examples/` show the engine at work (projectile with drag, the
 intermediate-axis instability, a body in wind, the Iris accelerating to 10 m/s and
-stopping).
+stopping) and the Iris flying the first course (`courses/first_course.yaml`): it
+takes off, flies through the four gates and finishes in 8.81 s.
 
 ## Layout
 
 ```
 jineta/core/      physics engine: integrators, rigid body, quaternions, run loop
-jineta/campo/     environment: atmosphere, wind (indoor world next)
+jineta/campo/     environment: atmosphere, wind, indoor world (room, obstacles,
+                  gates, collisions, referee, course files)
 jineta/jinete/    vehicles: multirotor, fixed wing, their autopilots, profiles
 jineta/atalaya/   estimation: Kalman filter (onboard sensors later)
 tests/            tests against analytic and published results
 examples/         runnable scripts
+courses/          course files (YAML)
 ```
 
 ## Conventions
@@ -80,7 +88,7 @@ vehicle, every number with its source). Details in [`DESIGN.md`](DESIGN.md).
 |---|---|
 | 1–6c | Physics engine ✅ |
 | 7 | Project goal, new README and design ✅ |
-| 8 | Indoor world: room, gates, obstacles, collisions; course files |
+| 8 | Indoor world: room, gates, obstacles, collisions; course files ✅ |
 | 9 | Fast batch engine (many drones at once) |
 | 10 | Training environment + classical baseline |
 | 11 | **MVP:** the Iris learns the course |

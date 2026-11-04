@@ -164,3 +164,19 @@ def box_bottom_corners(size: Sequence[float]) -> np.ndarray:
             for sy in (1, -1)
         ]
     )
+
+
+def resting_height(gear: LandingGear, mass: float) -> float:
+    """Height [m] of the centre of mass above the floor when the vehicle stands
+    level and still on its gear, every point carrying an equal share of the weight
+    (gear symmetric about the centre of mass, as the Iris's).
+
+    The lowest points (largest body z) touch; each of the n springs sinks
+    m g / (n k), so the centre of mass is that much less than their height above it.
+    Only the lowest points carry weight: a level vehicle stands on those.
+    """
+    z = gear.points[:, 2]
+    lowest = z.max()
+    n = int(np.sum(np.isclose(z, lowest)))
+    sink = mass * GRAVITY / (n * gear.stiffness)
+    return float(lowest - sink)

@@ -1,9 +1,10 @@
-"""Collisions of a flying vehicle with the room, its obstacles and the floor.
+"""Collisions of a flying vehicle with the room, its obstacles, gates and floor.
 
 What is checked at every sample of a flight (the states that simulation.run keeps):
-  - walls, ceiling and obstacles, with the vehicle's spheres (its hitbox: centres
-    in body axes and radii), placed by its position and attitude. A sphere touches
-    a shape when the signed distance of its centre is less than its radius;
+  - walls, ceiling, obstacles and gate frames, with the vehicle's spheres (its
+    hitbox: centres in body axes and radii), placed by its position and attitude.
+    A sphere touches a shape when the signed distance of its centre is less than
+    its radius;
   - the floor, with the vehicle's floor points (its landing gear). A vehicle starts
     a lap standing on its gear, so the floor only counts once it has left it: from
     the first sample with every floor point above the floor, any floor point
@@ -55,8 +56,9 @@ class Obstacle(Protocol):
 class Collision:
     """A contact: what was touched, when and where.
 
-    kind: "room" (a wall or the ceiling), "obstacle" or "floor".
-    index: which obstacle (its position in the list); None for the room and floor.
+    kind: "room" (a wall or the ceiling), "obstacle", "gate" (its frame) or "floor".
+    index: which obstacle or gate (its position in its list); None for the room and
+        the floor.
     time: the moment of contact [s], interpolated inside the step.
     position: the centre of mass (NED) at that moment [m], interpolated.
     """
@@ -85,6 +87,8 @@ class CollisionMonitor:
     obstacles: shapes with a signed distance, in the order `Collision.index` uses.
     sphere_centers, sphere_radii: the vehicle's hitbox (centres in body axes [m]).
     floor_points: the points that touch the floor (landing gear, body axes [m]).
+    gates: gates whose frames are checked like obstacles (anything with a signed
+        distance), reported as kind "gate".
 
     After a call that found a contact, `collision` holds it and every later call
     returns True. `airborne` tells whether the vehicle has left the floor.
@@ -95,6 +99,7 @@ class CollisionMonitor:
     sphere_centers: npt.ArrayLike
     sphere_radii: npt.ArrayLike
     floor_points: npt.ArrayLike
+    gates: Sequence[Obstacle] = ()
     collision: Collision | None = field(default=None, init=False)
     airborne: bool = field(default=False, init=False)
     _previous: tuple[float, np.ndarray, np.ndarray] | None = field(
@@ -103,6 +108,7 @@ class CollisionMonitor:
 
     def __post_init__(self) -> None:
         self.obstacles = tuple(self.obstacles)
+        self.gates = tuple(self.gates)
         self.sphere_centers = _rows(self.sphere_centers, "sphere_centers")
         radii = np.array(self.sphere_radii, dtype=float)
         if radii.shape != (len(self.sphere_centers),):
@@ -114,7 +120,8 @@ class CollisionMonitor:
         self.floor_points = _rows(self.floor_points, "floor_points")
 
     def margins(self, state: np.ndarray) -> np.ndarray:
-        """Margin [m] of every check for one state: [room, obstacle 0, ..., floor].
+        """Margin [m] of every check for one state:
+        [room, obstacle 0, ..., gate 0, ..., floor].
 
         Body points go to NED as p = x + R(q) r; with the points as rows of an array
         that is x + points @ R^T.
@@ -126,7 +133,7 @@ class CollisionMonitor:
         room = np.min(self.room.wall_clearance(centers) - radii)
         obstacles = [
             np.min(np.asarray(o.signed_distance(centers)) - radii)
-            for o in self.obstacles
+            for o in (*self.obstacles, *self.gates)
         ]
         feet = position + self.floor_points @ rotation.T
         floor = np.min(-feet[:, 2])  # height above the floor z = 0 (up is -z)
@@ -171,11 +178,13 @@ class CollisionMonitor:
                 fractions = np.where(touching, m0 / (m0 - margins), np.inf)
         i = int(np.argmin(fractions))
         f = float(fractions[i])
-        n_obstacles = len(self.obstacles)
+        n_obstacles, n_gates = len(self.obstacles), len(self.gates)
         if i == 0:
             kind, index = "room", None
         elif i <= n_obstacles:
             kind, index = "obstacle", i - 1
+        elif i <= n_obstacles + n_gates:
+            kind, index = "gate", i - 1 - n_obstacles
         else:
             kind, index = "floor", None
         contact = p0 + f * (position - p0)

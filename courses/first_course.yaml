@@ -1,0 +1,53 @@
+# First course: four gates through a hall, around a pillar and a crate.
+#
+# Positions are NED [m]: x North, y East, z DOWN (a gate 1.5 m above the floor has
+# z = -1.5). The room's floor has one corner at the origin. Headings in degrees,
+# clockwise from North; a gate's yaw_deg is the direction to fly through it.
+# The format is described in jineta/campo/course.py.
+
+name: First course
+time_limit: 30
+
+room:
+  size: [18.0, 10.0, 4.0]
+
+start:
+  position: [1.5, 5.0]
+  yaw_deg: 0
+
+gates:
+  - shape: rectangle
+    center: [5.0, 5.0, -1.5]
+    yaw_deg: 0
+    width: 1.6
+    height: 1.4
+    thickness: 0.1
+  - shape: circle
+    center: [9.0, 3.0, -2.0]
+    yaw_deg: 0
+    radius: 0.8
+    thickness: 0.1
+  - shape: rectangle
+    center: [14.0, 7.0, -1.5]
+    yaw_deg: 30
+    width: 1.6
+    height: 1.4
+    thickness: 0.1
+  - shape: circle
+    center: [16.5, 5.0, -1.2]
+    yaw_deg: -40
+    radius: 0.8
+    thickness: 0.1
+
+obstacles:
+  - shape: cylinder
+    base: [11.5, 6.6, 0.0]
+    radius: 0.3
+    height: 4.0
+  - shape: box
+    center: [12.0, 2.0, -1.0]
+    size: [2.0, 1.0, 2.0]
+    yaw_deg: 20
+  - shape: box
+    center: [7.0, 7.5, -0.75]
+    size: [1.5, 1.0, 1.5]

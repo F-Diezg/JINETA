@@ -25,12 +25,16 @@ their purpose (a course, a warehouse, an inspection route; a racing quadrotor, a
 heavier camera drone) and trains a drone for it, with the confidence that the
 simulated vehicle behaves like the real one.
 
-**Where it stands (end of phase 7):** the physics engine is built and validated
+**Where it stands (end of phase 8):** the physics engine is built and validated
 (phases 1–6c): integrators, rigid body, atmosphere and wind, a quadrotor with its
 cascaded autopilot, a fixed-wing aircraft with its own autopilot, and a Kalman
-filter. There is no indoor world, no training loop and no viewer yet. The first
-measured limit is speed: the Iris with its autopilot simulates at ~10 times real
-time on one core, far too slow to train (section 5, phase 9).
+filter. The indoor world is built (phase 8): a room with obstacles and gates read
+from a course file, a drone that takes off from the floor on its landing gear,
+collisions with its 13-sphere hitbox, and a referee that times a lap. The Iris
+flies the first course through the gate centres with its autopilot (8.81 s). There
+is no training loop and no viewer yet. The measured limit is speed: a lap
+simulates at ~800 steps/s, 8 times real time, on one core, far too slow to train
+(section 5, phase 9).
 
 Name: *Jineta* is a working name until the project has its own.
 
@@ -60,8 +64,8 @@ code should be clear and every concept explained before it is used.
   newline and fixes blank lines that are easy to lose when pasting code. In VS
   Code, "Files: Insert Final Newline" and format-on-save with the Ruff formatter
   do the same automatically.
-- The full test run, in one process, takes ~48 s (508 tests, in Claude's workspace
-  at phase 8, step 4b); the closed-loop fixed-wing tests are the slowest (the
+- The full test run, in one process, takes ~50 s (594 tests, in Claude's workspace
+  at the end of phase 8); the closed-loop fixed-wing tests are the slowest (the
   orbit hold, 5 s). `pytest -n auto` divides that by the number of cores.
 - `scipy` is used for the trim (`scipy.optimize.root`) and in the Kalman tests
   (`scipy.stats.chi2`).
@@ -135,7 +139,20 @@ code should be clear and every concept explained before it is used.
   axes, profile data like the rotors); walls, ceiling and obstacles are checked
   with it, the floor with the landing gear. `CollisionMonitor` is a `stop` for
   `simulation.run`; it reports the first contact (`Collision`: kind "room",
-  "obstacle" or "floor", obstacle index, interpolated time and position). It takes
+  "obstacle", "gate" or "floor", index, interpolated time and position).
+- **Gates** stand upright and are crossed along their heading `yaw` (like a box's
+  yaw). Their own axes: n along the heading, u to the right, v down. A gate is
+  crossed when the centre of mass goes from n < 0 to n >= 0 between two samples and
+  the point where it cuts the plane is in the opening (edges included).
+- **Course files** (`courses/*.yaml`, read by `load_course`) are strict: unknown
+  or missing keys, wrong types or sizes, anything outside the room and a start
+  inside an obstacle are errors that name the place (`gates[1].width`). Positions
+  NED (z down: 1.5 m up is z = -1.5), angles `yaw_deg` in degrees, stored in
+  radians. The format is in the docstring of `campo/course.py`, and a test reads
+  that example as a course so the two cannot drift apart.
+- **A lap** is judged by a `Referee` (the `stop` of the run): it starts at t = 0
+  and ends "finished" (last gate crossed; lap time = that moment), "crashed" or
+  "timeout". Gates count only in order and forward. It takes
   the hitbox and the gear as arrays, so `campo` still only imports `core`.
 - **Simulation step order:** `pre_step(t, y)` (controllers) → one RK4 step →
   `post_step(y)` (e.g. renormalise the quaternion) → `stop(t, y)`.
@@ -197,14 +214,17 @@ jineta/
 │   ├── core/       # physics engine: integrators, point mass, rotating and rigid
 │   │               #   body, quaternions, inertia, environment interfaces, run loop
 │   ├── campo/      # environment: atmosphere.py (ISA), wind.py, indoor.py (room
-│   │               #   and obstacles by signed distance), collision.py (collisions
-│   │               #   in flight)
+│   │               #   and obstacles by signed distance), gates.py (frames and
+│   │               #   crossings), collision.py (collisions in flight),
+│   │               #   referee.py (gates in order, lap time, end of a lap),
+│   │               #   course.py (course files)
 │   ├── jinete/     # vehicles: aero, multirotor, control (multirotor autopilot),
 │   │               #   contact (landing gear on the floor), hitbox (collision
 │   │               #   spheres), fixed_wing, propulsion, trim, stability,
 │   │               #   fixed_wing_control, profiles
 │   └── atalaya/    # estimation: kalman.py (later: onboard sensors)
 ├── tests/
+├── courses/        # course files (YAML)
 ├── examples/       # runnable scripts (python -m examples.<name>)
 ├── pyproject.toml  # pytest + ruff configuration
 ├── DESIGN.md
@@ -214,8 +234,6 @@ jineta/
 Planned (each package arrives with its phase; names are proposals, settled when the
 phase starts):
 
-- `campo/` grows the **indoor world** (phase 8): room geometry, gates, obstacles,
-  collision checks, the course file format.
 - a **fast batch engine** (phase 9): the same physics for N drones at once on
   arrays, checked against the reference engine in `core` + `jinete`, which stays as
   the truth.
@@ -243,7 +261,7 @@ imported by the engine.
 | 6b | Fixed-wing model (aero coefficients, propeller, trim, modes, autopilot) | ✅ Done |
 | 6c | Estimation groundwork: linear Kalman filter | ✅ Done |
 | 7 | Project goal, repo reduced to the engine, new README and DESIGN | ✅ Done |
-| 8 | Indoor world: room, floor, gates, obstacles, collisions; course files | ⏳ |
+| 8 | Indoor world: room, floor, gates, obstacles, collisions; course files | ✅ Done |
 | 9 | Fast batch engine (many drones at once), checked against the reference | ⏳ |
 | 10 | Training environment (observation, action, reward) + classical baseline | ⏳ |
 | 11 | **MVP:** the Iris learns the course (reinforcement learning) | ⏳ |
@@ -301,8 +319,13 @@ above); the repository was reduced to the physics engine (core, environment,
 vehicles, Kalman filter) and its examples; README, roadmap and this document were
 rewritten. Tests: 346, ruff clean.
 
-**Phase 8 — in progress.** Plan agreed with the author at the start of the phase
-(each step: tests green, ruff clean, commit + push). Decided with the author: the
+**Phase 8 — done.** The indoor world: geometry by signed distance, ground contact
+and a landed state for the autopilot, collisions with a hitbox of spheres, gates,
+a referee and course files, and a first course flown by the Iris. A step 4b was
+added during the phase (the drone's shape). Tests: 594, ruff clean.
+
+Plan agreed with the author at the start of the phase (each step: tests green,
+ruff clean, commit + push). Decided with the author: the
 drone starts each lap landed on the floor and takes off (so the phase brings a
 ground contact model), and gates are rectangular or circular from the start.
 1. ✅ **Geometry** (`jineta/campo/indoor.py`): the room (a box: floor, walls,
@@ -347,20 +370,101 @@ ground contact model), and gates are rectangular or circular from the start.
    0.197 m sooner than level; nose first into a wall at 0.280 m; take-off and hover
    still no crash; the tunnelling limit measured again (58 m/s head on; grazes up to
    3.1 cm at 20 m/s).
-5. ⏳ **Gates, rectangular and circular**: crossing between samples, through the
-   opening and in the right direction, with the time interpolated inside the step;
-   touching the frame is a crash (four bars, or a torus).
-6. ⏳ **Course and referee**: gate order, lap time, end by crash, finish or time
-   limit.
-7. ⏳ **Course files in YAML**: a strict format with clear errors, and a first
-   course.
-8. ⏳ **See a flight**: a figure of an Iris that takes off, flies through the gate
-   centres with its autopilot and finishes.
-9. ⏳ **Close the phase**: this document and the README.
+5. ✅ **Gates, rectangular and circular** (`jineta/campo/gates.py`,
+   `CollisionMonitor(..., gates=...)`): crossing between samples, through the
+   opening and in the right direction, with the fraction of the step interpolated;
+   the frame (four square bars, or a torus) is an obstacle reported as "gate".
+   Tests: frame distances by hand (3-4-5, 5-12-13), the rectangle equal to its four
+   bars and the torus to its centre circle (brute force); the yaw is a heading;
+   distance properties; straight, slanted and backward crossings (exact fractions),
+   moves that miss the opening, edges, the opening judged where the plane is cut;
+   one crossing in a sampled flight at the exact moment; a frame hit as "gate".
+6. ✅ **Course and referee** (`jineta/campo/referee.py`): gate order, lap time,
+   end by crash, finish or time limit. Tests: three gates in order with exact
+   moments; a later gate first and a gate crossed backwards do not count (and the
+   gate can be flown again); a crash ends the lap; a finish 2 ms before a crash in
+   the same step is a finish, a crash 2 ms before a gate is a crash; time limit;
+   reset repeats a lap.
+7. ✅ **Course files in YAML** (`jineta/campo/course.py`,
+   `courses/first_course.yaml`, `jinete.contact.resting_height`): a strict format
+   with clear errors, and a first course (18 x 10 x 4 m, four gates, a pillar and
+   two crates). Tests: the first course and the documented format load; optional
+   parts; 19 mistakes in the format and 7 in the layout, each with its place in the
+   message (and the z-down hint for a gate below the floor); the file is named in
+   the error; the start stands on the floor at its heading; the course builds its
+   monitor and referee; a straight lap of a course finishes at the exact moment.
+8. ✅ **See a flight** (`examples/iris_course.py`): the Iris takes off from the
+   floor, flies at 3 m/s straight at each gate centre with its velocity autopilot
+   and finishes the first course in 8.81 s; the figure shows the course from above
+   and from the side, the path coloured by speed and the crossings. Tests: the lap
+   finishes with the four gates in order and no contact (lap time as a regression
+   value, ±0.02 s); it starts on its gear and stays inside the room; every crossing
+   point is on the gate's plane, inside the opening.
+9. ✅ **Close the phase**: this document and the README.
 
 ## 6. Decision log
 
 Phase 8 (indoor world):
+- **The demonstration flight is the simplest guidance**: climb 0.5 m, then fly at
+  constant speed straight at the next gate's centre, nose along its heading. It
+  finishes the first course at 3 m/s (8.81 s) but crashes into the frame of gate 2
+  at 4 m/s (measured): it turns only once a gate is crossed, so at speed it
+  overshoots. The classical baseline of phase 10 needs to plan through the gates.
+- **The example's function is tested** (`tests/test_course_flight.py` imports
+  `examples.iris_course.fly_course`): the whole of phase 8 working together, with a
+  regression lap time. ~1 000 steps/s with the referee (13 spheres, 3 obstacles,
+  4 gates).
+- **Course files are YAML read strictly** (`yaml.safe_load`, then every key checked
+  by hand): a typo must not pass silently, and every message names its place.
+  `bool` is refused where a number is expected (in Python `True` is an int). The
+  constructors' own checks (sizes > 0) are reported at the same place.
+- **NED in the files too**, as in the code: one convention everywhere. Its usual
+  mistake (a positive z, below the floor) is caught by the layout check, whose
+  message reminds that z points down.
+- **The layout is checked when a course is read**: a gate's whole frame inside the
+  room (its centre at least the frame's reach from every surface: simple and a
+  little cautious, independent of the heading), each obstacle's centre (box) or
+  base (cylinder) inside the room, the start inside the room and not inside an
+  obstacle.
+- **The start stands on the floor**: `start_state(rest_height)` with
+  `resting_height(gear, mass)`, the height at which the gear carries the weight
+  (0.054 m for the Iris: its feet 0.055 m below the centre of mass, sinking 1 mm).
+- **The first course** (`courses/first_course.yaml`): an 18 x 10 x 4 m hall with
+  four gates (two rectangular 1.6 x 1.4 m, two round 0.8 m radius, two of them
+  turned 30° and -40°), a floor-to-ceiling pillar and two crates; time limit 30 s.
+- **The referee checks only the next gate, forward**: a gate crossed backwards or
+  out of order is neither counted nor a crash, so a drone that misses a gate can
+  turn back (a course with gates side by side cannot be cut short). At most one
+  gate per step (0.2 m at 20 m/s; gates are metres apart).
+- **The earlier of two events in one step wins**, by their interpolated moments:
+  crossing the last gate 2 ms before touching a wall is a finish. The lap time is
+  the moment of the last crossing, from t = 0 with the drone on the floor (take-off
+  included, as in a race from a standing start).
+- **The referee calls the monitor itself** and owns the end of the lap (`status`,
+  `end_time`, `lap_time`, `passes`); `reset()` resets both. Checked by breaking it
+  (6 mistakes); "reset keeps the monitor" passed at first, because the reset test
+  flew a lap without a crash: it now repeats a crashed lap.
+- **A gate is crossed by the centre of mass**, through the opening and forward: the
+  spheres touching the frame are a crash anyway, so "the centre went through the
+  opening and nothing touched" is "the drone went through". Backward crossings are
+  reported (`forward=False`); the referee decides what they mean. A start exactly
+  on the plane counts as after it, so touching the plane without going through
+  crosses nothing, and one move is never counted twice.
+- **The opening is judged where the plane is cut**, interpolated linearly between
+  the two samples (exact for a straight move; the curvature of a 10 ms piece of
+  flight moves it by ~a dt²/8, a quarter of a millimetre at 20 m/s²).
+- **Frames by their signed distance**, so they are obstacles like any other (the
+  monitor's `gates`, reported as kind "gate"). Rectangular: in the gate's plane the
+  ring between the outer rectangle and the opening, max(d_outer, -d_opening) (exact
+  for a ring of rectangles), extruded to the bar thickness with the box formula;
+  tested equal to the union of its four bars (outside a union the distance is the
+  smallest). Circular: a torus, hypot(sqrt(u² + v²) - R, n) - t/2.
+- **Gates stand upright and turn only about the vertical**, like obstacles; a
+  tilted gate is not needed for a first course.
+- **The gate tests were checked by breaking the code** (8 mistakes). "The opening
+  checked at the end sample" passed at first: every crossing tested went straight
+  or ended inside the opening. A diagonal move into the opening and out to the side
+  (and the reverse) now tells them apart.
 - **The drone collides as a set of spheres fixed to its body** (`Hitbox`): a sphere
   touches a shape when the signed distance of its centre is below its radius, so any
   shape with a signed distance is checked the same way, for one drone or many. The
@@ -900,13 +1004,13 @@ Phase 6c (Kalman filter):
 - `jineta/jinete/profiles.py` — `flu_to_frd(vector)`, `IRIS` (PX4 SITL Iris, sources
   in the comments), `IRIS_RATE_GAINS`, `IRIS_ATTITUDE_GAINS`, `IRIS_VELOCITY_GAINS`,
   `IRIS_GAINS`, `IRIS_LANDING_GEAR` (the corners of its PX4 collision box),
-  `SMALL_FIXED_WING` (generic small fixed-wing UAV, Aerosonde-class
-  open data), `SMALL_FIXED_WING_PROPULSION` (its motor and propeller),
+  `IRIS_HITBOX` (13 spheres) and `IRIS_BOUNDING_SPHERE`, `SMALL_FIXED_WING`
+  (generic small fixed-wing UAV, Aerosonde-class open data),
+  `SMALL_FIXED_WING_PROPULSION` (its motor and propeller),
   `SMALL_FIXED_WING_AUTOPILOT` (design choices of its autopilot). The profiles by
-  name: `MULTIROTOR_PROFILES` (`"iris"` → `MultirotorProfile(params, gains,
-  gear)`) and
-  `FIXED_WING_PROFILES` (`"small_fixed_wing"` → `FixedWingProfile(params,
-  propulsion, autopilot)`).
+  name: `MULTIROTOR_PROFILES` (`"iris"` → `MultirotorProfile(params, gains, gear,
+  hitbox)`) and `FIXED_WING_PROFILES` (`"small_fixed_wing"` →
+  `FixedWingProfile(params, propulsion, autopilot)`).
 - `jineta/jinete/fixed_wing.py` — `ControlSurfaces(elevator, aileron, rudder)`,
   `FixedWingParams` (frozen, validated; mass, inertia, S, b, c, e and the
   derivatives; `aspect_ratio`), `stall_blend`, `lift_coefficient`,
@@ -936,7 +1040,8 @@ Phase 6c (Kalman filter):
   slip_speed)` (frozen, validated, points read-only; `from_damping_ratio(points,
   mass, sink, damping_ratio, friction, slip_speed)`), `contact_forces(gear, state,
   floor_z=0)` → (force, moment) in body axes, `GroundContact(gear, floor_z=0)`
-  (callable force model), `box_bottom_corners(size)`.
+  (callable force model), `box_bottom_corners(size)`, `resting_height(gear,
+  mass)`.
 - `jineta/campo/indoor.py` — `Box(center, size, yaw=0)` (`to_local`,
   `signed_distance`), `Cylinder(base, radius, height)` (`signed_distance`),
   `Room(size)` (`center`, `clearance`, `wall_clearance` (no floor), `contains`),
@@ -951,15 +1056,28 @@ Phase 6c (Kalman filter):
   (13 spheres), `IRIS_BOUNDING_SPHERE`, `IRIS_PROPELLER_RADIUS`,
   `IRIS_PROPELLER_THICKNESS`, `IRIS_COLLISION_BOX`; `MultirotorProfile` has a
   `hitbox`.
+- `jineta/campo/gates.py` — `RectangularGate(center, yaw, width, height,
+  thickness)`, `CircularGate(center, yaw, radius, thickness)` (frozen, validated;
+  `to_local`, `in_opening(u, v)`, `signed_distance` to the frame, `crossing(start,
+  end)`), `Crossing(fraction, point, forward)`, `Gate` (either type).
+- `jineta/campo/course.py` — `Course(name, room, start, start_yaw, gates,
+  obstacles, time_limit)` (`start_state(rest_height)`, `monitor(...)`,
+  `referee(...)` from a hitbox and gear), `load_course(path)`,
+  `course_from_dict(data)`, `CourseError`. The format is in its docstring.
+- `courses/first_course.yaml` — the first course.
+- `jineta/campo/referee.py` — `GatePass(gate, time, point)`, `Referee(gates,
+  monitor, time_limit)`: callable `stop`; `status` ("flying", "finished",
+  "crashed", "timeout"), `passes`, `end_time`, `next_gate`, `lap_time`, `reset()`.
 - `jineta/campo/collision.py` — `Collision(kind, index, time, position)`,
-  `CollisionMonitor(room, obstacles, sphere_centers, sphere_radii, floor_points)`:
-  `margins(state)` ([room, obstacles..., floor], negative = touching), callable
+  `CollisionMonitor(room, obstacles, sphere_centers, sphere_radii, floor_points,
+  gates=())`: `margins(state)` ([room, obstacles..., gates..., floor], negative =
+  touching), callable
   `stop` (`collision`, `airborne`), `reset()`. `Obstacle` protocol (anything with
   `signed_distance`).
 - `jineta/atalaya/kalman.py` — `predict`, `update` (returns the innovation and its
   covariance too), `nees`, `constant_velocity_transition`,
   `white_noise_acceleration`, `piecewise_white_acceleration`, `alpha_beta_gains`.
-- Tests (508 passing, ruff check + ruff format clean):
+- Tests (594 passing, ruff check + ruff format clean):
   - integrators (2): RK4 exact on free fall; Euler's error shrinks with dt.
   - rotation (5): 90° about z maps North to East; proper orthogonal matrix; steady
     spin about a principal axis; constant torque spins up linearly; torque-free
@@ -1128,8 +1246,9 @@ Phase 6c (Kalman filter):
     (0.2 mm past the bounding sphere) and give back 0.233 / 0.104 / 0.036 m up,
     forward and sideways; the profile carries them; rejects invalid input (8
     cases); read-only.
-  - collisions (28), with the bounding sphere unless said: straight at the north wall, the ceiling, a crate and a pillar,
-    the moment exact (1e-9) and the obstacle named by its index; a sphere ahead of
+  - collisions (28), with the bounding sphere unless said: straight at the north
+    wall, the ceiling, a crate and a pillar, the moment exact (1e-9) and the
+    obstacle named by its index; a sphere ahead of
     the nose on a 90° heading; the earliest of two contacts in one step wins; a
     start inside a wall is reported at the first sample; the floor margin is the
     lowest foot nose up 20° on five headings (1e-12); a free fall onto the floor
@@ -1142,6 +1261,29 @@ Phase 6c (Kalman filter):
     than level (exact moments); nose first into a wall at 0.280 m; take-off and
     hover are no crash; a thin wall head on needs 58 m/s; a graze at 20 m/s is
     missed up to 3.1 cm, deeper than with the sphere.
+  - gates (41): rectangular frame distances by hand (7 points) and equal to its four
+    bars (3000 random, seeded); torus distances by hand (5 points) and against its
+    centre circle by brute force; the yaw is a heading (30°); many points at once,
+    1-Lipschitz and gradient of length 1 outside the frame (both shapes); straight
+    crossings forward and backward with exact fractions, a slanted one, six moves
+    that do not go through, edges inside, the opening judged where the plane is cut;
+    one crossing in a sampled flight at the exact moment (1e-12); a frame hit
+    reported as a gate; rejects invalid input (6 cases); read-only.
+  - referee (8): three gates in order (pass moments and lap time 1e-9); a later gate
+    first does not count (timeout); a gate crossed backwards does not count and is
+    then flown forward; a crash ends the lap (exact moment); a finish 2 ms before a
+    crash in the same step is a finish, a crash 2 ms before the last gate is a
+    crash; reset repeats a crashed lap; rejects invalid input.
+  - course files (34): the first course loads (types, headings in radians); the
+    format in the docstring is a valid course; optional parts; 19 mistakes in the
+    format and 7 in the layout name their place (the z-down hint for a gate below
+    the floor); a broken file and a typo name the file; the Iris rests at 0.054 m;
+    the start state; the course builds its monitor and referee; a straight lap of a
+    course finishes at the exact moment (1e-9).
+  - course flight (3): the Iris finishes the first course at 3 m/s through the four
+    gates in order without a contact (lap 8.81 ± 0.02 s); it starts on its gear,
+    takes off and stays inside the room; every crossing is on the gate's plane and
+    in its opening.
   - Kalman filter (20): the running mean and σ²/k exactly; the steady-state gains of
     Kalata's alpha-beta filter; the lag behind a constant acceleration (a T²/β and
     its two companions); two updates one after the other equal one stacked update
@@ -1162,6 +1304,9 @@ Phase 6c (Kalman filter):
   - `wind_gust.py` — power-law mean wind + 1-cosine gust: the body lags the wind.
   - `iris_velocity_step.py` — Iris under the autopilot: 10 m/s North, then stop
     (speed, pitch, rotor speeds, altitude), plus the top speed (20.7 m/s at 45°).
+  - `iris_course.py` — the Iris flies the first course through the gate centres at
+    3 m/s (lap 8.81 s): the course from above and from the side, path coloured by
+    speed, crossings marked. `fly_course(course, speed)` is reused by a test.
 - Physics note (intermediate-axis instability, torque-free): spin Ω about the
   intermediate axis grows any tiny perturbation at rate
   `λ = Ω·sqrt((I2−I1)(I3−I2)/(I1·I3))`. The example perturbation (0.01 rad/s on p
@@ -1172,8 +1317,9 @@ Phase 6c (Kalman filter):
   smallest or largest axis is stable.
 - Still open, on purpose (each has its moment):
   1. After `stop` fires, the last sample overshoots the event (e.g. ~v·dt below
-     the floor). Collisions now give their moment interpolated inside the step;
-     gate crossings will too (phase 8, step 5).
+     the floor). The events that matter give their moment interpolated inside the
+     step (collisions, gate crossings, the lap time); the state at that moment is
+     not stored (the run keeps samples only).
   2. The ISA functions are scalar-only (`if` on the altitude, `math`). Vectorise
      with `np.where` in the batch engine (phase 9). Indoors the density is
      constant over the height of a room.
@@ -1229,7 +1375,8 @@ Phase 6c (Kalman filter):
   20. The course loop uses the airspeed in its gains (Beard & McLain use the ground
       speed): equal in still air, different in a strong wind.
   21. Speed: ~1 000 steps/s for the Iris with its autopilot at 100 Hz on one core
-      (~10× real time, measured in Claude's workspace at the end of phase 7).
+      (~10× real time, end of phase 7); ~800 steps/s (8× real time) flying a lap of
+      the first course with its referee (end of phase 8; Claude's workspace).
       Training needs much more: the batch engine of phase 9.
   22. Stochastic turbulence (Dryden/von Kármán) is not modelled; indoors it only
       matters as the drone's own wash off walls and floor, which is beyond this
@@ -1252,9 +1399,12 @@ Phase 6c (Kalman filter):
   27. The hitbox spheres hold the PX4 collision geometry, which is itself a coarse
       envelope (a 0.47 x 0.47 x 0.11 m box for arms, body and legs). A real drone's
       shape, measured, comes with its profile (phase 14).
-- Next: phase 8, step 5 (gates, rectangular and circular). New chat in the
-  Project: "Seguimos con Jineta, fase 8: paso 5 (puertas)". The step plan is in
-  section 5.
+  28. The demonstration guidance (straight at each gate centre) only works slowly
+      (3 m/s; it hits gate 2 at 4 m/s). The classical baseline of phase 10 must plan
+      through the gates (look ahead to the next one, a position loop: loose end 10).
+- Next: phase 9 (fast batch engine). Its step plan is drawn up with the author at
+  its start. New chat in the Project: "Seguimos con Jineta, fase 9: motor por
+  lotes".
 
 ## 8. Working with Claude
 
