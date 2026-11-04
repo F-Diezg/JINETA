@@ -29,6 +29,7 @@ import numpy.typing as npt
 from jineta.core.environment import DensityModel, WindModel, no_wind, sea_level_density
 from jineta.core.inertia import inertia_tensor
 from jineta.core.rigid_body import ForceMomentModel, RigidBody
+from jineta.core.vector import cross
 from jineta.jinete.aero import body_airspeed
 
 
@@ -217,11 +218,11 @@ class Multirotor:
         airspeed = body_airspeed(t, state, self.wind)
         omega = state[10:13]
         for rotor, speed in zip(params.rotors, speeds, strict=True):
-            hub_airspeed = airspeed + np.cross(omega, rotor.position)
+            hub_airspeed = airspeed + cross(omega, rotor.position)
             in_plane = np.array([hub_airspeed[0], hub_airspeed[1], 0.0])
             drag = -density_ratio * params.rotor_drag_coefficient * speed * in_plane
             force = force + drag
-            moment = moment + np.cross(rotor.position, drag)
+            moment = moment + cross(rotor.position, drag)
 
         # Body drag on the airframe.
         speed_through_air = np.linalg.norm(airspeed)

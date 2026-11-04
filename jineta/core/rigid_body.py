@@ -14,6 +14,7 @@ import numpy as np
 from jineta.core import quaternion
 from jineta.core.environment import GRAVITY
 from jineta.core.inertia import inertia_tensor
+from jineta.core.vector import cross
 
 # (t, state) -> (force in body axes [N], moment in body axes [N·m]).
 # Gravity is NOT included: the body adds it itself.
@@ -66,7 +67,7 @@ class RigidBody:
         # Rotation: kinematics + Euler's equations (same as RotatingBody).
         q_dot = quaternion.derivative(q, omega)
         omega_dot = self.inertia_inv @ (
-            moment_body - np.cross(omega, self.inertia @ omega)
+            moment_body - cross(omega, self.inertia @ omega)
         )
 
         return np.concatenate([velocity, acceleration, q_dot, omega_dot])

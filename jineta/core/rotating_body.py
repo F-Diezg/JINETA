@@ -12,6 +12,7 @@ import numpy as np
 
 from jineta.core import quaternion
 from jineta.core.inertia import inertia_tensor
+from jineta.core.vector import cross
 
 # Torque model: (t, state) -> torque in body axes [N·m]
 TorqueModel = Callable[[float, np.ndarray], np.ndarray]
@@ -43,6 +44,6 @@ class RotatingBody:
 
         moment = self.torque(t, state)
         angular_momentum = self.inertia @ omega
-        omega_dot = self.inertia_inv @ (moment - np.cross(omega, angular_momentum))
+        omega_dot = self.inertia_inv @ (moment - cross(omega, angular_momentum))
 
         return np.concatenate([q_dot, omega_dot])

@@ -39,6 +39,7 @@ import numpy.typing as npt
 
 from jineta.core import quaternion
 from jineta.core.environment import GRAVITY
+from jineta.core.vector import cross
 
 
 @dataclass(frozen=True)
@@ -123,7 +124,7 @@ def contact_forces(
         depth = p[2] - floor_z
         if depth <= 0.0:
             continue
-        v = velocity + rotation @ np.cross(omega, r)
+        v = velocity + rotation @ cross(omega, r)
         normal = max(gear.stiffness * depth + gear.damping * v[2], 0.0)
         if normal == 0.0:
             continue
@@ -137,7 +138,7 @@ def contact_forces(
         f_ned = np.array([friction[0], friction[1], -normal])
         f_body = rotation.T @ f_ned
         force_ned = force_ned + f_ned
-        moment_body = moment_body + np.cross(r, f_body)
+        moment_body = moment_body + cross(r, f_body)
     return rotation.T @ force_ned, moment_body
 
 

@@ -402,7 +402,80 @@ ground contact model), and gates are rectangular or circular from the start.
    point is on the gate's plane, inside the opening.
 9. ✅ **Close the phase**: this document and the README.
 
+**Phase 9 — in progress.** Plan agreed with the author at the start of the phase
+(each step: tests green, ruff clean, commit + push). Decided with the author: the
+batch engine carries the whole multirotor cascade (velocity, attitude, rate, landed
+state), not only the rate loop the policy needs; all the drones of a batch fly the
+same course (arrays shaped so that a course per drone can come in phase 11); and
+loose end 26 (grazes missed between samples) is closed in this phase, in the
+reference first. The batch engine lives in `jineta/escuadron/` (a squadron: many
+riders moving together).
+1. ✅ **Measure the reference, and speed it up without touching the physics**
+   (`examples/benchmark.py`, `jineta/core/vector.py`): a lap of the first course
+   timed (best of several runs) and profiled. `np.cross` took over half of the
+   lap; `vector.cross`, the formula written out, gives the same numbers bit for
+   bit and the lap runs 1.7 times faster with exactly the same states. Tests:
+   equal to `np.cross` bit for bit for single pairs and stacks with broadcasting
+   (components over 16 orders of magnitude), basis vectors, perpendicular to both,
+   wrong shapes rejected.
+2. **Batch rigid body**: rotation matrices, quaternion derivative, Euler's
+   equations and the renormalisation for N drones at once, states (N, 13). Tests:
+   every drone equal to `RigidBody.derivative` (random seeded states, 1e-12);
+   one drone alone or among 1000 gives the same numbers (no cross-talk).
+3. **Batch multirotor forces and floor contact**: rotors through the mixer, rotor
+   drag, body drag, the landing gear. Tests: every drone against `Multirotor` with
+   `GroundContact` (saturated rotors, feet below the floor); the rotor commands of
+   the reference lap replayed in the batch within 1e-9.
+4. **Batch rate loop**: integrators, anti-windup, mixer clipping, reset per drone.
+   Tests: step by step against `RateController`; closed-loop runs with random
+   command sequences within 1e-9.
+5. **Batch attitude and velocity loops, landed state and land detection**: the
+   whole `Autopilot` for N drones. Tests: against the reference loops; the lap of
+   the first course flown by N drones in the batch, each within 1e-9 of the
+   reference lap.
+6. **Collisions between samples in the reference** (loose end 26): each sphere
+   checked along its move between two samples, not only at the samples. Tests: the
+   grazes that were missed are found; contact moments on flat faces still exact;
+   the cost measured.
+7. **Batch collisions, gates and referee**: status per drone ("flying",
+   "finished", "crashed", "timeout"), lap time, passes; a drone whose lap ended is
+   frozen. Tests: the same events (kind, index, moment) as the reference monitor
+   and referee on the same flights, crashes, finishes and timeouts mixed in one
+   batch.
+8. **Batch loop**: `step` and `reset` of chosen drones; speed against N measured
+   (table here). Tests: a drone reset in the middle of a run repeats its first lap
+   bit for bit; the others are not disturbed.
+9. **Close the phase**: this document and the README.
+
 ## 6. Decision log
+
+Phase 9 (fast batch engine):
+- **The whole cascade goes into the batch engine** (decided with the author). It
+  adds no realism (the physics is the same), but it pays twice: the classical
+  baseline of phase 10 can be flown on many courses at once (phase 11 compares the
+  policy with it on randomised courses), and a whole closed-loop lap is the
+  strongest check that the two engines agree.
+- **One course per batch**: every drone flies the same room, obstacles and gates;
+  their arrays are shaped so that a course per drone can be added in phase 11.
+- **Loose end 26 is closed in this phase**, in the reference first (the reference
+  is the truth) and then in the batch, so the check is written once against a
+  validated model.
+- **Before the batch engine, the per-call cost of NumPy was measured**: in Claude's
+  workspace `np.cross` on two 3-vectors takes ~27 µs against ~2.7 µs for the
+  formula written out, and it was over half of a lap (34 438 calls). NumPy's
+  general functions check shapes and move axes before any arithmetic; on a
+  3-vector that set-up is the whole cost. `core/vector.cross` writes the formula
+  out (the same operations in the same order, so the same rounding): the lap of
+  the first course gives the same states bit for bit and runs 1.7 times faster
+  (~390 → ~650 steps/s there; the author's computer is about twice as fast). The
+  same fixed cost per call is what the batch engine spreads over N drones.
+- **The benchmark keeps the fastest of several runs**: the slower ones were slowed
+  down by the rest of the computer, not by the simulator.
+- **A prototype of the batch dynamics was measured before planning** (Claude's
+  workspace, dynamics + RK4 only): per derivative within 5e-15 of the reference;
+  the 882 rotor commands of the reference lap replayed in it within 1.2e-13 m;
+  ~740 drone-steps/s at N = 1, ~8 500 at 16, ~38 000 at 256 and ~50 000-57 000 at
+  4096 (the gain flattens once each array operation is large enough).
 
 Phase 8 (indoor world):
 - **The demonstration flight is the simplest guidance**: climb 0.5 m, then fly at
@@ -1402,9 +1475,8 @@ Phase 6c (Kalman filter):
   28. The demonstration guidance (straight at each gate centre) only works slowly
       (3 m/s; it hits gate 2 at 4 m/s). The classical baseline of phase 10 must plan
       through the gates (look ahead to the next one, a position loop: loose end 10).
-- Next: phase 9 (fast batch engine). Its step plan is drawn up with the author at
-  its start. New chat in the Project: "Seguimos con Jineta, fase 9: motor por
-  lotes".
+- Next: phase 9 (fast batch engine), step 2 (batch rigid body); the plan is in
+  section 5.
 
 ## 8. Working with Claude
 

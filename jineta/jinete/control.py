@@ -12,6 +12,7 @@ import numpy.typing as npt
 
 from jineta.core import quaternion
 from jineta.core.environment import GRAVITY
+from jineta.core.vector import cross
 from jineta.jinete.multirotor import Multirotor, MultirotorParams
 
 
@@ -85,7 +86,7 @@ class RateController:
         angular_acceleration = self.gains.kp * error + self.integral
 
         inertia = self.params.inertia
-        moment = inertia @ angular_acceleration + np.cross(omega, inertia @ omega)
+        moment = inertia @ angular_acceleration + cross(omega, inertia @ omega)
         thrusts = self.params.rotor_thrusts([thrust_command, *moment])
         return self.params.rotor_speeds_for(thrusts)
 
@@ -235,9 +236,9 @@ def _attitude_from(body_z: np.ndarray, yaw: float) -> np.ndarray:
     """Quaternion whose body z axis is `body_z` (NED, unit) and whose nose points as
     close as possible to the heading `yaw` [rad, clockwise from North]."""
     heading = np.array([np.cos(yaw), np.sin(yaw), 0.0])
-    body_y = np.cross(body_z, heading)
+    body_y = cross(body_z, heading)
     body_y = body_y / np.linalg.norm(body_y)
-    body_x = np.cross(body_y, body_z)
+    body_x = cross(body_y, body_z)
     return quaternion.from_matrix(np.column_stack([body_x, body_y, body_z]))
 
 
