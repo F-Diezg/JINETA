@@ -6,8 +6,10 @@ costs far more than the six multiplications themselves: `np.cross` takes ~10 tim
 longer than writing the formula out. The simulator calls a cross product several
 times per derivative, so this matters.
 
-The functions here give exactly the same numbers as their NumPy counterparts (the
-same operations in the same order, so the same rounding), only faster.
+`cross` gives exactly the same numbers as `np.cross` (the same operations in the
+same order, so the same rounding), only faster. `matvec` is for stacks of vectors
+(the batch engine): it adds its terms in a fixed order, so every product depends
+only on its own inputs.
 """
 
 import numpy as np
@@ -43,3 +45,26 @@ def cross(a: npt.ArrayLike, b: npt.ArrayLike) -> np.ndarray:
     out[..., 1] = a2 * b0 - a0 * b2
     out[..., 2] = a0 * b1 - a1 * b0
     return out
+
+
+def matvec(matrix: npt.ArrayLike, vector: npt.ArrayLike) -> np.ndarray:
+    """Matrix-vector product of 3x3 matrices and 3-vectors, row by row.
+
+    matrix has shape (3, 3) or (..., 3, 3), vector (3,) or (..., 3); they broadcast
+    against each other: one matrix (an inertia tensor) times n vectors, or n
+    matrices (one rotation per drone) times n vectors.
+
+        out_i = M_i0 v_0 + M_i1 v_1 + M_i2 v_2     (summed in this order)
+
+    Equal to `matrix @ vector` up to rounding: `@` may hand the work to a linear
+    algebra library that adds the terms in another order. What this function
+    guarantees is that each product depends only on its own matrix and vector, not
+    on how many others are computed with it, so a drone gives the same numbers
+    alone or in a batch of any size.
+    """
+    m = np.asarray(matrix, dtype=float)
+    v = np.asarray(vector, dtype=float)
+    if m.shape[-2:] != (3, 3) or v.shape[-1:] != (3,):
+        raise ValueError("matvec needs 3x3 matrices and 3-vectors")
+    v0, v1, v2 = v[..., None, 0], v[..., None, 1], v[..., None, 2]
+    return m[..., 0] * v0 + m[..., 1] * v1 + m[..., 2] * v2

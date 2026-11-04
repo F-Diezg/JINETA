@@ -76,6 +76,10 @@ code should be clear and every concept explained before it is used.
 - A block of commands pasted into PowerShell does not stop when one line fails:
   the next lines still run. So the checks come first, and the commit only once
   they passed.
+- After changing code on purpose to see a test fail, delete the `__pycache__`
+  folders (`Get-ChildItem -Recurse -Directory __pycache__ | Remove-Item -Recurse`):
+  Python reuses its compiled copy when the file has the same size and the same
+  time to the second.
 - `git rm` removes tracked files but leaves the folders that only held Python's
   `__pycache__` (untracked); remove those by hand, or a deleted package keeps
   appearing in the file explorer.
@@ -418,10 +422,16 @@ riders moving together).
    equal to `np.cross` bit for bit for single pairs and stacks with broadcasting
    (components over 16 orders of magnitude), basis vectors, perpendicular to both,
    wrong shapes rejected.
-2. **Batch rigid body**: rotation matrices, quaternion derivative, Euler's
+2. ✅ **Batch rigid body** (`escuadron/quaternion.py`, `escuadron/rigid_body.py`,
+   `core.vector.matvec`): rotation matrices, quaternion derivative, Euler's
    equations and the renormalisation for N drones at once, states (N, 13). Tests:
-   every drone equal to `RigidBody.derivative` (random seeded states, 1e-12);
-   one drone alone or among 1000 gives the same numbers (no cross-talk).
+   every drone equal to `RigidBody.derivative` (500 random seeded states, full
+   inertia tensor, 1e-12; measured 4e-15); 2 s of RK4 with state-dependent forces
+   equal to the reference flights (1e-12; measured 7e-15); the quaternion
+   derivative bit for bit, matrices and normalisation within 1e-15; a drone alone
+   or among 1000 gives the same numbers bit for bit; free fall of tumbling bodies
+   exact; one time per drone reaches the force model; invalid mass and inertia
+   rejected, inertia read-only.
 3. **Batch multirotor forces and floor contact**: rotors through the mixer, rotor
    drag, body drag, the landing gear. Tests: every drone against `Multirotor` with
    `GroundContact` (saturated rotors, feet below the floor); the rotor commands of
@@ -471,6 +481,30 @@ Phase 9 (fast batch engine):
   same fixed cost per call is what the batch engine spreads over N drones.
 - **The benchmark keeps the fastest of several runs**: the slower ones were slowed
   down by the rest of the computer, not by the simulator.
+- **The batch engine agrees with the reference to rounding, not bit for bit**
+  (measured in step 2): in the reference, w, x, y, z are NumPy scalars, and a
+  scalar's `x**2` goes through C's `pow`, which is sometimes one unit in the last
+  place away from `x * x` (on an array `x**2` is `x * x`); `@` hands 3 x 3 products
+  to a linear algebra library that may add the terms in another order. Making the
+  batch copy those quirks would make it slower and no more right. Inside the batch
+  engine bit-for-bit equality does hold: no operation mixes the rows (`matvec`, the
+  terms added in a fixed order, instead of `@`), so a drone gives the same numbers
+  alone or among any number of others.
+- **One vehicle profile per batch**: every drone of a batch has the same mass,
+  inertia and constants, like the same course. Parameters per drone come with the
+  randomisation of phase 12.
+- **Time can be one per drone**: the batch passes `t` to the force model as it
+  comes, a float or an (N,) array, because drones reset at different moments
+  (step 8) each run on their own lap clock.
+- **The batch formulas are written term by term like the reference ones**, so a
+  difference between them is a bug, not a choice. The tests of step 2 were checked
+  by breaking the code (8 mistakes: a sign in the matrix and in the quaternion
+  derivative, the norm squared, R^T instead of R, I instead of I^-1, gravity on
+  the wrong axis, the renormalisation in place, the cross product reversed); each
+  made a test fail. One lesson from that check: a mistake of the same length as
+  the original, restored within the same second, left a stale `__pycache__` that
+  Python kept using (it checks the file's time in seconds and its size); delete
+  `__pycache__` after breaking code on purpose.
 - **A prototype of the batch dynamics was measured before planning** (Claude's
   workspace, dynamics + RK4 only): per derivative within 5e-15 of the reference;
   the 882 rotor commands of the reference lap replayed in it within 1.2e-13 m;
@@ -1475,8 +1509,8 @@ Phase 6c (Kalman filter):
   28. The demonstration guidance (straight at each gate centre) only works slowly
       (3 m/s; it hits gate 2 at 4 m/s). The classical baseline of phase 10 must plan
       through the gates (look ahead to the next one, a position loop: loose end 10).
-- Next: phase 9 (fast batch engine), step 2 (batch rigid body); the plan is in
-  section 5.
+- Next: phase 9 (fast batch engine), step 3 (batch multirotor forces and floor
+  contact); the plan is in section 5.
 
 ## 8. Working with Claude
 

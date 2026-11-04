@@ -1,10 +1,10 @@
-"""Tests for the written-out vector operations: the same numbers as NumPy, bit for
-bit, for single vectors, stacks and broadcasting."""
+"""Tests for the written-out vector operations against NumPy: `cross` bit for bit,
+`matvec` to rounding, for single vectors, stacks and broadcasting."""
 
 import numpy as np
 import pytest
 
-from jineta.core.vector import cross
+from jineta.core.vector import cross, matvec
 
 
 def random_vectors(rng: np.random.Generator, shape: tuple[int, ...]) -> np.ndarray:
@@ -76,3 +76,52 @@ def test_accepts_lists_and_integers():
 def test_rejects_vectors_that_are_not_3d(a, b):
     with pytest.raises(ValueError, match="3-vectors"):
         cross(a, b)
+
+
+@pytest.mark.parametrize(
+    ("shape_m", "shape_v"),
+    [
+        ((3, 3), (3,)),  # one matrix, one vector
+        ((3, 3), (400, 3)),  # one matrix (an inertia) times many vectors
+        ((400, 3, 3), (400, 3)),  # one matrix per vector (a rotation per drone)
+        ((400, 3, 3), (3,)),
+        ((100, 4, 3, 3), (4, 3)),
+    ],
+)
+def test_matvec_equals_matmul_to_rounding(shape_m, shape_v):
+    rng = np.random.default_rng(3)
+    m = rng.normal(size=shape_m)
+    v = rng.normal(size=shape_v)
+    result = matvec(m, v)
+    expected = (m @ v[..., None])[..., 0]
+    assert result.shape == expected.shape
+    assert np.allclose(result, expected, rtol=1e-15, atol=1e-15)
+
+
+def test_matvec_adds_the_terms_in_order():
+    """Each component is exactly ((M_i0 v_0 + M_i1 v_1) + M_i2 v_2)."""
+    rng = np.random.default_rng(4)
+    for m, v in zip(
+        random_vectors(rng, (200, 3, 3)), random_vectors(rng, (200, 3)), strict=True
+    ):
+        expected = [m[i, 0] * v[0] + m[i, 1] * v[1] + m[i, 2] * v[2] for i in range(3)]
+        assert np.array_equal(matvec(m, v), expected)
+
+
+def test_matvec_rows_do_not_depend_on_the_batch():
+    rng = np.random.default_rng(5)
+    m = rng.normal(size=(1000, 3, 3))
+    v = rng.normal(size=(1000, 3))
+    everyone = matvec(m, v)
+    for i in (0, 500, 999):
+        assert np.array_equal(matvec(m[i : i + 1], v[i : i + 1])[0], everyone[i])
+        assert np.array_equal(matvec(m[i], v[i]), everyone[i])
+
+
+@pytest.mark.parametrize(
+    ("m", "v"),
+    [(np.zeros((2, 2)), np.zeros(2)), (np.zeros((3, 3)), np.zeros(4))],
+)
+def test_matvec_rejects_wrong_shapes(m, v):
+    with pytest.raises(ValueError, match="3x3"):
+        matvec(m, v)
