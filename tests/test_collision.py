@@ -6,6 +6,10 @@ flying straight at a flat face the margin falls linearly, so the interpolated
 moment is exact; in free fall onto the floor it is quadratic, and the interpolation
 error is below g dt^2 / (8 v). The tunnelling limit (a contact missed between two
 samples) is measured against its formulas on straight sampled paths.
+
+Most tests use the Iris's bounding sphere (one sphere at the centre of mass, the
+same reach every way), so the expected moments are simple; the last section flies
+the Iris's own 13 spheres, whose reach depends on the attitude.
 """
 
 import numpy as np
@@ -20,19 +24,26 @@ from jineta.core.simulation import run
 from jineta.jinete.contact import GroundContact
 from jineta.jinete.control import Autopilot
 from jineta.jinete.multirotor import Multirotor
-from jineta.jinete.profiles import IRIS, IRIS_GAINS, IRIS_HITBOX, IRIS_LANDING_GEAR
+from jineta.jinete.profiles import (
+    IRIS,
+    IRIS_BOUNDING_SPHERE,
+    IRIS_GAINS,
+    IRIS_HITBOX,
+    IRIS_LANDING_GEAR,
+)
 
 DT = 0.01
-R = IRIS_HITBOX.radii[0]  # 0.384 m
+SPHERE = IRIS_BOUNDING_SPHERE
+R = SPHERE.radii[0]  # 0.384 m
 ROOM = Room(size=[10.0, 8.0, 3.0])
 
 
-def iris_monitor(obstacles=(), room=ROOM, centers=None, radii=None):
+def iris_monitor(obstacles=(), room=ROOM, centers=None, radii=None, hitbox=SPHERE):
     return CollisionMonitor(
         room,
         obstacles,
-        IRIS_HITBOX.centers if centers is None else centers,
-        IRIS_HITBOX.radii if radii is None else radii,
+        hitbox.centers if centers is None else centers,
+        hitbox.radii if radii is None else radii,
         IRIS_LANDING_GEAR.points,
     )
 
@@ -300,3 +311,95 @@ def test_grazing_a_pillar_misses_at_most_the_depth_of_the_chord():
                 worst = max(worst, depth)
     assert worst <= exact + 1e-12
     assert worst > 0.95 * exact
+
+
+# ---- the Iris's own spheres ---------------------------------------------------------
+
+
+def climb_to_the_ceiling(hitbox, attitude=(1.0, 0.0, 0.0, 0.0)):
+    """Climb straight up at 1 m/s from 1 m: the moment the ceiling (3 m) is touched."""
+    monitor = iris_monitor(hitbox=hitbox)
+    start = state_at([5.0, 4.0, -1.0], [0.0, 0.0, -1.0], attitude=attitude)
+    run(straight_line, start, DT, 5.0, stop=monitor)
+    assert monitor.collision.kind == "room"
+    return monitor.collision.time
+
+
+def test_the_iris_spheres_give_back_room_under_the_ceiling():
+    """Level, the rotors reach 0.151 m up where the bounding sphere reaches 0.384 m:
+    the Iris climbs 0.233 m closer to the ceiling before touching it."""
+    up = IRIS_HITBOX.extent([0, 0, -1])
+    assert up == pytest.approx(0.023 + np.hypot(0.128, 0.0025))
+    assert climb_to_the_ceiling(IRIS_HITBOX) == pytest.approx(2.0 - up, abs=1e-9)
+    gained = climb_to_the_ceiling(IRIS_HITBOX) - climb_to_the_ceiling(SPHERE)
+    assert gained == pytest.approx(0.233, abs=1e-3)
+
+
+def test_the_iris_spheres_follow_its_roll():
+    """Rolled 90 deg (right side down), what reaches up is its left side: a rotor
+    0.22 m out + 0.128 m, so it touches the ceiling 0.197 m sooner than level."""
+    rolled = quaternion.from_euler(np.pi / 2, 0.0, 0.0)
+    side = IRIS_HITBOX.extent([0, -1, 0])
+    assert side == pytest.approx(0.22 + np.hypot(0.128, 0.0025))
+    t = climb_to_the_ceiling(IRIS_HITBOX, rolled)
+    assert t == pytest.approx(2.0 - side, abs=1e-9)
+    assert climb_to_the_ceiling(IRIS_HITBOX) - t == pytest.approx(0.197, abs=1e-3)
+
+
+def test_the_iris_spheres_nose_first_into_a_wall():
+    """Nose first at the north wall the front body spheres lead (0.47/3 + 0.124 m
+    ahead), not the rotors (their hubs are only 0.13 m forward): 0.280 m."""
+    monitor = iris_monitor(hitbox=IRIS_HITBOX)
+    run(straight_line, state_at([5.0, 4.0, -1.5], [2.0, 0.0, 0.0]), DT, 5.0, monitor)
+    nose = IRIS_HITBOX.extent([1, 0, 0])
+    assert nose == pytest.approx(0.2803, abs=1e-4)
+    assert monitor.collision.time == pytest.approx((5.0 - nose) / 2.0, abs=1e-9)
+    np.testing.assert_allclose(monitor.collision.position, [10 - nose, 4, -1.5])
+
+
+def test_the_iris_spheres_take_off_and_land_without_a_crash_on_the_floor():
+    """Standing still, the spheres reach 0.07 m below the floor: the floor is the
+    gear's to judge, so a take-off and hover are still no crash."""
+    assert IRIS_HITBOX.extent([0, 0, 1]) > 0.054 + 0.05
+    monitor = iris_monitor(hitbox=IRIS_HITBOX)
+    times, _ = fly_iris(
+        lambda t: [0.0, 0.0, -1.0] if 1.0 <= t < 2.0 else [0.0, 0.0, 0.0], 4.0, monitor
+    )
+    assert monitor.collision is None and monitor.airborne
+    assert times[-1] == pytest.approx(4.0)
+
+
+def test_smaller_spheres_miss_deeper_grazes():
+    """The price of the tighter shape: a graze is missed up to the depth of a chord
+    of the sphere that grazes, and the rotor spheres (0.128 m) are smaller than the
+    bounding sphere (0.384 m). Passing a 5 cm pillar sideways at 20 m/s, the
+    deepest unseen graze is at most rho - sqrt(rho^2 - s^2/4) with rho = 0.128 +
+    0.05 m: 3.1 cm (1.2 cm with the bounding sphere). Head on, a thin wall still
+    needs a step longer than the drone's length along the path (front and back
+    reach + w): 58 m/s."""
+    w = 0.02
+    length = IRIS_HITBOX.extent([1, 0, 0]) + IRIS_HITBOX.extent([-1, 0, 0]) + w
+    assert length / DT == pytest.approx(58.1, abs=0.1)
+    slab = Box(center=[5.0, 4.0, -1.5], size=[w, 8.0, 3.0])
+    walls = iris_monitor([slab], hitbox=IRIS_HITBOX)
+    step = 0.99 * length
+    for phase in np.linspace(0.0, 1.0, 40, endpoint=False):
+        start = [5.0 - 3.0 * step + phase * step, 4.0, -1.5]
+        assert not sampled_path_misses(walls, 1, start, [1, 0, 0], step, 7)
+
+    pillar = Cylinder(base=[5.0, 4.0, 0.0], radius=0.05, height=3.0)
+    monitor = iris_monitor([pillar], hitbox=IRIS_HITBOX)
+    rho = np.hypot(0.128, 0.0025) + 0.05
+    step = 20.0 * DT
+    bound = rho - np.sqrt(rho**2 - step**2 / 4.0)
+    assert bound == pytest.approx(0.031, abs=1e-3)
+    side = IRIS_HITBOX.extent([0, -1, 0])  # the side that passes the pillar
+    worst = 0.0
+    for depth in np.linspace(0.0, 1.5 * bound, 46):
+        offset = side + 0.05 - depth
+        for phase in np.linspace(0.0, 1.0, 20, endpoint=False):
+            start = [5.0 - 3.0 * step + phase * step, 4.0 + offset, -1.5]
+            if sampled_path_misses(monitor, 1, start, [1, 0, 0], step, 7):
+                worst = max(worst, depth)
+    assert worst <= bound + 1e-12
+    assert worst > 0.0116  # deeper than anything the bounding sphere misses

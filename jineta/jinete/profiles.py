@@ -20,7 +20,14 @@ from jineta.jinete.control import (
 )
 from jineta.jinete.fixed_wing import FixedWingParams
 from jineta.jinete.fixed_wing_control import AutopilotDesign
-from jineta.jinete.hitbox import Hitbox, bounding_sphere, box_corners
+from jineta.jinete.hitbox import (
+    Hitbox,
+    bounding_sphere,
+    box_corners,
+    box_spheres,
+    rotor_spheres,
+    union,
+)
 from jineta.jinete.multirotor import MultirotorParams, Rotor
 from jineta.jinete.propulsion import PropulsionParams
 
@@ -80,19 +87,32 @@ IRIS_LANDING_GEAR = LandingGear.from_damping_ratio(
     slip_speed=0.2,
 )
 
-# Collision shape of the Iris: for now one sphere around the whole vehicle (phase 8,
-# step 4; one sphere per rotor and one for the body come in step 4b). It holds the
-# four rotor discs and the collision box of the same file:
-# - propeller radius 0.128 m: rotor_N_collision, a cylinder of radius 0.128 m and
-#   length 0.005 m at each rotor;
-# - base_link collision box 0.47 x 0.47 x 0.11 m (corners 0.337 m from the CoM).
-# The front rotors reach farthest: 0.384 m. The sphere is 0.77 m high for a vehicle
-# whose box is 0.11 m high, so it is very cautious near the ceiling and in gates.
+# Collision shape of the Iris, from the collision geometry of the same file:
+# - each rotor: rotor_N_collision, a cylinder of radius 0.128 m and length 0.005 m
+#   at the hub: one sphere per rotor at its hub, radius sqrt(0.128^2 + 0.0025^2);
+# - the body: base_link collision box 0.47 x 0.47 x 0.11 m, centred on the CoM (it
+#   takes in the arms and the legs). One sphere around it would be 0.337 m (0.67 m
+#   high); cut into 3 x 3 cells, nine spheres of 0.124 m cover it.
+# Chosen 3 x 3 (13 spheres in all): 0.275 m high (0.151 m up, the rotors; 0.124 m
+# down) and 0.280 m from the CoM towards the nose, where one sphere around
+# everything (IRIS_BOUNDING_SPHERE) is 0.384 m every way. 4 x 4 cells would gain
+# 2 cm at the bottom only, for 7 more spheres.
 IRIS_PROPELLER_RADIUS = 0.128
-IRIS_HITBOX = bounding_sphere(
+IRIS_PROPELLER_THICKNESS = 0.005
+IRIS_COLLISION_BOX = (0.47, 0.47, 0.11)
+IRIS_HITBOX = union(
+    rotor_spheres(
+        [rotor.position for rotor in IRIS.rotors],
+        IRIS_PROPELLER_RADIUS,
+        IRIS_PROPELLER_THICKNESS,
+    ),
+    box_spheres(IRIS_COLLISION_BOX, (3, 3, 1)),
+)
+IRIS_BOUNDING_SPHERE = bounding_sphere(
     [rotor.position for rotor in IRIS.rotors],
     IRIS_PROPELLER_RADIUS,
-    box_corners([0.47, 0.47, 0.11]),
+    box_corners(IRIS_COLLISION_BOX),
+    IRIS_PROPELLER_THICKNESS,
 )
 
 

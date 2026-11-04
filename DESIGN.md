@@ -60,8 +60,8 @@ code should be clear and every concept explained before it is used.
   newline and fixes blank lines that are easy to lose when pasting code. In VS
   Code, "Files: Insert Final Newline" and format-on-save with the Ruff formatter
   do the same automatically.
-- The full test run, in one process, takes ~47 s (485 tests, in Claude's workspace
-  at phase 8, step 4); the closed-loop fixed-wing tests are the slowest (the
+- The full test run, in one process, takes ~48 s (508 tests, in Claude's workspace
+  at phase 8, step 4b); the closed-loop fixed-wing tests are the slowest (the
   orbit hold, 5 s). `pytest -n auto` divides that by the number of cores.
 - `scipy` is used for the trim (`scipy.optimize.root`) and in the Kalman tests
   (`scipy.stats.chi2`).
@@ -329,7 +329,7 @@ ground contact model), and gates are rectangular or circular from the start.
    0.5 m/s landing is detected 1.3 s after touching and ends exactly at rest; never
    a landing in the air (hover, braking, a 5 m/s descent).
 4. ✅ **Collisions in flight** (`jineta/campo/collision.py`, `jinete/hitbox.py`,
-   `Room.wall_clearance`, `IRIS_HITBOX`): the drone's spheres against walls,
+   `Room.wall_clearance`, `IRIS_BOUNDING_SPHERE`): the drone's spheres against walls,
    ceiling and obstacles; the floor by the landing gear, a crash once the drone has
    left it; the moment of contact interpolated inside the step. Tests: straight at a
    wall, the ceiling, a crate or a pillar, the moment exact (1e-9); spheres placed
@@ -338,11 +338,15 @@ ground contact model), and gates are rectangular or circular from the start.
    back down is; the tunnelling limit measured (a thin wall needs a step longer
    than 2R + w, 79 m/s for the Iris; a graze misses at most the depth of a chord as
    long as the step, 1.2 cm at 20 m/s).
-4b. ⏳ **Shape of the drone with several spheres** (added during step 4): one sphere
-   per rotor disc and one for the body instead of one around everything, for the
-   Iris; the sphere is 0.77 m high for a 0.11 m high vehicle. Tests: every rotor
-   disc and the collision box inside the spheres; how much room it gives back near
-   the ceiling and beside a wall.
+4b. ✅ **Shape of the drone with several spheres** (added during step 4;
+   `rotor_spheres`, `box_spheres`, `union`, `IRIS_HITBOX`): one sphere per rotor and
+   nine for the body (3 x 3 cells of its collision box) instead of one around
+   everything: 0.275 m high instead of 0.769 m. Tests: the rotor cylinders and the
+   whole collision box inside the spheres (sampled); its reach up, down, forward and
+   sideways by hand; climbing to the ceiling it touches 0.233 m higher, rolled 90°
+   0.197 m sooner than level; nose first into a wall at 0.280 m; take-off and hover
+   still no crash; the tunnelling limit measured again (58 m/s head on; grazes up to
+   3.1 cm at 20 m/s).
 5. ⏳ **Gates, rectangular and circular**: crossing between samples, through the
    opening and in the right direction, with the time interpolated inside the step;
    touching the frame is a crash (four bars, or a torus).
@@ -362,11 +366,12 @@ Phase 8 (indoor world):
   shape with a signed distance is checked the same way, for one drone or many. The
   monitor takes a list of spheres from the start; step 4 gives the Iris one sphere
   around everything (the plan's "sphere first"), step 4b several.
-- **The Iris sphere is 0.384 m**, the reach of its front rotor discs: hub
-  0.2555 m out and 0.023 m up, propeller radius 0.128 m (`rotor_N_collision` of
-  `iris.sdf.jinja`): sqrt((0.2555 + 0.128)² + 0.023²). The exact reach of a disc,
-  not |hub| + radius (the triangle inequality, a little more). The corners of its
-  collision box (0.337 m) are inside.
+- **The Iris bounding sphere is 0.3844 m**, the reach of its front rotor discs: hub
+  0.2555 m out and 0.023 m up, propeller radius 0.128 m and thickness 0.005 m
+  (`rotor_N_collision` of `iris.sdf.jinja`): sqrt((0.2555 + 0.128)² + (0.023 +
+  0.0025)²). The exact reach of a disc, not |hub| + radius (the triangle
+  inequality, a little more). The corners of its collision box (0.337 m) are
+  inside. (Step 4 left the thickness out, 0.3842 m; step 4b added it.)
 - **A better shape is a step, not a loose end** (decided with the author, step 4b
   added to the plan): the hitbox sets where the drone fits, so an oversized one
   makes the policy keep away from room it has (slower laps, the MVP's measure) and
@@ -398,6 +403,30 @@ Phase 8 (indoor world):
   inflated shape (radius ρ: R at a box edge, R + radius at a column), the deepest
   contact that can go unseen is ρ − sqrt(ρ² − s²/4) ≈ s²/(8ρ): 1.3 cm at a box edge
   and 1.2 cm at a 5 cm pillar, at 20 m/s.
+- **The Iris collides as 13 spheres** (step 4b): one per rotor at its hub, radius
+  sqrt(0.128² + 0.0025²) (holds the propeller cylinder exactly), and nine for the
+  body. The plan said "one for the body", but the file's collision box (0.47 x 0.47
+  x 0.11 m) takes in the arms and the legs: one sphere around it would be 0.337 m,
+  0.67 m high, hardly better than one around everything. Cut into cells, each held
+  by the sphere through its corners, the box is covered exactly (every point is in
+  a cell). 3 x 3 cells (spheres of 0.124 m) chosen: 2 x 2 gives 0.350 m of height,
+  3 x 3 0.275 m, 4 x 4 0.256 m (only the bottom improves; the rotors set the top).
+- **The 13 spheres are tighter where it matters, not everywhere**: up 0.151 m
+  (against 0.384 m), forward 0.280 m, sideways 0.348 m; but a sphere holding a disc
+  bulges above and below its plane, so along a front hub the 13 spheres reach
+  0.3846 m, 0.2 mm past the bounding sphere. A test first assumed "never farther
+  in any direction" and failed on exactly that.
+- **Smaller spheres miss deeper grazes** (measured): a graze is missed up to the
+  depth of a chord of the sphere that grazes, and a rotor sphere (0.128 m) is a
+  third of the bounding sphere: past a 5 cm pillar at 20 m/s up to 3.1 cm (1.2 cm
+  before), 7 mm at 10 m/s. Head on, a thin wall needs 58 m/s (the drone's length
+  along the path, 0.56 m, + w). Accepted for now; it is loose end 26.
+- **Cost of 13 spheres**: ~76 µs per check with two obstacles (57 µs with one
+  sphere): every shape takes all the centres in one call.
+- **The step 4b tests were checked by breaking the code**: box spheres without the
+  height, rotor spheres without the thickness, the disc reach with c_z signed, the
+  grid not centred, `extent` not normalised, `contains` asking for all spheres; each
+  made tests fail.
 - **The monitor stops the run at the first contact**; nothing pushes back from
   walls or obstacles (no contact force), because a collision ends a lap. Cost:
   ~57 µs per check with two obstacles in Claude's workspace, against ~860 µs for a
@@ -914,9 +943,14 @@ Phase 6c (Kalman filter):
   `box_distance(local_points, half_size)`. Frozen, validated, arrays read-only; one
   point or many.
 - `jineta/jinete/hitbox.py` — `Hitbox(centers, radii)` (frozen, validated,
-  read-only), `disc_reach(center, radius)`, `box_corners(size)`,
-  `bounding_sphere(rotor_hubs, propeller_radius, body_points)`. The Iris's is
-  `IRIS_HITBOX` (with `IRIS_PROPELLER_RADIUS`); `MultirotorProfile` has a `hitbox`.
+  read-only; `extent(direction)`, `contains(points)`), `union(*hitboxes)`,
+  `disc_reach(center, radius, thickness=0)`, `box_corners(size)`,
+  `bounding_sphere(rotor_hubs, propeller_radius, body_points,
+  propeller_thickness=0)`, `rotor_spheres(rotor_hubs, propeller_radius,
+  propeller_thickness)`, `box_spheres(size, divisions)`. The Iris's: `IRIS_HITBOX`
+  (13 spheres), `IRIS_BOUNDING_SPHERE`, `IRIS_PROPELLER_RADIUS`,
+  `IRIS_PROPELLER_THICKNESS`, `IRIS_COLLISION_BOX`; `MultirotorProfile` has a
+  `hitbox`.
 - `jineta/campo/collision.py` — `Collision(kind, index, time, position)`,
   `CollisionMonitor(room, obstacles, sphere_centers, sphere_radii, floor_points)`:
   `margins(state)` ([room, obstacles..., floor], negative = touching), callable
@@ -925,7 +959,7 @@ Phase 6c (Kalman filter):
 - `jineta/atalaya/kalman.py` — `predict`, `update` (returns the innovation and its
   covariance too), `nees`, `constant_velocity_transition`,
   `white_noise_acceleration`, `piecewise_white_acceleration`, `alpha_beta_gains`.
-- Tests (485 passing, ruff check + ruff format clean):
+- Tests (508 passing, ruff check + ruff format clean):
   - integrators (2): RK4 exact on free fall; Euler's error shrinks with dt.
   - rotation (5): 90° about z maps North to East; proper orthogonal matrix; steady
     spin about a principal axis; constant torque spins up linearly; torque-free
@@ -1083,12 +1117,18 @@ Phase 6c (Kalman filter):
     autopilot told it is flying finds the floor when asked to descend, and really
     hovers when asked to hold; no landing in the air (hover, cruise and brake, drop
     and stop, a 5 m/s descent); take off, land and take off again.
-  - hitbox (15): the reach of a disc by hand (3-4-5, and 1.25 m where |c| + r gives
-    1.40) and against its rim sampled every 0.1° (3 discs); box corners; the
-    bounding sphere takes the farthest of rotors and body; the Iris sphere
-    (0.3842 m) holds its four rotor discs and its collision box; the profile
-    carries it; rejects invalid input (6 cases); read-only.
-  - collisions (23): straight at the north wall, the ceiling, a crate and a pillar,
+  - hitbox (33): the reach of a disc by hand (3-4-5, 1.25 m where |c| + r gives
+    1.40, and with a thickness) and against its edges sampled every 0.5° (3 discs,
+    3 thicknesses); box corners; the bounding sphere takes the farthest of rotors
+    and body; rotor spheres hold their cylinders exactly (3-4-5); box spheres cover
+    the box (4 grids, sampled) and reach by hand; union and extent; the Iris's 13
+    spheres hold its rotor cylinders and its whole collision box, their radii and
+    reach up, down, forward and sideways by hand (0.275 m high); the bounding
+    sphere (0.3844 m) holds everything; the 13 spheres reach at most max(|c| + r)
+    (0.2 mm past the bounding sphere) and give back 0.233 / 0.104 / 0.036 m up,
+    forward and sideways; the profile carries them; rejects invalid input (8
+    cases); read-only.
+  - collisions (28), with the bounding sphere unless said: straight at the north wall, the ceiling, a crate and a pillar,
     the moment exact (1e-9) and the obstacle named by its index; a sphere ahead of
     the nose on a 90° heading; the earliest of two contacts in one step wins; a
     start inside a wall is reported at the first sample; the floor margin is the
@@ -1097,7 +1137,11 @@ Phase 6c (Kalman filter):
     are not crashes, coming back down is; reset; rejects invalid input (4 cases);
     tunnelling: a 2 cm slab seen at every phase with steps 1 % below 2R + w and
     jumped 1 % above it; grazing a 5 cm pillar at 20 m/s misses at most
-    ρ − sqrt(ρ² − s²/4) (found within 5 %).
+    ρ − sqrt(ρ² − s²/4) (found within 5 %). The Iris's 13 spheres: climbing to the
+    ceiling they touch 0.233 m higher than the sphere, rolled 90° 0.197 m sooner
+    than level (exact moments); nose first into a wall at 0.280 m; take-off and
+    hover are no crash; a thin wall head on needs 58 m/s; a graze at 20 m/s is
+    missed up to 3.1 cm, deeper than with the sphere.
   - Kalman filter (20): the running mean and σ²/k exactly; the steady-state gains of
     Kalata's alpha-beta filter; the lag behind a constant acceleration (a T²/β and
     its two companions); two updates one after the other equal one stacked update
@@ -1198,12 +1242,19 @@ Phase 6c (Kalman filter):
   25. The floor is judged by the landing gear only: a drone banked hard or upside
       down close to the floor touches it with a rotor first, and the crash is seen
       only when a foot (or its centre of mass) gets there.
-  26. Collisions are checked at the samples: fine for the Iris (79 m/s to jump a thin
-      wall; grazes up to ~1.3 cm deep at 20 m/s go unseen). A small fast profile
-      (radius 0.1 m, 30 m/s) would jump a thin wall at 100 Hz: then check the
-      segment between samples (conservative advancement) or sample faster.
-- Next: phase 8, step 4b (shape of the drone with several spheres). The step plan is
-  in section 5.
+  26. Collisions are checked at the samples. For the Iris's 13 spheres at 100 Hz a
+      thin wall head on needs 58 m/s to be jumped (its top speed is 20.7 m/s), but
+      a graze up to 3.1 cm deep at 20 m/s (7 mm at 10 m/s) can go unseen. A policy
+      trained to fly fast could learn to slip past pillars through that gap. Before
+      training (phase 10) check the segment between samples (conservative
+      advancement: a distance never changes faster than the point moves) or sample
+      faster; a small fast profile needs it anyway.
+  27. The hitbox spheres hold the PX4 collision geometry, which is itself a coarse
+      envelope (a 0.47 x 0.47 x 0.11 m box for arms, body and legs). A real drone's
+      shape, measured, comes with its profile (phase 14).
+- Next: phase 8, step 5 (gates, rectangular and circular). New chat in the
+  Project: "Seguimos con Jineta, fase 8: paso 5 (puertas)". The step plan is in
+  section 5.
 
 ## 8. Working with Claude
 
