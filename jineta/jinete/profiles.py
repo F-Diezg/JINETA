@@ -20,6 +20,7 @@ from jineta.jinete.control import (
 )
 from jineta.jinete.fixed_wing import FixedWingParams
 from jineta.jinete.fixed_wing_control import AutopilotDesign
+from jineta.jinete.hitbox import Hitbox, bounding_sphere, box_corners
 from jineta.jinete.multirotor import MultirotorParams, Rotor
 from jineta.jinete.propulsion import PropulsionParams
 
@@ -77,6 +78,21 @@ IRIS_LANDING_GEAR = LandingGear.from_damping_ratio(
     damping_ratio=0.5,
     friction=1.0,
     slip_speed=0.2,
+)
+
+# Collision shape of the Iris: for now one sphere around the whole vehicle (phase 8,
+# step 4; one sphere per rotor and one for the body come in step 4b). It holds the
+# four rotor discs and the collision box of the same file:
+# - propeller radius 0.128 m: rotor_N_collision, a cylinder of radius 0.128 m and
+#   length 0.005 m at each rotor;
+# - base_link collision box 0.47 x 0.47 x 0.11 m (corners 0.337 m from the CoM).
+# The front rotors reach farthest: 0.384 m. The sphere is 0.77 m high for a vehicle
+# whose box is 0.11 m high, so it is very cautious near the ceiling and in gates.
+IRIS_PROPELLER_RADIUS = 0.128
+IRIS_HITBOX = bounding_sphere(
+    [rotor.position for rotor in IRIS.rotors],
+    IRIS_PROPELLER_RADIUS,
+    box_corners([0.47, 0.47, 0.11]),
 )
 
 
@@ -237,6 +253,7 @@ class MultirotorProfile(NamedTuple):
     params: MultirotorParams
     gains: MultirotorGains
     gear: LandingGear
+    hitbox: Hitbox
 
 
 class FixedWingProfile(NamedTuple):
@@ -245,7 +262,9 @@ class FixedWingProfile(NamedTuple):
     autopilot: AutopilotDesign
 
 
-MULTIROTOR_PROFILES = {"iris": MultirotorProfile(IRIS, IRIS_GAINS, IRIS_LANDING_GEAR)}
+MULTIROTOR_PROFILES = {
+    "iris": MultirotorProfile(IRIS, IRIS_GAINS, IRIS_LANDING_GEAR, IRIS_HITBOX)
+}
 FIXED_WING_PROFILES = {
     "small_fixed_wing": FixedWingProfile(
         SMALL_FIXED_WING, SMALL_FIXED_WING_PROPULSION, SMALL_FIXED_WING_AUTOPILOT

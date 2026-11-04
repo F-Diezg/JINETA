@@ -60,8 +60,8 @@ code should be clear and every concept explained before it is used.
   newline and fixes blank lines that are easy to lose when pasting code. In VS
   Code, "Files: Insert Final Newline" and format-on-save with the Ruff formatter
   do the same automatically.
-- The full test run, in one process, takes ~35 s (346 tests, in Claude's workspace
-  at the end of phase 7); the closed-loop fixed-wing tests are the slowest (the
+- The full test run, in one process, takes ~47 s (485 tests, in Claude's workspace
+  at phase 8, step 4); the closed-loop fixed-wing tests are the slowest (the
   orbit hold, 5 s). `pytest -n auto` divides that by the number of cores.
 - `scipy` is used for the trim (`scipy.optimize.root`) and in the Kalman tests
   (`scipy.stats.chi2`).
@@ -131,6 +131,12 @@ code should be clear and every concept explained before it is used.
   in `pre_step` (multirotor: `rotor_speed_command`, one value per rotor [rad/s]).
 - **Rotor spin:** `+1` = counter-clockwise seen from above (PX4/Gazebo "ccw"); the
   body reacts the other way, so a `+1` rotor yaws the body right (positive r).
+- **Collisions:** a vehicle's collision shape is its `Hitbox` (spheres in body
+  axes, profile data like the rotors); walls, ceiling and obstacles are checked
+  with it, the floor with the landing gear. `CollisionMonitor` is a `stop` for
+  `simulation.run`; it reports the first contact (`Collision`: kind "room",
+  "obstacle" or "floor", obstacle index, interpolated time and position). It takes
+  the hitbox and the gear as arrays, so `campo` still only imports `core`.
 - **Simulation step order:** `pre_step(t, y)` (controllers) → one RK4 step →
   `post_step(y)` (e.g. renormalise the quaternion) → `stop(t, y)`.
 - **Controllers** are dataclasses with `update(...)`, run once per step from
@@ -191,10 +197,12 @@ jineta/
 │   ├── core/       # physics engine: integrators, point mass, rotating and rigid
 │   │               #   body, quaternions, inertia, environment interfaces, run loop
 │   ├── campo/      # environment: atmosphere.py (ISA), wind.py, indoor.py (room
-│   │               #   and obstacles by signed distance)
+│   │               #   and obstacles by signed distance), collision.py (collisions
+│   │               #   in flight)
 │   ├── jinete/     # vehicles: aero, multirotor, control (multirotor autopilot),
-│   │               #   contact (landing gear on the floor), fixed_wing, propulsion,
-│   │               #   trim, stability, fixed_wing_control, profiles
+│   │               #   contact (landing gear on the floor), hitbox (collision
+│   │               #   spheres), fixed_wing, propulsion, trim, stability,
+│   │               #   fixed_wing_control, profiles
 │   └── atalaya/    # estimation: kalman.py (later: onboard sensors)
 ├── tests/
 ├── examples/       # runnable scripts (python -m examples.<name>)
@@ -320,9 +328,21 @@ ground contact model), and gates are rectangular or circular from the start.
    the climb it would fly in the air (within 0.005 m/s after 1 s), straight up; a
    0.5 m/s landing is detected 1.3 s after touching and ends exactly at rest; never
    a landing in the air (hover, braking, a 5 m/s descent).
-4. ⏳ **Collisions in flight**: the drone as a sphere against walls, ceiling and
-   obstacles; after take-off, touching the floor is a crash too. The tunnelling
-   limit (a thin obstacle skipped between two samples) is measured and written down.
+4. ✅ **Collisions in flight** (`jineta/campo/collision.py`, `jinete/hitbox.py`,
+   `Room.wall_clearance`, `IRIS_HITBOX`): the drone's spheres against walls,
+   ceiling and obstacles; the floor by the landing gear, a crash once the drone has
+   left it; the moment of contact interpolated inside the step. Tests: straight at a
+   wall, the ceiling, a crate or a pillar, the moment exact (1e-9); spheres placed
+   with the attitude; the earliest contact inside a step wins; a free fall onto the
+   floor within g dt²/(8v); standing still and taking off are not crashes, coming
+   back down is; the tunnelling limit measured (a thin wall needs a step longer
+   than 2R + w, 79 m/s for the Iris; a graze misses at most the depth of a chord as
+   long as the step, 1.2 cm at 20 m/s).
+4b. ⏳ **Shape of the drone with several spheres** (added during step 4): one sphere
+   per rotor disc and one for the body instead of one around everything, for the
+   Iris; the sphere is 0.77 m high for a 0.11 m high vehicle. Tests: every rotor
+   disc and the collision box inside the spheres; how much room it gives back near
+   the ceiling and beside a wall.
 5. ⏳ **Gates, rectangular and circular**: crossing between samples, through the
    opening and in the right direction, with the time interpolated inside the step;
    touching the frame is a crash (four bars, or a torus).
@@ -337,6 +357,58 @@ ground contact model), and gates are rectangular or circular from the start.
 ## 6. Decision log
 
 Phase 8 (indoor world):
+- **The drone collides as a set of spheres fixed to its body** (`Hitbox`): a sphere
+  touches a shape when the signed distance of its centre is below its radius, so any
+  shape with a signed distance is checked the same way, for one drone or many. The
+  monitor takes a list of spheres from the start; step 4 gives the Iris one sphere
+  around everything (the plan's "sphere first"), step 4b several.
+- **The Iris sphere is 0.384 m**, the reach of its front rotor discs: hub
+  0.2555 m out and 0.023 m up, propeller radius 0.128 m (`rotor_N_collision` of
+  `iris.sdf.jinja`): sqrt((0.2555 + 0.128)² + 0.023²). The exact reach of a disc,
+  not |hub| + radius (the triangle inequality, a little more). The corners of its
+  collision box (0.337 m) are inside.
+- **A better shape is a step, not a loose end** (decided with the author, step 4b
+  added to the plan): the hitbox sets where the drone fits, so an oversized one
+  makes the policy keep away from room it has (slower laps, the MVP's measure) and
+  makes the simulated drone unlike the real one (phase 14). It comes before the
+  gates (whose frames are checked the same way) and before the batch engine (which
+  must reproduce it).
+- **The floor is judged by the landing gear, not by the spheres** (changed from the
+  plan, which said "after take-off, touching the floor is a crash" without saying
+  with what): the drone starts standing on the floor, its centre of mass 5.4 cm up,
+  inside its own 0.384 m sphere. A crash is a gear point touching the floor after
+  the first sample with every gear point above it. So "touching the floor" means
+  "the floor pushes on the drone", and flying 20 cm up is not a crash. Price: a
+  drone banked hard or upside down near the floor touches with a rotor first, and
+  that is seen late (loose end 25). The walls and ceiling use
+  `Room.wall_clearance`, the room without its floor.
+- **Collisions are checked at the samples, and the moment interpolated inside the
+  step** (linear in the margin between the last free sample and the first touching
+  one): exact flying straight at a flat face, error ~g dt²/(8v) in a free fall
+  (3e-5 s at 100 Hz). When several checks start touching in the same step the
+  earliest one is reported. Rejected for now: checking the segment between samples
+  (conservative advancement: a distance never changes faster than the point moves,
+  so steps of distance − r along the segment can never jump a contact). With the
+  Iris it is not needed (see the tunnelling limit); a small fast profile may need
+  it (loose end 26).
+- **Tunnelling limit, measured** (straight sampled paths, any phase of the samples):
+  a slab of thickness w crossed head on is always seen while the step is shorter
+  than 2R + w and can be jumped beyond it: (2R + w)/dt = 79 m/s for the Iris at
+  100 Hz with w = 2 cm, four times its top speed. Grazing a rounded edge of an
+  inflated shape (radius ρ: R at a box edge, R + radius at a column), the deepest
+  contact that can go unseen is ρ − sqrt(ρ² − s²/4) ≈ s²/(8ρ): 1.3 cm at a box edge
+  and 1.2 cm at a 5 cm pillar, at 20 m/s.
+- **The monitor stops the run at the first contact**; nothing pushes back from
+  walls or obstacles (no contact force), because a collision ends a lap. Cost:
+  ~57 µs per check with two obstacles in Claude's workspace, against ~860 µs for a
+  step of the Iris with its autopilot (+7 %).
+- **The tests were checked by breaking the code**: spheres or feet placed with R^T,
+  the floor counted before take-off, airborne from the first sample, no
+  interpolation, the first check in the list instead of the earliest, the floor
+  height with the wrong sign, the room with its floor, the position not
+  interpolated, the ceiling overhang with the wrong sign. The feet with R^T passed
+  unnoticed at first (every floor test was level or only yawed, and the gear is
+  symmetric): the floor margin is now checked nose up 20° on five headings.
 - **The autopilot has a landed state, as PX4 does** (measured first: without it,
   an Iris on the floor with a zero command spun its motors at hover speed and
   floated 3.5 mm up; 3 s pressed down charged the vertical integrator with 3 m/s²
@@ -838,12 +910,22 @@ Phase 6c (Kalman filter):
   (callable force model), `box_bottom_corners(size)`.
 - `jineta/campo/indoor.py` — `Box(center, size, yaw=0)` (`to_local`,
   `signed_distance`), `Cylinder(base, radius, height)` (`signed_distance`),
-  `Room(size)` (`center`, `clearance`, `contains`), `box_distance(local_points,
-  half_size)`. Frozen, validated, arrays read-only; one point or many.
+  `Room(size)` (`center`, `clearance`, `wall_clearance` (no floor), `contains`),
+  `box_distance(local_points, half_size)`. Frozen, validated, arrays read-only; one
+  point or many.
+- `jineta/jinete/hitbox.py` — `Hitbox(centers, radii)` (frozen, validated,
+  read-only), `disc_reach(center, radius)`, `box_corners(size)`,
+  `bounding_sphere(rotor_hubs, propeller_radius, body_points)`. The Iris's is
+  `IRIS_HITBOX` (with `IRIS_PROPELLER_RADIUS`); `MultirotorProfile` has a `hitbox`.
+- `jineta/campo/collision.py` — `Collision(kind, index, time, position)`,
+  `CollisionMonitor(room, obstacles, sphere_centers, sphere_radii, floor_points)`:
+  `margins(state)` ([room, obstacles..., floor], negative = touching), callable
+  `stop` (`collision`, `airborne`), `reset()`. `Obstacle` protocol (anything with
+  `signed_distance`).
 - `jineta/atalaya/kalman.py` — `predict`, `update` (returns the innovation and its
   covariance too), `nees`, `constant_velocity_transition`,
   `white_noise_acceleration`, `piecewise_white_acceleration`, `alpha_beta_gains`.
-- Tests (435 passing, ruff check + ruff format clean):
+- Tests (485 passing, ruff check + ruff format clean):
   - integrators (2): RK4 exact on free fall; Euler's error shrinks with dt.
   - rotation (5): 90° about z maps North to East; proper orthogonal matrix; steady
     spin about a principal axis; constant torque spins up linearly; torque-free
@@ -968,12 +1050,15 @@ Phase 6c (Kalman filter):
     angle asin(5/25); reset repeats the flight. Orbit guidance: tangent on the circle
     (both directions), at the centre from far away, away from it inside; rejects
     invalid input; the autopilot holds a 150 m orbit (±0.5 m, bank atan(V²/gR) ±1°).
-  - indoor geometry (44): box distances by hand (8 points: centre, face, past a
+  - indoor geometry (56): box distances by hand (8 points: centre, face, past a
     face, edge and corner, inside); the box moves with its centre; yaw 90° turns
     its length to East, yaw 45° gives a diamond, yaw 30° shows the sense of the
     turn; turning shape and point together changes nothing (50 random, seeded);
     cylinder distances by hand (7 points); room clearance by hand (8 points) and
-    `contains`; rejects invalid input; read-only; for every shape, many points at
+    `contains`; wall clearance by hand (9 points: the floor left out, below the
+    floor, above the ceiling, 3-4-5 corners); it is never less than the clearance
+    and equal in the upper half; rejects invalid input; read-only; for every shape
+    (the room with and without its floor), many points at
     once equal one by one, the distance never changes faster than the point moves
     (1000 random pairs), and outside the convex ones the gradient has length 1.
   - ground contact (27): the Iris gear's corners and sizes (k = 3727 N/m, ζ = 0.5);
@@ -998,6 +1083,21 @@ Phase 6c (Kalman filter):
     autopilot told it is flying finds the floor when asked to descend, and really
     hovers when asked to hold; no landing in the air (hover, cruise and brake, drop
     and stop, a 5 m/s descent); take off, land and take off again.
+  - hitbox (15): the reach of a disc by hand (3-4-5, and 1.25 m where |c| + r gives
+    1.40) and against its rim sampled every 0.1° (3 discs); box corners; the
+    bounding sphere takes the farthest of rotors and body; the Iris sphere
+    (0.3842 m) holds its four rotor discs and its collision box; the profile
+    carries it; rejects invalid input (6 cases); read-only.
+  - collisions (23): straight at the north wall, the ceiling, a crate and a pillar,
+    the moment exact (1e-9) and the obstacle named by its index; a sphere ahead of
+    the nose on a 90° heading; the earliest of two contacts in one step wins; a
+    start inside a wall is reported at the first sample; the floor margin is the
+    lowest foot nose up 20° on five headings (1e-12); a free fall onto the floor
+    within g dt²/(8v) of the exact moment; standing 3 s and taking off to a hover
+    are not crashes, coming back down is; reset; rejects invalid input (4 cases);
+    tunnelling: a 2 cm slab seen at every phase with steps 1 % below 2R + w and
+    jumped 1 % above it; grazing a 5 cm pillar at 20 m/s misses at most
+    ρ − sqrt(ρ² − s²/4) (found within 5 %).
   - Kalman filter (20): the running mean and σ²/k exactly; the steady-state gains of
     Kalata's alpha-beta filter; the lag behind a constant acceleration (a T²/β and
     its two companions); two updates one after the other equal one stacked update
@@ -1028,8 +1128,8 @@ Phase 6c (Kalman filter):
   smallest or largest axis is stable.
 - Still open, on purpose (each has its moment):
   1. After `stop` fires, the last sample overshoots the event (e.g. ~v·dt below
-     the floor). Events that matter (gate crossings, collisions) will be
-     interpolated inside the step (phase 8).
+     the floor). Collisions now give their moment interpolated inside the step;
+     gate crossings will too (phase 8, step 5).
   2. The ISA functions are scalar-only (`if` on the altitude, `math`). Vectorise
      with `np.where` in the batch engine (phase 9). Indoors the density is
      constant over the height of a room.
@@ -1065,8 +1165,9 @@ Phase 6c (Kalman filter):
       velocity loop gives more thrust, and the same tilt more horizontal force), so
       it is a function of the manoeuvre, not one number. 20.7 m/s is level flight
       only.
-  14. No floor, walls or collisions: once flying, nothing stops a vehicle from going
-      below z = 0. The indoor world (phase 8) brings them.
+  14. Walls, ceiling and obstacles are detected but exert no force: a collision
+      ends the run (`CollisionMonitor` as `stop`). If a later task needs to bounce
+      off a wall, it needs a contact model like the floor's.
   15. The source's stall gives C_L_max ≈ 2.2 near α ≈ 22° (C_L_alpha = 5.61 and
       α₀ = 27°), high for a small UAV (typically 1.2–1.5). Irrelevant while the
       aircraft flies at α < 10°; revisit if it has to manoeuvre hard.
@@ -1094,9 +1195,15 @@ Phase 6c (Kalman filter):
       foot creeps under a slow sideways push). Both come from the step: sub-steps
       for the contact, or an implicit friction, if a task needs better.
   24. Only multirotors have a landing gear; the fixed wing has no contact model.
-- Next: phase 8, step 4 (collisions in flight). New chat in the Project:
-  "Seguimos con Jineta, fase 8: paso 4 (colisiones en vuelo)". The step plan is in
-  section 5.
+  25. The floor is judged by the landing gear only: a drone banked hard or upside
+      down close to the floor touches it with a rotor first, and the crash is seen
+      only when a foot (or its centre of mass) gets there.
+  26. Collisions are checked at the samples: fine for the Iris (79 m/s to jump a thin
+      wall; grazes up to ~1.3 cm deep at 20 m/s go unseen). A small fast profile
+      (radius 0.1 m, 30 m/s) would jump a thin wall at 100 Hz: then check the
+      segment between samples (conservative advancement) or sample faster.
+- Next: phase 8, step 4b (shape of the drone with several spheres). The step plan is
+  in section 5.
 
 ## 8. Working with Claude
 

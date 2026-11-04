@@ -19,7 +19,9 @@ Shapes:
     height.
   - Room: the inside of a rectangular room, with one corner of its floor at the
     origin. Its `clearance` is the distance to the nearest wall, the floor or the
-    ceiling: positive inside the room, negative outside.
+    ceiling: positive inside the room, negative outside. Its `wall_clearance`
+    leaves the floor out (a drone standing on the floor is not hitting it; its
+    landing gear says when it touches the floor).
 
 Conventions: NED axes, so "up" is -z and the floor of the room is z = 0.
 """
@@ -62,7 +64,16 @@ def box_distance(local_points: np.ndarray, half_size: np.ndarray) -> np.ndarray:
     corner, Pythagoras over two or three of them). Inside, every q is negative and
     the nearest face is the one with the largest q.
     """
-    q = np.abs(local_points) - half_size
+    return _distance_from_overhangs(np.abs(local_points) - half_size)
+
+
+def _distance_from_overhangs(q: np.ndarray) -> np.ndarray:
+    """Signed distance from how far a point sticks out past each face (q, last axis).
+
+    Valid for any shape that is the intersection of half-spaces at right angles to
+    each other (a box, a box open on some sides): outside, Pythagoras over the
+    overhangs that are positive; inside, the nearest face is the largest q.
+    """
     outside = np.linalg.norm(np.maximum(q, 0.0), axis=-1)
     inside = np.minimum(np.max(q, axis=-1), 0.0)
     return outside + inside
@@ -163,6 +174,28 @@ class Room:
         distance with the sign turned round."""
         local = _points(points) - self.center
         return _result(-box_distance(local, self.size / 2.0))
+
+    def wall_clearance(self, points: npt.ArrayLike) -> float | np.ndarray:
+        """Distance [m] to the nearest wall or the ceiling, the floor left out:
+        > 0 inside, < 0 past a wall or above the ceiling.
+
+        Without its floor the room is a box open at the bottom that reaches down
+        forever. Its overhangs are the box's for the walls (|x - length/2| -
+        length/2, the same for y) and, for the ceiling at z = -height, how far the
+        point is above it: -height - z. Below the floor nothing changes: only the
+        walls and the ceiling count.
+        """
+        p = _points(points)
+        length, width, height = self.size
+        q = np.stack(
+            [
+                np.abs(p[..., 0] - length / 2.0) - length / 2.0,
+                np.abs(p[..., 1] - width / 2.0) - width / 2.0,
+                -height - p[..., 2],
+            ],
+            axis=-1,
+        )
+        return _result(-_distance_from_overhangs(q))
 
     def contains(self, points: npt.ArrayLike) -> bool | np.ndarray:
         """True where a point is inside the room or on its walls."""

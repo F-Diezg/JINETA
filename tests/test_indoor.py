@@ -181,6 +181,40 @@ def test_room_rejects_invalid_size():
         Room(size=[30.0, 15.0, 0.0])
 
 
+@pytest.mark.parametrize(
+    "point, expected",
+    [
+        ([15.0, 7.5, -1.0], 6.0),  # 1 m above the floor: the ceiling is nearest
+        ([15.0, 7.5, 0.0], 7.0),  # on the floor: still the ceiling
+        ([15.0, 7.5, 5.0], 7.5),  # below the floor: the east and west walls
+        ([15.0, 7.5, -6.5], 0.5),  # 0.5 m below the ceiling
+        ([2.0, 7.5, -1.0], 2.0),  # 2 m from the south wall (x = 0)
+        ([15.0, 14.0, -1.0], 1.0),  # 1 m from the east wall (y = 15)
+        ([15.0, 7.5, -10.0], -3.0),  # 3 m above the ceiling
+        ([-3.0, 7.5, -11.0], -5.0),  # past the south wall and above the ceiling: 3-4-5
+        ([-3.0, -4.0, 20.0], -5.0),  # past a vertical corner, far below the floor
+    ],
+)
+def test_room_wall_clearance_by_hand(point, expected):
+    assert HALL.wall_clearance(point) == pytest.approx(expected, abs=1e-12)
+
+
+def test_room_wall_clearance_is_the_clearance_without_the_floor():
+    """Leaving a face out can only give more room, and nothing changes where the
+    floor was not the nearest face (the upper half of the room)."""
+    points = np.random.default_rng(5).uniform(-10.0, 30.0, (1000, 3))
+    assert np.all(HALL.wall_clearance(points) >= HALL.clearance(points) - 1e-12)
+    upper = HALL.center + np.random.default_rng(6).uniform(-0.5, 0.5, (500, 3)) * [
+        30.0,
+        15.0,
+        7.0,
+    ]
+    upper[:, 2] = np.minimum(upper[:, 2], -3.5)
+    np.testing.assert_allclose(
+        HALL.wall_clearance(upper), HALL.clearance(upper), rtol=0, atol=1e-12
+    )
+
+
 # ---- properties of a distance -----------------------------------------------------
 
 SHAPES = {
@@ -190,6 +224,7 @@ SHAPES = {
     ).signed_distance,
     "cylinder": COLUMN.signed_distance,
     "room": HALL.clearance,
+    "room without floor": HALL.wall_clearance,
 }
 
 
