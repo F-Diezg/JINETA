@@ -485,11 +485,26 @@ riders moving together).
    spheres' grazes are found. Every earlier collision, gate, referee and course
    test still passes unchanged (the lap of the first course: same states, same lap
    time, no advancement run).
-7. **Batch collisions, gates and referee**: status per drone ("flying",
-   "finished", "crashed", "timeout"), lap time, passes; a drone whose lap ended is
-   frozen. Tests: the same events (kind, index, moment) as the reference monitor
-   and referee on the same flights, crashes, finishes and timeouts mixed in one
-   batch.
+7. ✅ **Batch collisions, gates and referee** (`escuadron/collision.py`:
+   `BatchCollisionMonitor`; `escuadron/referee.py`: `BatchReferee`,
+   `forward_crossings`, `batch_referee`): status per drone (codes FLYING,
+   FINISHED, CRASHED, TIMEOUT), lap time, passes; a drone whose lap ended is not
+   judged again (nor checked by the monitor) until it is reset. Tests: 95 sampled
+   flights in the first course (random places, speeds, accelerations, headings,
+   tilts and turns; drones taking off from the floor and coming back down, three
+   standing on their gear all along, twelve grazing the pillar at 20 m/s from 5 µm
+   to 2 cm deep, seven of them only between samples): every collision (kind,
+   index, moment, place, 1e-9) and `airborne` as the reference monitor's, every
+   kind of contact present; margins as the reference's; a drone alone or in the
+   batch bit for bit; only the chosen drones checked and reset. Laps: the reference
+   lap, the same lap moved sideways and up, flown backwards, and random flights,
+   with the course's time limit and with 3 s: every status, end and pass (gate,
+   moment, point, 1e-9) as the reference referee's (the reference lap finishes at
+   8.8145 s); forward crossings of 3000 random moves through a rectangular and a
+   circular gate as the gates' own; in one batch a finish 2 ms before a crash, a
+   crash 2 ms before a gate, and a crashed drone reset onto a lap it finishes; a
+   drone on its own clock repeats the lap time of another; ended laps are not
+   judged again.
 8. **Batch loop**: `step` and `reset` of chosen drones; speed against N measured
    (table here). Tests: a drone reset in the middle of a run repeats its first lap
    bit for bit; the others are not disturbed.
@@ -533,6 +548,31 @@ Phase 9 (fast batch engine):
   of 1 cm, a tolerance of 0). The tolerance of 0 survived the first version (it
   only changes when brushing contacts end); a test of a pass within the tolerance
   was added.
+- **The batch monitor checks only the drones it is told to** (`drones`), and the
+  batch referee tells it the ones still flying: a drone whose lap has ended is not
+  checked, so a finished drone that drifts into a wall stays finished, as in the
+  reference, where `run` stops at the end of the lap.
+- **The advancement in the batch runs in rounds**: each round asks the shape about
+  every sphere of every drone still advancing, and a drone drops out when it
+  touches or reaches its next sample; only the drones near a shape take part. The
+  rounds end with the slowest drone, so a rare near miss of a few micrometres (a
+  few thousand rounds, step 6) holds up its batch for that step.
+- **Statuses are codes** (`FLYING` .. `TIMEOUT`, words in `STATUS_NAMES`), a
+  collision is arrays (`collided`, `check`, `time`, `position`) and the passes are
+  (n, gates) arrays; `collision(i)` and `passes(i)` give one drone's in the
+  reference's types, which is how the tests compare them.
+- **The step 7 tests were checked by breaking the code** (17 mistakes). Five
+  survived the first version of the tests, each a real gap: the floor counted
+  before take-off (every drone that started on the floor took off at once), a
+  rectangular opening judged by its width only and a circular one 10 cm too wide
+  (no move through a gate plane outside its opening), a gate counted although the
+  crash came first in the step, and the monitor not reset with the referee (no
+  crashed lap was reset). Tests were added for each (drones standing still, random
+  moves through both gate types, events in the same step, a crashed drone reset).
+- **Cost of the batch referee** (Claude's workspace, the lap of the first course
+  replayed, 13 spheres, 3 obstacles, 4 gates): ~1 000 drone-checks/s at N = 1,
+  ~28 000 at 64, ~45 000 at 1024, about half the speed of the dynamics with RK4
+  (step 3): the collision check is a large share of a batch step.
 - **The whole cascade goes into the batch engine** (decided with the author). It
   adds no realism (the physics is the same), but it pays twice: the classical
   baseline of phase 10 can be flown on many courses at once (phase 11 compares the
@@ -1649,8 +1689,8 @@ Phase 6c (Kalman filter):
   28. The demonstration guidance (straight at each gate centre) only works slowly
       (3 m/s; it hits gate 2 at 4 m/s). The classical baseline of phase 10 must plan
       through the gates (look ahead to the next one, a position loop: loose end 10).
-- Next: phase 9 (fast batch engine), step 7 (batch collisions, gates and
-  referee); the plan is in section 5.
+- Next: phase 9 (fast batch engine), step 8 (the batch loop, reset per drone,
+  speed against N); the plan is in section 5.
 
 ## 8. Working with Claude
 
