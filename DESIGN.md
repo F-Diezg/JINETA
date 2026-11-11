@@ -595,13 +595,28 @@ at 50 Hz: each action is held for two steps of the physics and the rate loop
    only visible in the integrals right after the call; the reset before only in a
    pilot declared landed with charged integrals; the threshold only at exactly the
    weight).
-3. ⏳ **Action and observation** (`picadero/spaces.py`): the action is four numbers
-   in [-1, 1] mapped to collective thrust and body rates, by default inside the
-   autopilot's own envelope (thrust 10-90 % of the maximum, rates 3.5 / 3.5 /
-   1.5 rad/s), so the comparison with the baseline measures the pilot, not the
-   limits; the observation, in body axes: velocity, attitude matrix, body rates,
-   four points on the edge of the opening of each of the next two gates, and the
-   previous action. Tests against geometry by hand.
+3. ✅ **Action and observation** (`picadero/spaces.py`: `BoxSpace`,
+   `ActionLimits`, `autopilot_envelope`, `opening_points`, `Observer`): the action
+   is four numbers in [-1, 1] (clipped) mapped to collective thrust and body
+   rates, by default inside the autopilot's own envelope (thrust 10-90 % of the
+   maximum, 2.83-25.44 N for the Iris; rates 3.5 / 3.5 / 1.5 rad/s), so the
+   comparison with the baseline measures the pilot, not the limits; `actions` is
+   the inverse, for a classical controller flying through the same interface. The
+   observation (43 numbers with two gates ahead), in body axes: velocity, attitude
+   matrix row by row, body rates, four points on the edge of each of the next two
+   openings (a rectangle's corners, the square inscribed in a circle; top left,
+   top right, bottom right, bottom left), the last gate repeated where the course
+   runs out, and the previous action; SI units, float64 here and float32 at the
+   environment's interface. Tests: spaces (shape, limits, contains, seeded
+   samples, read-only, bad limits); actions by hand, clipped, inverse, the Iris
+   envelope (hover inside it); every opening's points by hand (gate turned 30°,
+   circle) and on the edge of the opening in the right order; observations by
+   hand nose North and nose East; the attitude part is the rotation matrix; for
+   200 random attitudes the body offsets rotate back to the NED points; targets
+   repeat the last gate; many drones equal to one by one bit for bit. Checked by
+   breaking the code (6 mistakes: the gate's u axis, R for R^T in the velocity and
+   in the offsets, wrapping instead of repeating the last gate, R^T in the
+   attitude part, the thrust mapping); each made a test fail.
 4. ⏳ **Reward and end of an episode** (`picadero/reward.py`): progress towards
    the target gate (measured against the gate targeted at the start of the step,
    so crossing it gives no jump), a bonus per gate, a penalty for a crash;
