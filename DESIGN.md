@@ -568,14 +568,33 @@ at 50 Hz: each action is held for two steps of the physics and the rate loop
    and after alternated twice in one session): the batch at 1 024 drones from
    ~59 000-64 000 to ~86 000-88 000 drone-steps/s (+~45 %); the reference lap
    unchanged within the noise (~1 500-1 600 steps/s both).
-2. ⏳ **Rate pilot with a landed state** (loose end 32; `jinete.control.RatePilot`,
-   `escuadron.control.BatchRatePilot`): the entry point of a policy (collective
-   thrust and body rates through the rate loop), with the landed state of PX4:
-   while landed the rate integrators are held at zero; it takes off when the
-   commanded thrust exceeds the weight. Tests: standing on the floor with rate
-   commands charges nothing; take-off at the right step; in the air it is the
-   rate loop; the batch equal to the reference over flights (1e-9), a drone alone
-   or in a batch bit for bit, reset per drone.
+2. ✅ **Rate pilot with a landed state** (loose end 32; `jinete.control.RatePilot`,
+   `escuadron.control.BatchRatePilot`; `campo.collision.TAKEOFF_CLEARANCE`): the
+   entry point of a policy (collective thrust and body rates through the rate
+   loop), with the landed state of PX4: while landed the rate integral is reset
+   before and after each update; it takes off when the commanded thrust exceeds
+   the weight, and never lands again by itself. Found on the way: a gear that
+   unloads without a take-off (90 % of the weight) lifts its feet a fraction of a
+   millimetre, which the monitor took for a take-off, and the feet coming back
+   down for a floor crash. A vehicle has now left the floor once every gear point
+   is more than 1 cm up (reference and batch). Tests: 2 s on the floor asked to
+   turn charge nothing, while the rate loop alone charges its roll and pitch
+   integrals to their limits; take-off at the first step above the weight, not
+   at exactly the weight; a take-off after 1 s on the floor is the one a fresh
+   pilot flies from that state, bit for bit; in the air it is `RateController`
+   bit for bit; a pilot declared landed with charged integrals starts from a
+   clean loop; it never lands by itself; eight drones on the floor and in the air
+   taking off at different moments, each within 1e-9 of the reference and landed
+   at the same steps; alone or in a batch bit for bit; reset per drone; in the
+   batch loop a drone at 90 % of its weight stays on its gear without a crash;
+   hops of 0.2 mm and 9.9 mm are not take-offs, one of 10.1 mm and back is a
+   floor crash (reference and batch monitors). Checked by breaking the code (7
+   mistakes: no clearance, a reset left out before or after the update in either
+   pilot, the take-off at 90 % of the weight, at exactly the weight); three
+   survived the first tests and each got a test (the reset after the update is
+   only visible in the integrals right after the call; the reset before only in a
+   pilot declared landed with charged integrals; the threshold only at exactly the
+   weight).
 3. ⏳ **Action and observation** (`picadero/spaces.py`): the action is four numbers
    in [-1, 1] mapped to collective thrust and body rates, by default inside the
    autopilot's own envelope (thrust 10-90 % of the maximum, rates 3.5 / 3.5 /

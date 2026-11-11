@@ -24,7 +24,12 @@ from dataclasses import dataclass, field
 import numpy as np
 import numpy.typing as npt
 
-from jineta.campo.collision import SWEEP_TOLERANCE, Collision, Obstacle
+from jineta.campo.collision import (
+    SWEEP_TOLERANCE,
+    TAKEOFF_CLEARANCE,
+    Collision,
+    Obstacle,
+)
 from jineta.campo.indoor import Room
 from jineta.escuadron import quaternion
 
@@ -208,7 +213,7 @@ class BatchCollisionMonitor:
 
         free = ~hit
         going = rows[free]
-        self.airborne[going] |= margins[free, -1] > 0.0
+        self.airborne[going] |= margins[free, -1] > TAKEOFF_CLEARANCE
         self._has_previous[going] = True
         self._previous_time[going] = t_now[free]
         self._previous_position[going] = positions[free]

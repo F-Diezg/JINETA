@@ -307,3 +307,48 @@ class BatchAutopilot:
             flying, np.where(still, self.still_time + self.dt, 0.0), self.still_time
         )
         self.landed = self.landed | (flying & (self.still_time >= land.hold_time))
+
+
+@dataclass
+class BatchRatePilot:
+    """Rate pilot for n drones: collective thrusts and body rates through the rate
+    loop, as `jinete.control.RatePilot`.
+
+    Set `thrust_command` (n,) [N] and `rate_command` (n, 3) [rad/s]; calling the
+    pilot with (t, states) runs the rate loop for every drone and writes the rotor
+    speed commands (n, rotors) of the vehicles. `landed` (n,): those drones do not
+    integrate (their integrals are reset before and after the update) and take off
+    when their commanded thrust exceeds the weight.
+    """
+
+    vehicle: BatchMultirotor
+    gains: RateGains
+    dt: float  # control period [s]: the simulation step
+    landed: npt.ArrayLike = False  # (n,) or one value for all
+    thrust_command: np.ndarray = field(init=False)
+    rate_command: np.ndarray = field(init=False)
+    rate_loop: BatchRateController = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        n = self.vehicle.n
+        self.landed = np.broadcast_to(np.asarray(self.landed, bool), (n,)).copy()
+        self.thrust_command = np.zeros(n)
+        self.rate_command = np.zeros((n, 3))
+        self.rate_loop = BatchRateController(
+            self.vehicle.params, self.gains, self.dt, n
+        )
+
+    def reset(self, drones: Drones = None) -> None:
+        """Forget the rate loop's integral of these drones (all by default).
+        Whether they are landed is left as it is."""
+        self.rate_loop.reset(drones)
+
+    def __call__(self, t: float | np.ndarray, states: np.ndarray) -> None:
+        """The pre_step hook: update the rotor speed commands of the vehicles."""
+        self.reset(self.landed)
+        weight = self.vehicle.params.mass * GRAVITY
+        self.landed = self.landed & ~(self.thrust_command > weight)
+        self.vehicle.rotor_speed_command = self.rate_loop.update(
+            self.rate_command, self.thrust_command, states
+        )
+        self.reset(self.landed)

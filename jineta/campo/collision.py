@@ -7,8 +7,10 @@ What is checked at every sample of a flight (the states that simulation.run keep
     its radius;
   - the floor, with the vehicle's floor points (its landing gear). A vehicle starts
     a lap standing on its gear, so the floor only counts once it has left it: from
-    the first sample with every floor point above the floor, any floor point
-    touching it again is a crash.
+    the first sample with every floor point more than TAKEOFF_CLEARANCE above the
+    floor, any floor point touching it again is a crash. (A gear that unloads
+    without a take-off, thrust a little below the weight, can lift its feet a
+    fraction of a millimetre off the floor; that hop is not a take-off.)
 
 Margin: for each check, the room left before touching. For walls and obstacles it is
 the distance of each sphere's centre minus its radius (the smallest over the
@@ -73,6 +75,11 @@ from jineta.core import quaternion
 # quite touch: every advance is at least SWEEP_TOLERANCE / (longest move).
 SWEEP_TOLERANCE = 1e-6
 
+# A vehicle has left the floor once every floor point is higher than this [m]. Ten
+# times the Iris gear's sink at rest (1 mm): a spring unloading with thrust below
+# the weight lifts the feet at most about that much, and a lap flies decimetres up.
+TAKEOFF_CLEARANCE = 0.01
+
 
 class Obstacle(Protocol):
     """Anything with a signed distance (Box, Cylinder)."""
@@ -119,7 +126,8 @@ class CollisionMonitor:
         distance), reported as kind "gate".
 
     After a call that found a contact, `collision` holds it and every later call
-    returns True. `airborne` tells whether the vehicle has left the floor.
+    returns True. `airborne` tells whether the vehicle has left the floor (all its
+    floor points higher than TAKEOFF_CLEARANCE at some sample).
     """
 
     room: Room
@@ -193,7 +201,7 @@ class CollisionMonitor:
         if np.any(touching) or np.any(np.isfinite(swept)):
             self.collision = self._first_contact(t, state, margins, touching, swept)
             return True
-        if margins[-1] > 0.0:
+        if margins[-1] > TAKEOFF_CLEARANCE:
             self.airborne = True
         self._previous = (t, state[0:3].copy(), margins, centers)
         return False

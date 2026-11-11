@@ -3,6 +3,10 @@
 Cascade, outer to inner: velocity -> attitude -> body rate -> mixer -> rotor speeds.
 Each loop runs once per simulation step with the state at the start of the step,
 and its output is held for the whole step (zero-order hold, see core.simulation).
+
+Two hooks fly a vehicle: `Autopilot` (velocity and heading commands, the whole
+cascade) and `RatePilot` (collective thrust and body rates through the rate loop
+alone: what a policy commands, and what PX4 accepts from a companion computer).
 """
 
 from dataclasses import dataclass, field
@@ -353,3 +357,52 @@ class Autopilot:
         self._still_time = self._still_time + self.dt if still else 0.0
         if self._still_time >= land.hold_time:
             self.landed = True  # from the next step: motors stopped, loops reset
+
+
+@dataclass
+class RatePilot:
+    """Rate pilot: collective thrust and body rates in one pre_step hook.
+
+    Set `thrust_command` (total thrust [N]) and `rate_command` ([p, q, r] [rad/s]);
+    pass the pilot itself as `pre_step` to `run`. Each call runs the rate loop and
+    writes the rotor speed commands into the vehicle. This is the entry point of a
+    policy: the setpoint a real PX4 autopilot accepts in offboard mode.
+
+    On the ground (`landed`), as in PX4, the rate loop does not integrate: the
+    integral is reset before and after each update, so a vehicle standing on the
+    floor while asked to turn (which the floor does not let it do) charges nothing,
+    and its take-off starts from a clean loop. The motors do follow the commands (a
+    thrust below the weight leaves the vehicle on its gear). It takes off when the
+    commanded thrust exceeds its weight (it could not leave the floor with less).
+    It never goes back to `landed` by itself: whoever puts the vehicle back on the
+    floor sets it (in a lap, touching the floor after take-off is a crash anyway).
+    The default, False, is a vehicle already in the air.
+    """
+
+    vehicle: Multirotor
+    gains: RateGains
+    dt: float  # control period [s]: the simulation step
+    thrust_command: float = 0.0
+    rate_command: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    landed: bool = False
+    rate_loop: RateController = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.rate_loop = RateController(self.vehicle.params, self.gains, self.dt)
+
+    def reset(self) -> None:
+        """Forget the rate loop's integral."""
+        self.rate_loop.reset()
+
+    def __call__(self, t: float, state: np.ndarray) -> None:
+        """The pre_step hook: update the rotor speed commands of the vehicle."""
+        if self.landed:
+            self.reset()
+            weight = self.vehicle.params.mass * GRAVITY
+            if self.thrust_command > weight:
+                self.landed = False  # take off, from a clean loop
+        self.vehicle.rotor_speed_command = self.rate_loop.update(
+            self.rate_command, self.thrust_command, state
+        )
+        if self.landed:
+            self.reset()

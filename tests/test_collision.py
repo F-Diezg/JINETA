@@ -17,12 +17,17 @@ import numpy as np
 import pytest
 
 from jineta.campo import collision
-from jineta.campo.collision import SWEEP_TOLERANCE, CollisionMonitor
+from jineta.campo.collision import (
+    SWEEP_TOLERANCE,
+    TAKEOFF_CLEARANCE,
+    CollisionMonitor,
+)
 from jineta.campo.indoor import Box, Cylinder, Room
 from jineta.core import quaternion
 from jineta.core.environment import GRAVITY
 from jineta.core.rigid_body import normalize_attitude
 from jineta.core.simulation import run
+from jineta.escuadron.collision import BatchCollisionMonitor
 from jineta.jinete.contact import GroundContact
 from jineta.jinete.control import Autopilot
 from jineta.jinete.multirotor import Multirotor
@@ -229,6 +234,42 @@ def test_coming_back_down_after_take_off_is_a_floor_crash():
     before, after = (monitor.margins(s)[-1] for s in states[-2:])
     assert before >= 0.0 > after
     assert hit.time > 1.5
+
+
+@pytest.mark.parametrize(
+    "peak, crash",
+    [
+        (0.0002, False),
+        (TAKEOFF_CLEARANCE - 1e-4, False),
+        (TAKEOFF_CLEARANCE + 1e-4, True),
+    ],
+)
+def test_a_hop_lower_than_the_takeoff_clearance_is_not_a_take_off(peak, crash):
+    """The gear lifted straight up to `peak` above the floor and put back 1 mm into
+    it: a crash only when the hop went higher than TAKEOFF_CLEARANCE. (A gear
+    unloading with thrust just below the weight hops a fraction of a millimetre.)
+    The batch monitor judges the same."""
+    monitor = iris_monitor()
+    batch = BatchCollisionMonitor(
+        ROOM, (), SPHERE.centers, SPHERE.radii, IRIS_LANDING_GEAR.points, 1
+    )
+    foot = -monitor.margins(state_at([5.0, 4.0, 0.0]))[-1]  # feet below the CoM
+    heights = np.concatenate(
+        [np.linspace(-0.001, peak, 11), np.linspace(peak, -0.001, 11)]
+    )
+    for k, height in enumerate(heights):
+        state = state_at([5.0, 4.0, -foot - height])
+        monitor(k * DT, state)
+        batch(k * DT, state[None, :])
+    assert (monitor.collision is not None) == crash
+    assert monitor.airborne == crash
+    assert batch.collided[0] == crash and batch.airborne[0] == crash
+    if crash:
+        assert monitor.collision.kind == "floor"
+        assert batch.collision(0).kind == "floor"
+        assert batch.collision(0).time == pytest.approx(
+            monitor.collision.time, abs=1e-12
+        )
 
 
 def test_reset_forgets_the_flight():
