@@ -7,12 +7,15 @@ vehicle.
 
 *Jineta* is a working name.
 
-> **Status: phase 9 done.** The physics engine is built and validated, the indoor
+> **Status: phase 10 done.** The physics engine is built and validated, the indoor
 > world is in place (rooms, obstacles and gates from course files, take-off from
-> the floor, collisions, a referee that times a lap), and a batch engine flies
-> thousands of drones at once, each lap ending and restarting on its own, in
-> agreement with the reference engine to rounding (688 tests). The training loop
-> comes next. See [`DESIGN.md`](DESIGN.md) for the roadmap and the decision log.
+> the floor, collisions, a referee that times a lap), a batch engine flies
+> thousands of drones at once in agreement with the reference engine, and the
+> training environment is ready: a policy commands collective thrust and body
+> rates, sees the next gates from the drone's point of view, and is rewarded for
+> progress and gates. A classical controller sets the time to beat on the first
+> course: 6.77 s (777 tests). Training comes next. See [`DESIGN.md`](DESIGN.md)
+> for the roadmap and the decision log.
 
 ## The goal
 
@@ -42,7 +45,9 @@ inertia, rotors, limits) they need, and trains a drone for their purpose.
 | Ground and take-off | Landing gear on the floor (spring-damper with friction); the autopilot's landed state, take-off and landing detection |
 | Collisions | The drone as spheres (13 for the Iris) against walls, ceiling, obstacles and gate frames, at every sample and along the moves between samples (no graze or thin wall slips through); the gear against the floor after take-off |
 | Courses | Strict YAML course files; a referee for gates in order, lap time, crash or time limit |
-| Batch engine | Many drones of one profile on one course at once (NumPy arrays): dynamics, ground contact, the whole autopilot, collisions and referee, each drone on its own lap clock and reset on its own; equal to the reference engine to rounding, ~40× its speed from ~1 000 drones |
+| Batch engine | Many drones of one profile on one course at once (NumPy arrays): dynamics, ground contact, the whole autopilot, collisions and referee, each drone on its own lap clock and reset on its own; equal to the reference engine to rounding, ~40× its speed from ~1 000 drones (~45 % more since phase 10) |
+| Training environment | n drones learning a course at once, with the shape of Gymnasium's interface (`reset`, `step`): actions are collective thrust and body rates at 50 Hz through the rate loop (as PX4 accepts them), observations in body axes (velocity, attitude, rates, the next two gates, the last action), reward for progress, gates and crashes; each drone's episode ends and restarts on its own |
+| Classical baseline | The velocity autopilot following a planned path through the gates (pure pursuit, corner speed plan), its settings swept in the batch for the fastest robust lap: 6.77 s on the first course, the time a policy has to beat |
 
 Every physics module is tested against known results: closed-form motion,
 published reference values, exact discrete solutions of the control loops.
@@ -58,6 +63,8 @@ pip install -r requirements.txt
 pytest -n auto
 python -m examples.iris_course
 python -m examples.batch_course
+python -m examples.env_random
+python -m examples.baseline_course
 ```
 
 The examples in `examples/` show the engine at work (projectile with drag, the
@@ -66,6 +73,9 @@ stopping) and the Iris flying the first course (`courses/first_course.yaml`): it
 takes off, flies through the four gates and finishes in 8.81 s. `batch_course`
 flies several Iris at different speeds at once and measures the batch engine's
 speed against the number of drones; `benchmark` times the reference engine.
+`env_random` flies the training environment with random actions (what the first
+minutes of training look like) and measures its speed; `baseline_course` sweeps
+the classical baseline's settings and draws its best lap of the first course.
 
 ## Layout
 
@@ -76,6 +86,8 @@ jineta/campo/     environment: atmosphere, wind, indoor world (room, obstacles,
 jineta/jinete/    vehicles: multirotor, fixed wing, their autopilots, profiles
 jineta/atalaya/   estimation: Kalman filter (onboard sensors later)
 jineta/escuadron/ batch engine: many drones at once, checked against the above
+jineta/picadero/  training layer: environment (action, observation, reward),
+                  classical baseline
 tests/            tests against analytic and published results
 examples/         runnable scripts
 courses/          course files (YAML)
@@ -95,7 +107,7 @@ vehicle, every number with its source). Details in [`DESIGN.md`](DESIGN.md).
 | 7 | Project goal, new README and design ✅ |
 | 8 | Indoor world: room, gates, obstacles, collisions; course files ✅ |
 | 9 | Fast batch engine (many drones at once) ✅ |
-| 10 | Training environment + classical baseline |
+| 10 | Training environment + classical baseline ✅ |
 | 11 | **MVP:** the Iris learns the course |
 | 12 | Realism for the real drone |
 | 13 | 3D viewer of recorded flights |

@@ -25,19 +25,24 @@ their purpose (a course, a warehouse, an inspection route; a racing quadrotor, a
 heavier camera drone) and trains a drone for it, with the confidence that the
 simulated vehicle behaves like the real one.
 
-**Where it stands (end of phase 9):** the physics engine is built and validated
+**Where it stands (end of phase 10):** the physics engine is built and validated
 (phases 1–6c): integrators, rigid body, atmosphere and wind, a quadrotor with its
 cascaded autopilot, a fixed-wing aircraft with its own autopilot, and a Kalman
 filter. The indoor world is built (phase 8): a room with obstacles and gates read
 from a course file, a drone that takes off from the floor on its landing gear,
 collisions with its 13-sphere hitbox (checked between samples too since phase 9),
-and a referee that times a lap. The Iris flies the first course through the gate
-centres with its autopilot (8.81 s). The batch engine (phase 9) flies many drones
-of one profile on one course at once, each lap ending and restarting on its own,
-equal to the reference engine to rounding: ~44 000 drone-steps/s at 1 024 drones,
-~440 times real time, on one core of the author's computer (~28 000 in Claude's
-workspace, where the reference does ~700). There is no training loop and no
-viewer yet (phase 10 next).
+and a referee that times a lap. The batch engine (phase 9) flies many drones of
+one profile on one course at once, each lap ending and restarting on its own,
+equal to the reference engine to rounding (~45 % faster since phase 10). The
+training environment is built (phase 10): n drones commanded by a policy through
+collective thrust and body rates (50 Hz) executed by the rate loop, an
+observation in body axes, a reward for progress, gates and crashes, episodes
+restarted on their own, with the shape of Gymnasium's interface and checked
+against the reference engine; ~48 000 environment steps/s at 1 024 drones in
+Claude's workspace (~960 times real time). The classical baseline (the velocity
+autopilot following a planned path through the gates, its settings swept in the
+batch for the fastest robust lap) flies the first course in **6.77 s**: the time
+a policy has to beat. No policy has been trained yet (phase 11 next).
 
 Name: *Jineta* is a working name until the project has its own.
 
@@ -67,10 +72,11 @@ code should be clear and every concept explained before it is used.
   newline and fixes blank lines that are easy to lose when pasting code. In VS
   Code, "Files: Insert Final Newline" and format-on-save with the Ruff formatter
   do the same automatically.
-- The full test run, in one process, takes ~1.2-2.5 min (688 tests, in Claude's
-  workspace at the end of phase 9, whose speed changes from session to session);
+- The full test run, in one process, takes ~1.2-2.5 min (777 tests, in Claude's
+  workspace at the end of phase 10, whose speed changes from session to session);
   the batch tests that fly the first course and compare it with the reference are
-  the slowest (~5-11 s each). `pytest -n auto` divides that by the number of cores.
+  the slowest (~5-11 s each), with the baseline's sweep and laps (~2-6 s each).
+  `pytest -n auto` divides that by the number of cores.
 - `scipy` is used for the trim (`scipy.optimize.root`) and in the Kalman tests
   (`scipy.stats.chi2`).
 - Regenerate dependencies with `pip freeze | Set-Content -Encoding ascii
@@ -145,7 +151,9 @@ code should be clear and every concept explained before it is used.
   body reacts the other way, so a `+1` rotor yaws the body right (positive r).
 - **Collisions:** a vehicle's collision shape is its `Hitbox` (spheres in body
   axes, profile data like the rotors); walls, ceiling and obstacles are checked
-  with it, the floor with the landing gear. `CollisionMonitor` is a `stop` for
+  with it, the floor with the landing gear (a crash once the vehicle has left the
+  floor, every gear point more than `TAKEOFF_CLEARANCE` = 1 cm up, and touches it
+  again). `CollisionMonitor` is a `stop` for
   `simulation.run`; it checks every sample and, for walls, obstacles and gates,
   the straight move of each sphere between two samples (conservative advancement,
   a contact within `SWEEP_TOLERANCE` = 1 µm); it reports the first contact
@@ -177,8 +185,11 @@ code should be clear and every concept explained before it is used.
 - **Multirotor autopilot interface:** `Autopilot(vehicle, gains, dt)` is a
   callable; pass it as `pre_step`. Whoever flies the vehicle sets
   `autopilot.velocity_command` (NED [m/s]) and `autopilot.yaw_command` ([rad]).
-  The rate loop alone (`RateController.update(rate_command, thrust_command,
-  state)`) is the entry point for a policy that commands thrust and body rates.
+  `RatePilot(vehicle, rate_gains, dt, landed)` is the other hook: it takes
+  `thrust_command` [N] and `rate_command` [rad/s] (what a policy commands, and
+  what PX4 accepts from a companion computer) through the rate loop; while landed
+  its integral is held at zero, and it takes off when the thrust exceeds the
+  weight. Both have a batch version (`BatchAutopilot`, `BatchRatePilot`).
 - **Fixed-wing vehicle interface:** `FixedWing(params, propulsion=None, density,
   wind)`, built like `Multirotor` (holds a `RigidBody`, `derivative(t, state)`).
   Commanded through `surfaces` (`ControlSurfaces`, frozen: assign a new one) and
@@ -220,6 +231,27 @@ code should be clear and every concept explained before it is used.
   An `if` per drone becomes a mask (`np.where`, all branches computed). Times can
   be one per drone (each on its own lap clock). Environment models are the
   reference's, called with arrays (altitudes (n,), positions (n, 3)).
+- **Training environment (`picadero`):** `CourseEnv(course, n, profile, limits,
+  weights, dt, action_repeat, lookahead)` has the shape of Gymnasium's interface
+  without depending on it: `reset(seed)` → (observations (n, size) float32, info);
+  `step(actions (n, 4))` → (observations, rewards (n,), terminated (n,),
+  truncated (n,), info); `observation_space`, `action_space` (`BoxSpace`). Each
+  drone is its own episode: one lap from standing on the floor; terminated by a
+  crash or the finish, truncated by the time limit; restarted in the same step
+  (its last observation in `info["final_observation"]`). The action, four numbers
+  in [-1, 1], is collective thrust and body rates inside an `ActionLimits`
+  envelope (by default the autopilot's); it is held for `action_repeat` physics
+  steps (2: the policy acts at 50 Hz over the 100 Hz rate loop). The observation
+  is in body axes (velocity, attitude matrix, rates, four points on each of the
+  next `lookahead` openings, previous action), SI units. The reward of a physics
+  step is progress towards the gate targeted at its start + a bonus per gate - a
+  penalty per crash (`RewardWeights`); an environment step adds up its physics
+  steps. A classical controller can fly through the same interface
+  (`ActionLimits.actions`).
+- **The classical baseline** of a course is the fastest robust lap of the
+  velocity autopilot following the path through its gates (`picadero.baseline`,
+  `sweep`): every copy with its settings changed by 2 % finishes, never within
+  5 cm of anything. A policy is measured against it on the same course.
 - **The simulator never draws.** It produces data (states and events over time);
   visualisation is a separate layer that reads that data.
 - Type hints and docstrings on every public function.
@@ -246,9 +278,13 @@ jineta/
 │   │               #   spheres), fixed_wing, propulsion, trim, stability,
 │   │               #   fixed_wing_control, profiles
 │   ├── atalaya/    # estimation: kalman.py (later: onboard sensors)
-│   └── escuadron/  # batch engine: quaternion, rigid_body, multirotor, contact,
-│                   #   control (whole autopilot), collision, referee, simulation
-│                   #   (BatchFlight: n drones flying laps, reset per drone)
+│   ├── escuadron/  # batch engine: quaternion, rigid_body, multirotor, contact,
+│   │               #   control (whole autopilot, rate pilot), collision,
+│   │               #   referee, simulation (BatchFlight: n drones flying laps,
+│   │               #   reset per drone)
+│   └── picadero/   # training layer: spaces (action, observation), reward
+│                   #   (and end of an episode), env (CourseEnv), baseline (the
+│                   #   classical path follower and its sweep)
 ├── tests/
 ├── courses/        # course files (YAML)
 ├── examples/       # runnable scripts (python -m examples.<name>)
@@ -260,16 +296,17 @@ jineta/
 Planned (each package arrives with its phase; names are proposals, settled when the
 phase starts):
 
-- a **training layer** (phase 10–11): the environment interface (observation,
-  action, reward, end of episode), the classical baseline and the training scripts.
+- the **training layer** (`picadero`, phase 10) grows in phase 11: the adapter to
+  the learning library chosen then, and the training scripts.
 - `atalaya/` grows **onboard sensors** (IMU, position from a motion-capture system
   or a camera) for the realism phase (12).
 - a **visualisation layer** outside `jineta/` (phase 13), which reads recorded
   flights and never runs the physics.
 
 Dependency rule: `core` imports nothing of the project; `campo` and `jinete` import
-`core`; layers that compose others (world, training) sit on top and are never
-imported by the engine.
+`core`; layers that compose others (world, batch engine, training) sit on top and
+are never imported by the engine: `escuadron` imports `core`, `campo` and
+`jinete`; `picadero` imports all of them and nothing imports `picadero`.
 
 ## 5. Roadmap
 
@@ -286,7 +323,7 @@ imported by the engine.
 | 7 | Project goal, repo reduced to the engine, new README and DESIGN | ✅ Done |
 | 8 | Indoor world: room, floor, gates, obstacles, collisions; course files | ✅ Done |
 | 9 | Fast batch engine (many drones at once), checked against the reference | ✅ Done |
-| 10 | Training environment (observation, action, reward) + classical baseline | 🔄 In progress |
+| 10 | Training environment (observation, action, reward) + classical baseline | ✅ Done |
 | 11 | **MVP:** the Iris learns the course (reinforcement learning) | ⏳ |
 | 12 | Realism for the real drone: motor lag, ground effect, sensor noise, latency, randomised parameters | ⏳ |
 | 13 | 3D viewer of recorded flights | ⏳ |
@@ -545,9 +582,14 @@ riders moving together).
    own; inconsistent input rejected. Speed (table below).
 9. ✅ **Close the phase**: this document and the README.
 
-**Phase 10 — in progress.** The training environment and the classical baseline,
-in a new package `jineta/picadero/` (the riding school where horse and rider
-train).
+**Phase 10 — done.** The training environment and the classical baseline, in a
+new package `jineta/picadero/` (the riding school where horse and rider train):
+the rate pilot with a landed state (reference and batch), the action and the
+observation, the reward and the end of an episode, `CourseEnv` (n drones, each
+its own episode, checked against the reference engine), and the baseline, whose
+robust best lap of the first course, 6.77 s, is the time to beat. On the way the
+batch engine got ~45 % faster (loose end 29) and an unloading gear's hop stopped
+counting as a take-off. Tests: 777, ruff clean.
 
 Plan agreed with the author at the start of the phase (each step: tests green,
 ruff clean, commit + push). Decided with the author: the environment has the
@@ -701,9 +743,94 @@ at 50 Hz: each action is held for two steps of the physics and the rate loop
    frame by 6 mm and crashed in 7 of 33 copies changed by 2 %; the robust one
    finished all 65 such copies and 64 of 65 changed by 5 %. The sweep takes ~30 s
    in Claude's workspace.
-7. ⏳ **Close the phase**: this document and the README.
+7. ✅ **Close the phase**: this document and the README.
 
 ## 6. Decision log
+
+Phase 10 (training environment and classical baseline):
+- **The environment has Gymnasium's shape without depending on it** (decided
+  with the author): the library cannot be installed in Claude's workspace (no
+  network), so code using it could not be run before handing it over; and the
+  vectorised interfaces of Gymnasium (`VectorEnv`) and Stable-Baselines3
+  (`VecEnv`) differ, so choosing one now would choose phase 11's library early.
+  An adapter of a few dozen lines comes at the start of phase 11 and is checked
+  there with Gymnasium's environment checker.
+- **The policy acts at 50 Hz** (decided with the author; loose end 8): each action
+  is held for two physics steps; the rate loop and the physics stay at 100 Hz.
+  About 440 decisions per lap instead of 880 (shorter horizons are easier to
+  learn), a usual rate for setpoints from a companion computer to PX4.
+- **The environment is batch-native and has no reference twin**: what it adds
+  (observation, reward, restarts) is tested by hand and its flight is checked
+  against the reference engine (`Multirotor`, `RatePilot`, the course's referee)
+  drone by drone, as every batch module is.
+- **The landed state of the rate pilot is PX4's**: no integration while landed
+  (reset before and after each update), take-off when the commanded thrust
+  exceeds the weight, no landing detection (in a lap a touch-down is a crash).
+  The motors follow the commands on the ground (the autopilot stops them), so a
+  policy can spin up before it lifts off.
+- **A vehicle leaves the floor only above 1 cm** (`TAKEOFF_CLEARANCE`, found in
+  step 2): at 90 % of the weight on the floor, the gear (sinking 1 mm under the
+  full weight) unloads and its feet hop a fraction of a millimetre; the monitor
+  took that for a take-off and the feet coming back for a floor crash, so a
+  policy hesitating on the floor would have crashed without moving. The
+  autopilot never showed it (motors stopped while landed). Every earlier test
+  passed unchanged.
+- **The action envelope is the autopilot's** (thrust 10-90 % of the maximum,
+  rates 3.5 / 3.5 / 1.5 rad/s, PX4's MC_ROLLRATE_MAX 220 deg/s): with the same
+  limits, the comparison with the baseline measures the pilot. PX4's acro mode
+  defaults to 100 deg/s and its documentation suggests 720 deg/s for experienced
+  pilots; widening the envelope is a phase 11 decision (loose end 36).
+- **The observation is in body axes**, so it does not depend on where the course
+  lies or which way it faces, and describes each gate by four points on the edge
+  of its opening (place, size and heading at once; a circle by its inscribed
+  square, inside the opening). The attitude is the whole rotation matrix (no
+  discontinuity, unlike Euler angles or a quaternion's sign). The previous action
+  is included, so a policy can be smooth. Units stay SI: scaling for learning is
+  the training's (phase 11). Obstacles are not observed (loose end 33).
+- **Progress is measured against the gate targeted at the start of each physics
+  step**, also in the step that crosses it: the target changing mid-step would
+  pay a jump of minus the distance between gates for crossing one. Summed over a
+  lap it pays about the course's length whatever the lap time; speed is rewarded
+  through the discount of later rewards, as in Swift. The weights (1 per metre, 1
+  per gate, 5 per crash) are a starting point.
+- **A crash terminates, the time limit truncates**: after a crash or the finish
+  nothing more comes; after the time limit the drone could have flown on, and the
+  learning algorithm must not take what would have come as zero.
+- **Same-step restarts**: a drone whose episode ends is put back on the floor in
+  the same step, its last observation in `info` (as Gymnasium's same-step
+  autoreset and Stable-Baselines3's `VecEnv`), so a batch never waits for its
+  slowest episode.
+- **Observations float32, rewards and physics float64**: float32 is what learning
+  libraries use; the observation is converted at the interface only.
+- **The baseline is a pure-pursuit path follower over the velocity autopilot**
+  (the plan's "through the gate centres with the existing velocity autopilot",
+  planned as loose ends 10 and 28 asked): a polyline through entry, centre and
+  exit points along each gate's heading; aiming at a point `lookahead` metres
+  further on the path corrects drift and cuts corners smoothly; the speed is
+  planned from a lateral acceleration in the corners and a braking deceleration.
+  It is a reasonable classical reference, not the classical optimum: a minimum-
+  time trajectory through the gates, tracked with feedforward, would be faster.
+- **The baseline's settings are swept in the batch and must be robust**: the
+  fastest lap of a plain sweep (6.48 s) cleared a frame by 6 mm and crashed in 7
+  of 33 copies with its settings changed by 2 %: luck, not a time a controller
+  can be trusted to fly. A setting counts only if four copies changed by up to
+  2 % (seeded) also finish and none comes within 5 cm of anything. The robust
+  best (6.773 s) finished 65 of 65 copies at 2 % and 64 of 65 at 5 %.
+- **The baseline is also flown through the environment's actions** (its
+  velocity and attitude loops at 50 Hz turned into thrust and rates): it
+  finishes in 6.76 s, so the action envelope and the 50 Hz rate allow a winning
+  lap, and the lap checks the environment's reward over real gate crossings.
+- **Loose end 29 is done first** (decided with the author): the overhang formula
+  written out gives the same numbers bit for bit and the batch ~45 % more speed,
+  which phase 11's training will use.
+- **Every step's tests were checked by breaking the code** (32 mistakes over the
+  phase); seven survived a first version of the tests and each got its own test:
+  the rate pilot's resets before and after the update and its threshold at
+  exactly the weight; a crash penalty not masked for ended drones; the pilot not
+  set back to landed on a restart; the target gate read after the step (no
+  scripted episode crossed a gate; the baseline's lap through the environment
+  does); progress allowed to go back. Equivalent mistakes (the same results by
+  construction) are noted in each step.
 
 Phase 9 (fast batch engine):
 - **Loose end 26 closed by conservative advancement** (step 6). Of the two ways
@@ -1546,6 +1673,10 @@ Phase 6c (Kalman filter):
     `velocity_command`, `yaw_command` and `landed`; runs the three loops and writes
     the vehicle's `rotor_speed_command` (zero while landed); `reset()` clears the
     integrators and the landing timer.
+  - `RatePilot(vehicle, gains, dt, thrust_command, rate_command, landed=False)`:
+    callable `pre_step` hook through the rate loop alone (collective thrust [N],
+    body rates [rad/s]); while landed the integral is held at zero; takes off
+    when the thrust exceeds the weight; `reset()`.
 - `jineta/jinete/profiles.py` — `flu_to_frd(vector)`, `IRIS` (PX4 SITL Iris, sources
   in the comments), `IRIS_RATE_GAINS`, `IRIS_ATTITUDE_GAINS`, `IRIS_VELOCITY_GAINS`,
   `IRIS_GAINS`, `IRIS_LANDING_GEAR` (the corners of its PX4 collision box),
@@ -1637,8 +1768,10 @@ Phase 6c (Kalman filter):
     `BatchAttitudeController`, `BatchVelocityController` (each `(params, gains,
     dt, n)` with `reset(drones)` where they have memory), `BatchAutopilot(vehicle,
     gains, dt, landed)` (`velocity_command` (n, 3), `yaw_command` (n,), `landed`
-    (n,), `still_time`; callable `(t, states)`; `reset(drones)`); `Drones` (None,
-    a mask or indices).
+    (n,), `still_time`; callable `(t, states)`; `reset(drones)`),
+    `BatchRatePilot(vehicle, gains, dt, landed)` (`thrust_command` (n,),
+    `rate_command` (n, 3), `landed` (n,); callable `(t, states)`;
+    `reset(drones)`); `Drones` (None, a mask or indices).
   - `collision.py` — `BatchCollisionMonitor(room, obstacles, sphere_centers,
     sphere_radii, floor_points, n, gates)`: callable `(t, states, drones)`,
     `margins`, `collided`, `check`, `time`, `position`, `airborne`, `kinds`,
@@ -1652,7 +1785,29 @@ Phase 6c (Kalman filter):
   - `simulation.py` — `BatchFlight(vehicles, referee, dt, start)`: `states`
     (n, 13), `clock` (n,), `step(controller)` (returns the laps that ended in that
     step), `reset(drones, start)`; `BatchController`.
-- Tests (688 passing, ruff check + ruff format clean):
+- `jineta/picadero/` — the training layer (conventions in section 3):
+  - `spaces.py` — `BoxSpace(low, high)` (float32; `shape`, `contains`,
+    `sample(rng, n)`), `ActionLimits(thrust_min, thrust_max, max_rate)`
+    (`space`, `commands(actions)`, `actions(thrust, rates)`),
+    `autopilot_envelope(params, gains)`, `opening_points(gate)`,
+    `Observer(gates, lookahead=2)` (`size`, `space`, `targets(next_gate)`,
+    callable `(states, next_gate, previous_action)`); `ACTION_SIZE`.
+  - `reward.py` — `RewardWeights(progress=1, gate=1, crash=5)` (`total`),
+    `RewardTerms`, `Reward(gates, weights)` (`terms(...)`, callable),
+    `episode_end(status)` → (terminated, truncated).
+  - `env.py` — `CourseEnv(course, n=1, profile, limits, weights, dt=0.01,
+    action_repeat=2, lookahead=2)`: `reset(seed, options)`, `step(action)`,
+    `observation_space`, `action_space`, `step_time`, `np_random`; `flight`,
+    `pilot`, `observer`, `reward`, `start`.
+  - `baseline.py` — `BaselineSettings(cruise, lateral_accel, braking_accel,
+    lookahead, approach, takeoff_height)` (one value or one per drone),
+    `GatePath(points)` (`through(course, approach, takeoff_height)`, `point_at`,
+    `closest`, `length`, `turns`), `PathGuidance(course, settings, n, path=None)`
+    (`commands(states)`, `speed_limit(s)`, `reset(drones)`), `BaselinePilot`,
+    `baseline_flight`, `fly_baseline` (statuses, lap times, clearances, flight),
+    `sweep(course, ...)` → `SweepResult(best, lap_time, tried, robust,
+    lap_times)`.
+- Tests (777 passing, ruff check + ruff format clean):
   - integrators (2): RK4 exact on free fall; Euler's error shrinks with dt.
   - rotation (5): 90° about z maps North to East; proper orthogonal matrix; steady
     spin about a principal axis; constant torque spins up linearly; torque-free
@@ -1777,7 +1932,9 @@ Phase 6c (Kalman filter):
     angle asin(5/25); reset repeats the flight. Orbit guidance: tangent on the circle
     (both directions), at the centre from far away, away from it inside; rejects
     invalid input; the autopilot holds a 150 m orbit (±0.5 m, bank atan(V²/gR) ±1°).
-  - indoor geometry (56): box distances by hand (8 points: centre, face, past a
+  - indoor geometry (58): the overhang formula written out equal to NumPy's
+    reductions bit for bit (2 and 3 components, 100 000 rows, one point at a
+    time); box distances by hand (8 points: centre, face, past a
     face, edge and corner, inside); the box moves with its centre; yaw 90° turns
     its length to East, yaw 45° gives a diamond, yaw 30° shows the sense of the
     turn; turning shape and point together changes nothing (50 random, seeded);
@@ -1821,7 +1978,9 @@ Phase 6c (Kalman filter):
     (0.2 mm past the bounding sphere) and give back 0.233 / 0.104 / 0.036 m up,
     forward and sideways; the profile carries them; rejects invalid input (8
     cases); read-only.
-  - collisions (37), with the bounding sphere unless said: straight at the north
+  - collisions (40), with the bounding sphere unless said: hops of the gear of
+    0.2 mm and 9.9 mm are not take-offs, one of 10.1 mm and back is a floor crash
+    (reference and batch monitors); straight at the north
     wall, the ceiling, a crate and a pillar, the moment exact (1e-9) and the
     obstacle named by its index; a sphere ahead of
     the nose on a 90° heading; the earliest of two contacts in one step wins; a
@@ -1906,6 +2065,35 @@ Phase 6c (Kalman filter):
     (information adds up); the continuous noise does not depend on how an interval
     is split, the piecewise one does; NEES inside its χ² interval over 300 seeded
     runs, and far outside it for an overconfident filter.
+  - rate pilot (13): on the floor turning charges nothing (the rate loop alone
+    charges its limits); take-off at the first step above the weight, not at
+    exactly the weight; a take-off after waiting is a fresh pilot's bit for bit;
+    in the air it is `RateController` bit for bit; declared landed it starts from
+    a clean loop; it never lands by itself; the batch against the reference (8
+    drones, 1e-9, landed at the same steps), alone or in a batch, reset per
+    drone, landed integrals zero after every call, in the batch loop at 90 % of
+    the weight no crash.
+  - spaces (30): `BoxSpace` (limits, contains, seeded samples, read-only, bad
+    limits); actions by hand, clipped, inverse, the Iris envelope; opening points
+    by hand (rectangle, turned 30°, circle) and on the edge in order; the
+    observation by hand nose North and East, the attitude matrix, 200 random
+    attitudes rotated back, the last gate repeated, many drones bit for bit.
+  - reward (12): a straight lap by hand (0.1 m every step, 14 m, three bonuses);
+    backwards through a gate; a crash paid once; weights; the first course's lap
+    adds up gate by gate; drones not flying get nothing; many drones; episode
+    end; bad weights.
+  - environment (14): reset and step shapes and types; least thrust stands and is
+    truncated; three episodes against the reference engine (states 1e-9,
+    rewards, end, final observation); alone or among four with restarts; a
+    restarted drone as a fresh environment, landed, clean loop; time limit;
+    seeds; action repeat; previous action clipped; bad input.
+  - baseline (15): the path by hand, points along it, the closest point only a
+    few segments ahead; the speed plan by hand; straight up first, progress never
+    back (also when pushed back); the best lap (6.773 +- 0.02 s, > 5 cm clear);
+    against the reference engine (1e-9); different settings as alone; through
+    the environment's actions at 50 Hz (finishes) and at 100 Hz (the return gate
+    by gate, 1e-9); the sweep keeps the robust setting and fails loudly; bad
+    paths and settings.
 - Examples (all run, `python -m examples.<name>`):
   - `projectile_drag.py` — vacuum vs drag.
   - `density_comparison.py` — constant vs exponential vs ISA density (~1.7 km apogee:
@@ -1928,6 +2116,10 @@ Phase 6c (Kalman filter):
   - `batch_course.py` — five Iris at 2 to 4 m/s fly two laps each in one batch
     (the 3.5 and 4 m/s ones clip a gate), and the batch's speed against n.
     `GateGuidance`, `course_flight` and `fly_laps` are reused by tests.
+  - `env_random.py` — the environment with random actions (64 drones: every
+    episode a crash after ~0.8 s) and its speed against n.
+  - `baseline_course.py` — the baseline's sweep on the first course (time to
+    beat 6.77 s) and the best lap drawn with the planned path.
 - Physics note (intermediate-axis instability, torque-free): spin Ω about the
   intermediate axis grows any tiny perturbation at rate
   `λ = Ω·sqrt((I2−I1)(I3−I2)/(I1·I3))`. The example perturbation (0.01 rad/s on p
@@ -1950,7 +2142,7 @@ Phase 6c (Kalman filter):
   4. Mixer saturation is plain clipping. It already happens for an instant at every
      velocity step (one rotor at 0, another at the maximum). A smarter strategy
      (give up yaw before roll and pitch, as PX4 does) when it starts to matter —
-     an aggressive racing policy will saturate often (phase 10–11).
+     an aggressive racing policy will saturate often (phase 11).
   5. Motor dynamics (first-order lag, 12.5 ms up / 25 ms down on the Iris) not
      modelled. Needed before a policy can move to a real drone (phase 12); it adds
      one state per rotor.
@@ -1960,13 +2152,14 @@ Phase 6c (Kalman filter):
   7. Rotor effects left out: axial-inflow thrust loss, rolling moment, gyroscopic
      moments; rotor inertia (1–3 %) left out of the Iris inertia. Ground and
      ceiling effect (more thrust close to a surface) matter indoors (phase 12).
-  8. Controllers run at the simulation rate (1/dt). A policy will likely run slower
-     than the rate loop (e.g. 50 Hz over 100 Hz or more); settle it in phase 10.
+  8. (Closed in phase 10: the policy acts at 50 Hz, `action_repeat` = 2 over the
+     100 Hz rate loop.)
   9. An agile multirotor profile (thrust-to-weight around 5–10, as data with open
      sources): the Iris (1.9) is enough to start, not to race.
-  10. No position loop: the velocity loop holds vertical speed, not altitude (the
-      Iris climbs ~0.6 m during a 10 m/s cruise). The baseline of phase 10 may need
-      one to hold a point or follow a line.
+  10. No position loop in the autopilot: the velocity loop holds vertical speed,
+      not altitude (the Iris climbs ~0.6 m during a 10 m/s cruise). The phase 10
+      baseline closes it outside, by pure pursuit of its path; a vehicle asked to
+      hold a point still needs one.
   11. The attitude loop treats the whole rotation vector with per-axis gains; PX4
       gives the tilt priority over yaw ("reduced attitude", `MC_YAW_WEIGHT`). Not
       needed so far (tilt recovers in ~0.6 s with heading errors present).
@@ -1996,15 +2189,15 @@ Phase 6c (Kalman filter):
       and not rescheduled with speed. Tested from 18 to 30 m/s.
   20. The course loop uses the airspeed in its gains (Beard & McLain use the ground
       speed): equal in still air, different in a strong wind.
-  21. Speed (one core, the first course with its referee): the batch engine at
-      1 024 drones does 43 764 drone-steps/s on the author's computer (~440× real
-      time; ~28 000 in Claude's workspace, the gain flat from ~1 000 drones there);
-      the reference 1 031 steps/s there (10.3× real time), so the batch is 42
-      times the reference. Swift trained at over 700×. Next gains, in
-      order: loose end 29 (+40 %, measured in Claude's workspace; ~610× expected on
-      the author's computer, not measured),
-      then the dynamics' many small array operations; compiled code (Numba) or a
-      GPU only if the training of phases 10–11 shows the need.
+  21. Speed (one core, the first course with its referee): before phase 10 the
+      batch engine at 1 024 drones did 43 764 drone-steps/s on the author's
+      computer (~440× real time), 42 times the reference (1 031 steps/s, 10.3×).
+      Loose end 29 added ~45 % (Claude's workspace; not yet measured on the
+      author's computer). The environment with the rate pilot does ~47 800
+      environment steps/s at 1 024 drones in Claude's workspace (two physics steps
+      each, ~960× real time). Next gains: the dynamics' many small array
+      operations; compiled code (Numba) or a GPU only if phase 11's training shows
+      the need.
   22. Stochastic turbulence (Dryden/von Kármán) is not modelled; indoors it only
       matters as the drone's own wash off walls and floor, which is beyond this
       model.
@@ -2024,17 +2217,10 @@ Phase 6c (Kalman filter):
   27. The hitbox spheres hold the PX4 collision geometry, which is itself a coarse
       envelope (a 0.47 x 0.47 x 0.11 m box for arms, body and legs). A real drone's
       shape, measured, comes with its profile (phase 14).
-  28. The demonstration guidance (straight at each gate centre) only works slowly
-      (3 m/s; it hits gate 2 at 3.5 and 4 m/s). The classical baseline of phase 10
-      must plan through the gates (look ahead to the next one, a position loop:
-      loose end 10).
-  29. 60 % of a batch step is the collision checks, most of it NumPy's reductions
-      over the last axis of small arrays in the shapes' distances
-      (`_distance_from_overhangs`: `np.linalg.norm(..., axis=-1)`,
-      `np.max(..., axis=-1)`). Written out by hand they give the same numbers bit
-      for bit (100 000 random points) and the batch runs ~40 % faster (28 000 →
-      39 000 drone-steps/s at 1 024 drones). A change to `campo.indoor`, so to the
-      reference: do it as its own step, with the reference's tests as the check.
+  28. (Closed in phase 10: the baseline plans through the gates, looking ahead
+      along its path; the straight-at-each-centre guidance stays as an example.)
+  29. (Closed in phase 10, step 1: the overhang formula written out, the same
+      numbers bit for bit, the batch ~45 % faster.)
   30. A batch has one vehicle profile and one course. Phase 11 trains on randomised
       gates (a course per drone, or a batch per course) and phase 12 randomises the
       vehicle's parameters (per drone): the batch classes will need per-drone
@@ -2042,15 +2228,33 @@ Phase 6c (Kalman filter):
   31. The batch rounds of the swept check end with the slowest drone, so a rare
       near miss of a few micrometres (a few thousand rounds, loose end 26) holds up
       its whole batch for that step.
-  32. A drone reset without being put back to landed takes off the same way with
-      the gate guidance (it asks to climb at once); a policy that does not climb at
-      once would sit on the floor with its loops running. Whoever resets a drone
-      on the floor must set `landed` (as `GateGuidance.reset` does); the training
-      environment of phase 10 must do the same, or give the rate loop its own
-      landed state (the policy commands thrust and rates directly).
-- Next: phase 10 (training environment and classical baseline). Its step plan is
-  drawn up with the author at its start. New chat in the Project: "Seguimos con
-  Jineta, fase 10: entorno de entrenamiento".
+  32. (Closed in phase 10: `RatePilot` has a landed state, and the environment
+      puts a restarted drone back landed.)
+  33. Obstacles are not in the observation: on one fixed course a policy learns
+      where they are; on randomised courses (phase 11) or with obstacles moved, it
+      needs them (the nearest surfaces' signed distances, or the obstacles' shapes
+      relative to the drone).
+  34. The adapter to the learning library (Gymnasium's `Env` / `VectorEnv` or
+      Stable-Baselines3's `VecEnv`) comes at the start of phase 11 and must pass
+      Gymnasium's environment checker; `BoxSpace` becomes the library's `Box`.
+  35. The observation is in SI units, from ~0.1 to ~15: learning needs it scaled
+      (fixed scales, or running normalisation such as `VecNormalize`), phase 11.
+  36. The action envelope is the autopilot's (3.5 / 3.5 / 1.5 rad/s, thrust
+      10-90 %). A racing policy may need more (PX4's documentation suggests
+      720 deg/s for acro pilots); widening it changes what "beating the baseline"
+      means, so it is decided and recorded when it happens.
+  37. The baseline is a robust pure-pursuit follower, not the classical optimum;
+      a minimum-time trajectory through the gates with a tracking controller
+      would set a harder time to beat. The sweep's robustness test (four copies
+      at 2 %, 5 cm) is a choice, and the best lap is sensitive to it.
+  38. The reward weights (1 per metre, 1 per gate, 5 per crash) are untuned, and
+      the progress term pays a lap's length whatever its time: whether the
+      discount alone makes the policy fast enough, or a time penalty is needed, is
+      for phase 11 to find out.
+- Next: phase 11 (MVP: the Iris learns the first course with reinforcement
+  learning; the library is chosen at its start). Its step plan is drawn up with
+  the author at its start. New chat in the Project: "Seguimos con Jineta, fase 11:
+  la Iris aprende el circuito".
 
 ## 8. Working with Claude
 
