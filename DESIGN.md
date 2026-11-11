@@ -33,13 +33,13 @@ from a course file, a drone that takes off from the floor on its landing gear,
 collisions with its 13-sphere hitbox (checked between samples too since phase 9),
 and a referee that times a lap. The batch engine (phase 9) flies many drones of
 one profile on one course at once, each lap ending and restarting on its own,
-equal to the reference engine to rounding (~45 % faster since phase 10). The
+equal to the reference engine to rounding (a third faster since phase 10). The
 training environment is built (phase 10): n drones commanded by a policy through
 collective thrust and body rates (50 Hz) executed by the rate loop, an
 observation in body axes, a reward for progress, gates and crashes, episodes
 restarted on their own, with the shape of Gymnasium's interface and checked
-against the reference engine; ~48 000 environment steps/s at 1 024 drones in
-Claude's workspace (~960 times real time). The classical baseline (the velocity
+against the reference engine; ~32 500 environment steps/s at 1 024 drones on one
+core of the author's computer (~650 times real time). The classical baseline (the velocity
 autopilot following a planned path through the gates, its settings swept in the
 batch for the fastest robust lap) flies the first course in **6.77 s**: the time
 a policy has to beat. No policy has been trained yet (phase 11 next).
@@ -588,7 +588,7 @@ the rate pilot with a landed state (reference and batch), the action and the
 observation, the reward and the end of an episode, `CourseEnv` (n drones, each
 its own episode, checked against the reference engine), and the baseline, whose
 robust best lap of the first course, 6.77 s, is the time to beat. On the way the
-batch engine got ~45 % faster (loose end 29) and an unloading gear's hop stopped
+batch engine got a third faster (loose end 29) and an unloading gear's hop stopped
 counting as a take-off. Tests: 777, ruff clean.
 
 Plan agreed with the author at the start of the phase (each step: tests green,
@@ -609,7 +609,8 @@ at 50 Hz: each action is held for two steps of the physics and the rate loop
    referee, course and batch test unchanged. Speed (Claude's workspace, before
    and after alternated twice in one session): the batch at 1 024 drones from
    ~59 000-64 000 to ~86 000-88 000 drone-steps/s (+~45 %); the reference lap
-   unchanged within the noise (~1 500-1 600 steps/s both).
+   unchanged within the noise (~1 500-1 600 steps/s both). On the author's
+   computer (after the phase): 43 764 to 58 093 drone-steps/s (+33 %).
 2. ✅ **Rate pilot with a landed state** (loose end 32; `jinete.control.RatePilot`,
    `escuadron.control.BatchRatePilot`; `campo.collision.TAKEOFF_CLEARANCE`): the
    entry point of a policy (collective thrust and body rates through the rate
@@ -704,7 +705,9 @@ at 50 Hz: each action is held for two steps of the physics and the rate loop
    (64 drones, 10 s): every episode a crash after 0.84 s on average, return -5.0
    +- 0.5. Speed with random actions and restarts (Claude's workspace):
    ~210 drone-steps/s at n = 1, ~9 700 at 64, ~28 600 at 256, ~47 800 at 1 024
-   (each is two physics steps: ~960 times real time at 1 024 drones).
+   (each is two physics steps: ~960 times real time at 1 024 drones); on the
+   author's computer 32 475 at 1 024 (~650 times real time; table in the
+   decision log).
 6. ✅ **Classical baseline** (`picadero/baseline.py`: `BaselineSettings`,
    `GatePath`, `PathGuidance`, `BaselinePilot`, `baseline_flight`,
    `fly_baseline`, `sweep`; `examples/baseline_course.py`): the velocity
@@ -823,6 +826,28 @@ Phase 10 (training environment and classical baseline):
 - **Loose end 29 is done first** (decided with the author): the overhang formula
   written out gives the same numbers bit for bit and the batch ~45 % more speed,
   which phase 11's training will use.
+- **Speed on the author's computer after the phase** (2026-11-11, Windows,
+  Python 3.13, one core; `python -m examples.batch_course` and `python -m
+  examples.env_random`). Steps per second for all the drones together, times real
+  time in brackets; the batch engine flies the gate guidance with the whole
+  autopilot, the environment random actions through the rate pilot (each of its
+  steps is two physics steps, so 0.02 s of flight):
+
+  | drones | batch engine (phase 9 → 10) | environment (steps/s) |
+  |---|---|---|
+  | 1 | 241 → 272 (2.7×) | 166 (3.3×) |
+  | 16 | 3 665 → 3 778 (38×) | 2 373 (47×) |
+  | 64 | 11 813 → 14 290 (143×) | 7 992 (160×) |
+  | 256 | 28 048 → 36 548 (366×) | 20 452 (409×) |
+  | 1024 | 43 764 → 58 093 (581×) | 32 475 (650×) |
+
+  Loose end 29 gave +33 % at 1 024 drones there (+~45 % in Claude's workspace:
+  the collision checks are a larger share of the step on its machine). The
+  environment's physics steps (2 × 32 475 = 64 950 drone-steps/s) are a little
+  cheaper than the batch engine's, since the rate pilot skips the velocity and
+  attitude loops. ~650 times real time is close to Swift's 700. The laps flown
+  by `batch_course` are unchanged (8.81 s at 3 m/s; crashes at 3.5 and 4 m/s at
+  the same moments).
 - **Every step's tests were checked by breaking the code** (32 mistakes over the
   phase); seven survived a first version of the tests and each got its own test:
   the rate pilot's resets before and after the update and its threshold at
@@ -2189,15 +2214,12 @@ Phase 6c (Kalman filter):
       and not rescheduled with speed. Tested from 18 to 30 m/s.
   20. The course loop uses the airspeed in its gains (Beard & McLain use the ground
       speed): equal in still air, different in a strong wind.
-  21. Speed (one core, the first course with its referee): before phase 10 the
-      batch engine at 1 024 drones did 43 764 drone-steps/s on the author's
-      computer (~440× real time), 42 times the reference (1 031 steps/s, 10.3×).
-      Loose end 29 added ~45 % (Claude's workspace; not yet measured on the
-      author's computer). The environment with the rate pilot does ~47 800
-      environment steps/s at 1 024 drones in Claude's workspace (two physics steps
-      each, ~960× real time). Next gains: the dynamics' many small array
-      operations; compiled code (Numba) or a GPU only if phase 11's training shows
-      the need.
+  21. Speed (one core, the first course, author's computer, end of phase 10): the
+      batch engine at 1 024 drones does 58 093 drone-steps/s (~580× real time),
+      the environment 32 475 steps/s (~650×; table in the phase 10 decision log).
+      Swift trained at over 700×. Next gains: the dynamics' many small array
+      operations; several processes (one batch per core); compiled code (Numba)
+      or a GPU only if phase 11's training shows the need.
   22. Stochastic turbulence (Dryden/von Kármán) is not modelled; indoors it only
       matters as the drone's own wash off walls and floor, which is beyond this
       model.
@@ -2220,7 +2242,7 @@ Phase 6c (Kalman filter):
   28. (Closed in phase 10: the baseline plans through the gates, looking ahead
       along its path; the straight-at-each-centre guidance stays as an example.)
   29. (Closed in phase 10, step 1: the overhang formula written out, the same
-      numbers bit for bit, the batch ~45 % faster.)
+      numbers bit for bit, the batch a third faster on the author's computer.)
   30. A batch has one vehicle profile and one course. Phase 11 trains on randomised
       gates (a course per drone, or a batch per course) and phase 12 randomises the
       vehicle's parameters (per drone): the batch classes will need per-drone
