@@ -663,15 +663,44 @@ at 50 Hz: each action is held for two steps of the physics and the rate loop
    +- 0.5. Speed with random actions and restarts (Claude's workspace):
    ~210 drone-steps/s at n = 1, ~9 700 at 64, ~28 600 at 256, ~47 800 at 1 024
    (each is two physics steps: ~960 times real time at 1 024 drones).
-6. ⏳ **Classical baseline** (`picadero/baseline.py`): the velocity autopilot at
-   100 Hz through the gate centres, planned (loose ends 10 and 28): a path with
-   entry and exit points along each gate's heading, pursuit of a point ahead on
-   the path with a cross-track correction, the speed limited in turns by a lateral
-   acceleration. The batch engine tries many settings at once and keeps the
-   fastest lap that finishes: the time to beat. Tests: path geometry; it finishes
-   the first course; n = 1 against the reference engine (1e-9); the lap time as a
-   regression value; flown through the environment's actions it finishes too (the
-   action envelope allows a winning lap). An example with a figure.
+6. ✅ **Classical baseline** (`picadero/baseline.py`: `BaselineSettings`,
+   `GatePath`, `PathGuidance`, `BaselinePilot`, `baseline_flight`,
+   `fly_baseline`, `sweep`; `examples/baseline_course.py`): the velocity
+   autopilot at 100 Hz along a path through the gate centres (above the start,
+   then entry, centre and exit `approach` metres along each gate's heading),
+   followed by pure pursuit (the closest point searched a few segments ahead and
+   never going back; the command aims at the point `lookahead` metres further on,
+   which is the position loop of loose end 10 and the look-ahead of loose end 28)
+   at a planned speed (cruise on straights; through a corner of angle theta, cut
+   by an arc of radius lookahead / tan(theta / 2), at most sqrt(lateral_accel R);
+   braking towards it at most braking_accel); straight up first to 0.5 m. Every
+   setting is one value per drone, so `sweep` flies a grid of them at once (432
+   settings x 5 drones: each with four copies whose settings are changed by up to
+   +-2 %, seeded) and keeps the fastest lap that finishes robustly (every copy
+   finishes and none comes within 5 cm of a wall, an obstacle or a frame). The
+   first course: 135 of 432 settings finish, 54 robustly; the best (approach 2 m,
+   cruise 5 m/s, lateral 8 m/s^2, braking 5 m/s^2, lookahead 3 m) finishes in
+   **6.773 s, the time to beat** (straight at each centre: 8.81 s), top speed
+   4.6 m/s, 6.8 cm from the nearest frame or obstacle. Tests: the path by hand
+   (gate turned 30°, no turn at the centres), points along it and past its ends,
+   the closest point searched only a few segments ahead; the speed plan by hand
+   around a right-angle corner; straight up first, progress never going back
+   (also when the drone is pushed back); the best lap (regression 6.773 +- 0.02 s,
+   > 5 cm clear); the batch lap equal to the reference engine's (the same
+   guidance driving `Autopilot`: every state within 1e-9, the same lap time);
+   drones with different settings fly as alone; the baseline flown through the
+   environment's actions (its velocity and attitude loops at 50 Hz giving thrust
+   and rates inside the action envelope) finishes in 6.76 s, so the envelope
+   allows a winning lap; at 100 Hz its return is the progress gate by gate plus
+   four bonuses (1e-9), which also checks that the environment reads the target
+   gate before the step (step 5's surviving mistake); the sweep keeps the robust
+   setting and rejects 20 m/s^2 in the corners, and fails loudly when nothing
+   finishes. Checked by breaking the code (7 mistakes); progress allowed to go
+   back survived (the lap never pushes it back) and got its own test. Measured on
+   the way: the fastest setting without the robustness test (6.48 s) cleared a
+   frame by 6 mm and crashed in 7 of 33 copies changed by 2 %; the robust one
+   finished all 65 such copies and 64 of 65 changed by 5 %. The sweep takes ~30 s
+   in Claude's workspace.
 7. ⏳ **Close the phase**: this document and the README.
 
 ## 6. Decision log
