@@ -55,3 +55,84 @@ def normalize(q: np.ndarray) -> np.ndarray:
     w, x, y, z = q[..., 0], q[..., 1], q[..., 2], q[..., 3]
     norm = np.sqrt(w * w + x * x + y * y + z * z)
     return q / norm[..., None]
+
+
+def multiply(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Hamilton products a ⊗ b of stacks of quaternions (..., 4)."""
+    w1, x1, y1, z1 = a[..., 0], a[..., 1], a[..., 2], a[..., 3]
+    w2, x2, y2, z2 = b[..., 0], b[..., 1], b[..., 2], b[..., 3]
+    product = np.empty(np.broadcast_shapes(a.shape, b.shape))
+    product[..., 0] = w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2
+    product[..., 1] = w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2
+    product[..., 2] = w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2
+    product[..., 3] = w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2
+    return product
+
+
+def conjugate(q: np.ndarray) -> np.ndarray:
+    """Conjugates [w, -x, -y, -z] (..., 4): for unit quaternions, the inverse."""
+    result = -q
+    result[..., 0] = q[..., 0]
+    return result
+
+
+def to_rotation_vector(q: np.ndarray) -> np.ndarray:
+    """Rotation vectors angle * axis [rad], shape (..., 3), of unit quaternions
+    (..., 4), always the short way (angle in [0, pi]), as
+    `core.quaternion.to_rotation_vector`: q with w < 0 is flipped to -q first, and
+    below sin(angle / 2) = 1e-12 the vector is 2 * (x, y, z)."""
+    q = np.where(q[..., 0:1] < 0.0, -q, q)
+    vector = q[..., 1:4]
+    v0, v1, v2 = vector[..., 0], vector[..., 1], vector[..., 2]
+    sin_half = np.sqrt(v0 * v0 + v1 * v1 + v2 * v2)
+    small = sin_half < 1e-12
+    angle = 2.0 * np.arctan2(sin_half, q[..., 0])
+    divisor = np.where(small, 1.0, sin_half)  # no division by ~0 where unused
+    return np.where(
+        small[..., None],
+        2.0 * vector,
+        angle[..., None] * vector / divisor[..., None],
+    )
+
+
+def from_matrix(matrix: np.ndarray) -> np.ndarray:
+    """Unit quaternions (w >= 0), shape (..., 4), of rotation matrices (..., 3, 3)
+    (body -> NED), as `core.quaternion.from_matrix` (Shepperd's method).
+
+    The reference picks one of four formulas by an `if` on the matrix; here all
+    four are computed for every matrix and each one keeps the formula its
+    condition picks (the others may divide by zero or take the root of a negative
+    number: those results are thrown away).
+    """
+    r = matrix
+    r00, r01, r02 = r[..., 0, 0], r[..., 0, 1], r[..., 0, 2]
+    r10, r11, r12 = r[..., 1, 0], r[..., 1, 1], r[..., 1, 2]
+    r20, r21, r22 = r[..., 2, 0], r[..., 2, 1], r[..., 2, 2]
+    trace = r00 + r11 + r22
+    use_w = trace > 0.0
+    use_x = ~use_w & (r00 > r11) & (r00 > r22)
+    use_y = ~use_w & ~use_x & (r11 > r22)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        s = 2.0 * np.sqrt(1.0 + trace)  # s = 4w
+        from_w = np.stack(
+            [s / 4, (r21 - r12) / s, (r02 - r20) / s, (r10 - r01) / s], -1
+        )
+        s = 2.0 * np.sqrt(1.0 + r00 - r11 - r22)  # s = 4x
+        from_x = np.stack(
+            [(r21 - r12) / s, s / 4, (r01 + r10) / s, (r02 + r20) / s], -1
+        )
+        s = 2.0 * np.sqrt(1.0 + r11 - r00 - r22)  # s = 4y
+        from_y = np.stack(
+            [(r02 - r20) / s, (r01 + r10) / s, s / 4, (r12 + r21) / s], -1
+        )
+        s = 2.0 * np.sqrt(1.0 + r22 - r00 - r11)  # s = 4z
+        from_z = np.stack(
+            [(r10 - r01) / s, (r02 + r20) / s, (r12 + r21) / s, s / 4], -1
+        )
+    q = np.where(
+        use_w[..., None],
+        from_w,
+        np.where(use_x[..., None], from_x, np.where(use_y[..., None], from_y, from_z)),
+    )
+    q = normalize(q)
+    return np.where(q[..., 0:1] < 0.0, -q, q)

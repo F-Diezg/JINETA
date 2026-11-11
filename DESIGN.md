@@ -453,10 +453,22 @@ riders moving together).
    reference flight (measured 1.6e-14, up to 29 m/s and 4 rad/s); the exact
    discrete first order of the P-only loop on each axis; a drone alone or among
    1000 bit for bit; reset of some drones (indices, mask) or all.
-5. **Batch attitude and velocity loops, landed state and land detection**: the
-   whole `Autopilot` for N drones. Tests: against the reference loops; the lap of
-   the first course flown by N drones in the batch, each within 1e-9 of the
-   reference lap.
+5. ✅ **Batch attitude and velocity loops, landed state and land detection**
+   (`BatchAttitudeController`, `BatchVelocityController`, `BatchAutopilot`;
+   quaternion product, conjugate, rotation vector and `from_matrix` on stacks): the
+   whole `Autopilot` for N drones. Tests: the quaternion functions against the
+   reference on random attitudes, both signs of w, tiny rotations, half turns and
+   half turns tilted 1e-6 (every branch of Shepperd's method); the attitude loop
+   (clipping included) and 200 updates of the velocity loop for 40 drones (tilt,
+   thrust and integral limits reached) equal to the reference's; four drones of one
+   batch standing on the floor wait, ask to climb too slowly, take off at different
+   moments, climb, turn, descend and land: each within 1e-9 of its reference flight
+   (measured 4.8e-14) and landed at the same steps; a drone alone or in the batch
+   bit for bit; drones that stay landed keep their loops at zero, a drone declared
+   landed in the air takes off from clean loops, reset of some drones keeps
+   `landed`; the lap of the first course flown by three drones of a batch with the
+   reference's gate order: each within 1e-9 of the reference lap to its last step
+   (measured 3.9e-14), the three identical bit for bit.
 6. **Collisions between samples in the reference** (loose end 26): each sphere
    checked along its move between two samples, not only at the samples. Tests: the
    grazes that were missed are found; contact moments on flat faces still exact;
@@ -558,6 +570,31 @@ Phase 9 (fast batch engine):
   thrust times the moment constant, 0.06 m), so 496 of 500 wrenches were clipped
   and the free case was hardly tested; with ~0.3 N·m, 320 are clipped, and the test
   now checks that both cases occur.
+- **An `if` per drone becomes a mask** (step 5): the reference autopilot returns
+  early for a landed vehicle; the batch runs every loop for every drone, then puts
+  the integrators of the drones that stay on the ground back to zero and stops
+  their motors, which leaves them where the early return leaves the reference.
+  Branching formulas (Shepperd's method, the small-angle rotation vector, the
+  horizontal thrust limit) compute every branch for every drone and keep the one
+  each condition picks with `np.where`; the branches thrown away may divide by zero,
+  so they run inside `np.errstate` with those warnings off.
+- **The first course is flown in the batch with the reference's gate order**: the
+  referee comes to the batch in step 7, so the test records which gate the
+  reference referee gave the guidance at every step. The lap is closed loop
+  (guidance, cascade, landed start, contact), so it checks the whole autopilot, not
+  only the dynamics.
+- **The step 5 tests were checked by breaking the code** (18 mistakes). Six
+  survived the first version of the tests, and four of them were real gaps: a
+  Shepperd branch chosen on half its condition (exact half turns never exercise it,
+  and half turns tilted 1e-8 give diagonal terms equal to the last bit; tilted 1e-6
+  they differ by ~2e-12 and only the right formula is accurate); the take-off
+  threshold (no command asked to climb slower than 0.2 m/s); the reset after the
+  loops of the drones that stay landed (only visible in their integrators after the
+  call); and the reset before them (only visible in a drone declared landed in the
+  air with charged integrators). A test was added for each. Two mutants are
+  equivalent, not gaps: below sin(angle/2) = 1e-12 both formulas of the rotation
+  vector agree to rounding, and "a flying drone lands" needs no `flying` in the
+  mask because the drones on the ground are landed already.
 - **First speed of the batch dynamics** (step 3, Claude's workspace; Iris forces,
   floor contact, RK4 and renormalisation, no control or collisions): ~300
   drone-steps/s at N = 1 (slower than the reference: every line is an array
@@ -1567,8 +1604,8 @@ Phase 6c (Kalman filter):
   28. The demonstration guidance (straight at each gate centre) only works slowly
       (3 m/s; it hits gate 2 at 4 m/s). The classical baseline of phase 10 must plan
       through the gates (look ahead to the next one, a position loop: loose end 10).
-- Next: phase 9 (fast batch engine), step 5 (batch attitude and velocity loops,
-  landed state, the first course flown in the batch); the plan is in section 5.
+- Next: phase 9 (fast batch engine), step 6 (collisions between samples in the
+  reference, loose end 26); the plan is in section 5.
 
 ## 8. Working with Claude
 
