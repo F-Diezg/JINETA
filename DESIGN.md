@@ -634,12 +634,35 @@ at 50 Hz: each action is held for two steps of the physics and the rate loop
    step get nothing; many drones equal to one by one; bad weights rejected.
    Checked by breaking the code (4 mistakes); a crash penalty not masked for the
    drones already ended survived the first tests and got its own.
-5. ⏳ **The environment** (`picadero/env.py`): n drones at once, each its own
-   episode, restarted on its own when it ends (its last observation returned
-   apart); observations float32, physics float64. Tests: shapes and types; with
-   n = 1 the same actions fly the reference engine's flight (1e-9); a drone alone
-   or in a batch; resets per drone; seeds. Speed measured; an example with random
-   actions.
+5. ✅ **The environment** (`picadero/env.py`: `CourseEnv`;
+   `examples/env_random.py`): n drones of one profile on one course, each its own
+   episode (one lap from standing on the floor, pilot landed), `reset(seed)` and
+   `step(action)` with Gymnasium's shape; the policy acts every `action_repeat`
+   = 2 physics steps (50 Hz), the reward of an environment step is the sum over
+   its physics steps; a drone whose episode ends is restarted in the same step
+   (same-step autoreset: its last observation, status, lap time, return and
+   length are in `info`); observations float32, rewards float64. Tests: the reset
+   observation; one row per drone; least thrust stands on the floor for the whole
+   time limit and is truncated, not a crash, with no reward; three scripted
+   episodes against the reference engine (`Multirotor`, `RatePilot`, the course's
+   referee, the reward recomputed from its states): every state within 1e-9, the
+   same rewards, the same crash and final observation; a drone alone or among
+   four (with restarts inside the batch) bit for bit; a crashed drone restarts
+   standing landed, flies its next episode as a fresh environment's first bit for
+   bit and its neighbour is not disturbed; a time limit of 0.5 s truncates at the
+   25th step; seeds repeat; `action_repeat` = 1 with each action twice is the
+   same flight and the same reward; the previous action in the observation,
+   clipped; bad input rejected. Checked by breaking the code (6 mistakes): the
+   reward of the last physics step only and the previous action not cleared on a
+   restart failed; the pilot not set back to landed survived (the scripts took off
+   at once) and got its own test; the loop not reset and the crash not masked are
+   equivalent (a landed pilot resets its loop; the reward masks by itself); the
+   target gate read after the step survived because no script crosses a gate: the
+   lap flown through the environment in step 6 checks it. Random actions
+   (64 drones, 10 s): every episode a crash after 0.84 s on average, return -5.0
+   +- 0.5. Speed with random actions and restarts (Claude's workspace):
+   ~210 drone-steps/s at n = 1, ~9 700 at 64, ~28 600 at 256, ~47 800 at 1 024
+   (each is two physics steps: ~960 times real time at 1 024 drones).
 6. ⏳ **Classical baseline** (`picadero/baseline.py`): the velocity autopilot at
    100 Hz through the gate centres, planned (loose ends 10 and 28): a path with
    entry and exit points along each gate's heading, pursuit of a point ahead on
