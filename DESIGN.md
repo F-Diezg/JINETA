@@ -142,8 +142,11 @@ code should be clear and every concept explained before it is used.
 - **Collisions:** a vehicle's collision shape is its `Hitbox` (spheres in body
   axes, profile data like the rotors); walls, ceiling and obstacles are checked
   with it, the floor with the landing gear. `CollisionMonitor` is a `stop` for
-  `simulation.run`; it reports the first contact (`Collision`: kind "room",
-  "obstacle", "gate" or "floor", index, interpolated time and position).
+  `simulation.run`; it checks every sample and, for walls, obstacles and gates,
+  the straight move of each sphere between two samples (conservative advancement,
+  a contact within `SWEEP_TOLERANCE` = 1 µm); it reports the first contact
+  (`Collision`: kind "room", "obstacle", "gate" or "floor", index, time and
+  position inside the step).
 - **Gates** stand upright and are crossed along their heading `yaw` (like a box's
   yaw). Their own axes: n along the heading, u to the right, v down. A gate is
   crossed when the centre of mass goes from n < 0 to n >= 0 between two samples and
@@ -469,10 +472,19 @@ riders moving together).
    `landed`; the lap of the first course flown by three drones of a batch with the
    reference's gate order: each within 1e-9 of the reference lap to its last step
    (measured 3.9e-14), the three identical bit for bit.
-6. **Collisions between samples in the reference** (loose end 26): each sphere
-   checked along its move between two samples, not only at the samples. Tests: the
-   grazes that were missed are found; contact moments on flat faces still exact;
-   the cost measured.
+6. ✅ **Collisions between samples in the reference** (loose end 26, closed;
+   `CollisionMonitor` swept check, `SWEEP_TOLERANCE`): each sphere checked along
+   its straight move between two samples by conservative advancement, not only at
+   the samples. Tests: the thin wall the samples jump at 80 m/s is found at every
+   phase, at the exact moment; grazes of a pillar at 20 m/s from 2 µm deep to past
+   the deepest the samples miss, at 17 phases, all found within 2e-5 s of the
+   first touch; passing 10 µm or 1 mm away is not a contact, within 1 µm is; a
+   graze between samples beats a contact at the sample in the same step; the move
+   is the chord (a sphere turned 90° in one step touches a post the chord crosses,
+   at the exact fraction); far from everything nothing is advanced; the Iris's 13
+   spheres' grazes are found. Every earlier collision, gate, referee and course
+   test still passes unchanged (the lap of the first course: same states, same lap
+   time, no advancement run).
 7. **Batch collisions, gates and referee**: status per drone ("flying",
    "finished", "crashed", "timeout"), lap time, passes; a drone whose lap ended is
    frozen. Tests: the same events (kind, index, moment) as the reference monitor
@@ -486,6 +498,41 @@ riders moving together).
 ## 6. Decision log
 
 Phase 9 (fast batch engine):
+- **Loose end 26 closed by conservative advancement** (step 6). Of the two ways
+  in the plan, sampling faster only shrinks the gap (a graze missed is ~ s²/8ρ:
+  four times smaller at twice the rate, for twice the cost), while checking the
+  move between samples closes it for straight moves at almost no cost. Each sphere
+  moves in a straight line from its centre at one sample to its centre at the
+  next; a signed distance never changes faster than the point moves, so a sphere
+  with gap m can move m without touching, and the move is advanced by the smallest
+  m_i / |move_i| over the spheres until a sphere comes within 1 µm (a contact) or
+  the next sample is reached. Skipped when the margins at both samples add up to
+  more than the longest move (then nothing can touch in between): in the lap of
+  the first course the advancement never runs, and the lap costs the same.
+- **Contacts with walls, obstacles and gates are timed by the advancement too**,
+  not only grazes: when a shape is touched at a sample, the advancement finds where
+  a sphere comes within 1 µm and the last bit is linear interpolation of the gap.
+  Exact on a flat face approached in a straight line (every earlier exact-moment
+  test still passes at 1e-9); on a pillar passed at a slant the old interpolation
+  between samples was up to 3.3 ms late at 20 m/s (measured), now within 1.2e-5 s.
+  Advancing to the surface exactly (tolerance 0) was tried and rejected: a 45°
+  approach then stops a little short (5.5e-7 s early on the existing test), and a
+  pass that only brushes a shape never ends. The floor keeps its interpolation:
+  for a plane and straight moves it is exact, and nothing can touch it between
+  samples.
+- **1 µm (`SWEEP_TOLERANCE`) counts as touching**: below that the advancement's
+  steps (gap / move) shrink without end on a shape the sphere only brushes. Every
+  step advances at least 1 µm / longest move, so it always ends. Physically 1 µm is
+  nothing next to the hitbox's own approximation (centimetres).
+- **The move is the chord**, not the arc: a sphere off the centre of mass follows
+  an arc as the vehicle turns, ~ r (ω dt)²/8 off the chord (0.04 mm for a rotor at
+  3.5 rad/s). A test turns a sphere 90° in one step to show it.
+- **The step 6 tests were checked by breaking the code** (10 mistakes: never
+  sweeping, a prefilter twice too strict, steps twice too long, no last-bit
+  interpolation, gaps without the radii, sweeps ignored, a zero move, a tolerance
+  of 1 cm, a tolerance of 0). The tolerance of 0 survived the first version (it
+  only changes when brushing contacts end); a test of a pass within the tolerance
+  was added.
 - **The whole cascade goes into the batch engine** (decided with the author). It
   adds no realism (the physics is the same), but it pays twice: the classical
   baseline of phase 10 can be flown on many courses at once (phase 11 compares the
@@ -1591,21 +1638,19 @@ Phase 6c (Kalman filter):
   25. The floor is judged by the landing gear only: a drone banked hard or upside
       down close to the floor touches it with a rotor first, and the crash is seen
       only when a foot (or its centre of mass) gets there.
-  26. Collisions are checked at the samples. For the Iris's 13 spheres at 100 Hz a
-      thin wall head on needs 58 m/s to be jumped (its top speed is 20.7 m/s), but
-      a graze up to 3.1 cm deep at 20 m/s (7 mm at 10 m/s) can go unseen. A policy
-      trained to fly fast could learn to slip past pillars through that gap. Before
-      training (phase 10) check the segment between samples (conservative
-      advancement: a distance never changes faster than the point moves) or sample
-      faster; a small fast profile needs it anyway.
+  26. (Closed in phase 9, step 6: the swept check.) What is left: the move
+      between samples is a straight line, so a graze shallower than the gap between
+      the true curved path and its chord (~ a dt²/8, 0.25 mm at 20 m/s² and 100 Hz)
+      can still be missed, and a near miss within ~10 µm can take the advancement
+      a few thousand iterations (measured: ~2 000 at 2 µm, ~100 at 1 mm).
   27. The hitbox spheres hold the PX4 collision geometry, which is itself a coarse
       envelope (a 0.47 x 0.47 x 0.11 m box for arms, body and legs). A real drone's
       shape, measured, comes with its profile (phase 14).
   28. The demonstration guidance (straight at each gate centre) only works slowly
       (3 m/s; it hits gate 2 at 4 m/s). The classical baseline of phase 10 must plan
       through the gates (look ahead to the next one, a position loop: loose end 10).
-- Next: phase 9 (fast batch engine), step 6 (collisions between samples in the
-  reference, loose end 26); the plan is in section 5.
+- Next: phase 9 (fast batch engine), step 7 (batch collisions, gates and
+  referee); the plan is in section 5.
 
 ## 8. Working with Claude
 

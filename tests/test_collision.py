@@ -2,10 +2,11 @@
 obstacles, its landing gear against the floor once it has taken off.
 
 Where the motion is known in closed form the moment of contact is checked exactly:
-flying straight at a flat face the margin falls linearly, so the interpolated
-moment is exact; in free fall onto the floor it is quadratic, and the interpolation
-error is below g dt^2 / (8 v). The tunnelling limit (a contact missed between two
-samples) is measured against its formulas on straight sampled paths.
+flying straight at a flat face the gap falls linearly, so the moment is exact; in
+free fall onto the floor it is quadratic, and the interpolation error is below
+g dt^2 / (8 v). What the samples alone miss (a thin wall jumped, a graze between
+two samples) is measured against its formulas on straight sampled paths, and then
+the swept check is shown to find every one of those contacts.
 
 Most tests use the Iris's bounding sphere (one sphere at the centre of mass, the
 same reach every way), so the expected moments are simple; the last section flies
@@ -15,7 +16,8 @@ the Iris's own 13 spheres, whose reach depends on the attitude.
 import numpy as np
 import pytest
 
-from jineta.campo.collision import CollisionMonitor
+from jineta.campo import collision
+from jineta.campo.collision import SWEEP_TOLERANCE, CollisionMonitor
 from jineta.campo.indoor import Box, Cylinder, Room
 from jineta.core import quaternion
 from jineta.core.environment import GRAVITY
@@ -256,7 +258,7 @@ def test_monitor_rejects_invalid_floor_points():
         CollisionMonitor(ROOM, (), [[0.0, 0.0, 0.0]], [0.1], [0.0, 0.0, 0.1])
 
 
-# ---- the tunnelling limit -----------------------------------------------------------
+# ---- what the samples alone miss ---------------------------------------------------
 
 
 def sampled_path_misses(monitor, check, start, direction, step, n):
@@ -311,6 +313,143 @@ def test_grazing_a_pillar_misses_at_most_the_depth_of_the_chord():
                 worst = max(worst, depth)
     assert worst <= exact + 1e-12
     assert worst > 0.95 * exact
+
+
+# ---- the swept check: contacts between the samples -----------------------------------
+
+
+def test_a_thin_wall_jumped_between_samples_is_found_at_the_exact_moment():
+    """The slab the samples jump at 1.01 (2R + w) per step (80 m/s): the swept
+    check finds it at every phase of the samples, at the exact moment (a flat face
+    approached head on)."""
+    w = 0.02
+    slab = Box(center=[5.0, 4.0, -1.5], size=[w, 8.0, 3.0])
+    speed = 1.01 * (2.0 * R + w) / DT
+    for phase in np.linspace(0.0, 1.0, 40, endpoint=False):
+        monitor = iris_monitor([slab])
+        x0 = 5.0 - w / 2 - R - 3.0 * speed * DT + phase * speed * DT
+        run(
+            straight_line,
+            state_at([x0, 4.0, -1.5], [speed, 0.0, 0.0]),
+            DT,
+            1.0,
+            monitor,
+        )
+        assert (monitor.collision.kind, monitor.collision.index) == ("obstacle", 0)
+        exact = (5.0 - w / 2 - R - x0) / speed
+        assert monitor.collision.time == pytest.approx(exact, abs=1e-9)
+
+
+def first_touch_of_a_pillar(rho, offset, x0, speed):
+    """Moment a centre moving along x at `offset` from a pillar's axis (x = 5)
+    comes within rho of it, from x0 at t = 0."""
+    return (5.0 - np.sqrt(rho**2 - offset**2) - x0) / speed
+
+
+def test_grazes_between_samples_are_found_near_their_first_touch():
+    """Passing the 5 cm pillar at 20 m/s, from 2 micrometres deep to well past the
+    deepest graze the samples can miss, at 17 phases of the samples: every graze is
+    found, as the obstacle, within 2e-5 s of the first touch (0.4 mm along the
+    path). Grazes found between samples are reported where a sphere comes within
+    SWEEP_TOLERANCE, a little early; contacts at a sample get their last bit
+    interpolated."""
+    pillar = Cylinder(base=[5.0, 4.0, 0.0], radius=0.05, height=3.0)
+    rho = R + 0.05
+    speed = 20.0
+    step = speed * DT
+    deepest_missed = rho - np.sqrt(rho**2 - step**2 / 4.0)  # 1.17 cm
+    for depth in [2e-6, 1e-5, 1e-4, 1e-3, deepest_missed, 1.5 * deepest_missed, 0.1]:
+        for phase in np.linspace(0.0, 1.0, 17, endpoint=False):
+            monitor = iris_monitor([pillar])
+            x0 = 3.0 + phase * step
+            start = state_at([x0, 4.0 + rho - depth, -1.5], [speed, 0.0, 0.0])
+            run(straight_line, start, DT, 0.2, stop=monitor)
+            assert (monitor.collision.kind, monitor.collision.index) == ("obstacle", 0)
+            first = first_touch_of_a_pillar(rho, rho - depth, x0, speed)
+            assert monitor.collision.time == pytest.approx(first, abs=2e-5)
+
+
+def test_passing_within_the_sweep_tolerance_is_a_contact():
+    """Coming within SWEEP_TOLERANCE (1 micrometre) counts as touching: it is what
+    ends the advancement at a shape it only brushes, where the steps m / |move|
+    would otherwise shrink without end."""
+    pillar = Cylinder(base=[5.0, 4.0, 0.0], radius=0.05, height=3.0)
+    monitor = iris_monitor([pillar])
+    start = [3.07, 4.0 + R + 0.05 + 0.5 * SWEEP_TOLERANCE, -1.5]
+    run(straight_line, state_at(start, [20.0, 0.0, 0.0]), DT, 0.2, stop=monitor)
+    assert (monitor.collision.kind, monitor.collision.index) == ("obstacle", 0)
+
+
+@pytest.mark.parametrize("clearance", [10 * SWEEP_TOLERANCE, 1e-3])
+def test_passing_close_is_not_a_contact(clearance):
+    pillar = Cylinder(base=[5.0, 4.0, 0.0], radius=0.05, height=3.0)
+    for phase in np.linspace(0.0, 1.0, 9, endpoint=False):
+        monitor = iris_monitor([pillar])
+        start = [3.0 + phase * 0.2, 4.0 + R + 0.05 + clearance, -1.5]
+        run(straight_line, state_at(start, [20.0, 0.0, 0.0]), DT, 0.2, stop=monitor)
+        assert monitor.collision is None
+
+
+def test_a_contact_between_samples_beats_one_at_the_sample():
+    """In one step (80 m/s) the sphere grazes a pillar early and ends inside the
+    north wall: the pillar, touched first, is reported."""
+    pillar = Cylinder(base=[9.2, 4.4, 0.0], radius=0.05, height=3.0)
+    monitor = iris_monitor([pillar])
+    speed = 80.0
+    x0 = 8.9 - 2 * speed * DT  # samples at x = 8.9 (free) and 9.7 (in the wall)
+    run(straight_line, state_at([x0, 4.0, -1.5], [speed, 0.0, 0.0]), DT, 1.0, monitor)
+    assert (monitor.collision.kind, monitor.collision.index) == ("obstacle", 0)
+    first = first_touch_of_a_pillar(R + 0.05, 0.4, x0, speed) + (9.2 - 5.0) / speed
+    assert monitor.collision.time == pytest.approx(first, abs=2e-5)
+    assert monitor.collision.time < 2 * DT + (10.0 - R - 8.9) / speed  # the wall
+
+
+def test_the_move_between_samples_is_the_straight_line():
+    """A sphere 1 m ahead of the centre of mass, turned 90 degrees in one step
+    (far more than any vehicle turns in 10 ms, to make the shape of the move
+    visible): it goes from (1, 0) to (0, 1) along the chord, which passes 0.71 m
+    from the centre and touches a post there, which the samples and the true arc
+    (1 m out) do not. The contact is where the chord comes within 0.15 m of the
+    post: s = 0.5 - 0.15 / sqrt(2) of the step."""
+    post = Cylinder(base=[5.5, 4.5, 0.0], radius=0.05, height=3.0)
+    monitor = CollisionMonitor(
+        ROOM, [post], [[1.0, 0.0, 0.0]], [0.1], IRIS_LANDING_GEAR.points
+    )
+    heading_north = state_at([5.0, 4.0, -1.5])
+    heading_east = state_at(
+        [5.0, 4.0, -1.5], attitude=quaternion.from_euler(0.0, 0.0, np.pi / 2)
+    )
+    assert not monitor(0.0, heading_north)
+    assert np.all(monitor.margins(heading_east)[:2] > 0.0)  # free at the sample
+    assert monitor(DT, heading_east)
+    assert (monitor.collision.kind, monitor.collision.index) == ("obstacle", 0)
+    s = 0.5 - 0.15 / np.sqrt(2.0)
+    assert monitor.collision.time == pytest.approx(s * DT, abs=1e-12)
+
+
+def test_far_from_everything_nothing_is_advanced(monkeypatch):
+    """Across the middle of the room at 10 m/s the margins at two samples add up to
+    more than the move, so the swept check never runs its advancement."""
+    advances = []
+    advance = CollisionMonitor._advance
+
+    def counting_advance(self, *args):
+        advances.append(1)
+        return advance(self, *args)
+
+    monkeypatch.setattr(collision.CollisionMonitor, "_advance", counting_advance)
+    monitor = iris_monitor([Cylinder(base=[5.0, 1.0, 0.0], radius=0.05, height=3.0)])
+    start = state_at([2.0, 4.0, -1.5], [10.0, 0.0, 0.0])
+    run(straight_line, start, DT, 0.5, stop=monitor)
+    assert monitor.collision is None
+    assert advances == []
+    # passing 2 cm from the pillar it does run (and finds nothing)
+    monitor = iris_monitor(
+        [Cylinder(base=[5.0, 4.0 + R + 0.07, 0.0], radius=0.05, height=3.0)]
+    )
+    run(straight_line, start, DT, 0.5, stop=monitor)
+    assert monitor.collision is None
+    assert len(advances) > 0
 
 
 # ---- the Iris's own spheres ---------------------------------------------------------
@@ -403,3 +542,18 @@ def test_smaller_spheres_miss_deeper_grazes():
                 worst = max(worst, depth)
     assert worst <= bound + 1e-12
     assert worst > 0.0116  # deeper than anything the bounding sphere misses
+
+
+def test_the_iris_spheres_grazes_are_found():
+    """The 13 spheres passing the 5 cm pillar at 20 m/s, as deep as 1.5 times the
+    deepest graze the samples can miss (3.1 cm): every one is found."""
+    pillar = Cylinder(base=[5.0, 4.0, 0.0], radius=0.05, height=3.0)
+    side = IRIS_HITBOX.extent([0, -1, 0])
+    rho = np.hypot(0.128, 0.0025) + 0.05
+    bound = rho - np.sqrt(rho**2 - 0.2**2 / 4.0)
+    for depth in np.linspace(1e-4, 1.5 * bound, 7):
+        for phase in np.linspace(0.0, 1.0, 10, endpoint=False):
+            monitor = iris_monitor([pillar], hitbox=IRIS_HITBOX)
+            start = [3.0 + phase * 0.2, 4.0 + side + 0.05 - depth, -1.5]
+            run(straight_line, state_at(start, [20.0, 0.0, 0.0]), DT, 0.2, monitor)
+            assert (monitor.collision.kind, monitor.collision.index) == ("obstacle", 0)
