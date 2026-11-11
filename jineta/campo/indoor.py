@@ -71,12 +71,25 @@ def _distance_from_overhangs(q: np.ndarray) -> np.ndarray:
     """Signed distance from how far a point sticks out past each face (q, last axis).
 
     Valid for any shape that is the intersection of half-spaces at right angles to
-    each other (a box, a box open on some sides): outside, Pythagoras over the
-    overhangs that are positive; inside, the nearest face is the largest q.
+    each other (a box, a box open on some sides, a column seen as radial and
+    vertical overhangs): outside, Pythagoras over the overhangs that are positive;
+    inside, the nearest face is the largest q.
+
+    The two or three components are added and compared one by one, not with
+    `np.linalg.norm(..., axis=-1)` and `np.max(..., axis=-1)`: those reductions
+    give exactly the same numbers (they add the squares in the same order), but on
+    many small rows NumPy's set-up per call costs more than the arithmetic, and
+    this function is most of the time of a collision check.
     """
-    outside = np.linalg.norm(np.maximum(q, 0.0), axis=-1)
-    inside = np.minimum(np.max(q, axis=-1), 0.0)
-    return outside + inside
+    columns = [q[..., i] for i in range(q.shape[-1])]
+    positive = np.maximum(columns[0], 0.0)
+    squares = positive * positive
+    largest = columns[0]
+    for column in columns[1:]:
+        positive = np.maximum(column, 0.0)
+        squares = squares + positive * positive
+        largest = np.maximum(largest, column)
+    return np.sqrt(squares) + np.minimum(largest, 0.0)
 
 
 @dataclass(frozen=True)
@@ -142,10 +155,7 @@ class Cylinder:
         d = _points(points) - self.base
         radial = np.hypot(d[..., 0], d[..., 1]) - self.radius
         vertical = np.abs(d[..., 2] + self.height / 2.0) - self.height / 2.0
-        q = np.stack([radial, vertical], axis=-1)
-        outside = np.linalg.norm(np.maximum(q, 0.0), axis=-1)
-        inside = np.minimum(np.max(q, axis=-1), 0.0)
-        return _result(outside + inside)
+        return _result(_distance_from_overhangs(np.stack([radial, vertical], -1)))
 
 
 @dataclass(frozen=True)

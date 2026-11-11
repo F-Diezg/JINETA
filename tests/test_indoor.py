@@ -10,7 +10,7 @@ metre moved straight away from the surface (gradient of length 1).
 import numpy as np
 import pytest
 
-from jineta.campo.indoor import Box, Cylinder, Room
+from jineta.campo.indoor import Box, Cylinder, Room, _distance_from_overhangs
 
 # A box of 2 x 4 x 6 m centred at the origin: half sizes 1, 2, 3.
 BOX = Box(center=[0.0, 0.0, 0.0], size=[2.0, 4.0, 6.0])
@@ -263,3 +263,32 @@ def test_outside_a_convex_shape_the_gradient_has_length_one(name):
         assert np.linalg.norm(grad) == pytest.approx(1.0, abs=1e-6)
         checked += 1
     assert checked > 100
+
+
+# ---- the overhang formula written out (loose end 29) ------------------------------
+
+
+def _overhangs_with_reductions(q: np.ndarray) -> np.ndarray:
+    """The formula as it was written before phase 10, with NumPy's reductions."""
+    outside = np.linalg.norm(np.maximum(q, 0.0), axis=-1)
+    inside = np.minimum(np.max(q, axis=-1), 0.0)
+    return outside + inside
+
+
+@pytest.mark.parametrize("components", [2, 3])
+def test_overhangs_written_out_equal_the_reductions_bit_for_bit(components):
+    rng = np.random.default_rng(29)
+    # Overhangs over many orders of magnitude, both signs, and exact zeros.
+    q = rng.normal(size=(100_000, components)) * 10.0 ** rng.integers(
+        -8, 4, size=(100_000, components)
+    )
+    q[::7, 0] = 0.0
+    q[::11] = -np.abs(q[::11])  # whole rows inside
+    np.testing.assert_array_equal(
+        _distance_from_overhangs(q), _overhangs_with_reductions(q)
+    )
+    # One point at a time: a 0-d result, also equal.
+    for row in q[:200]:
+        new = _distance_from_overhangs(row)
+        assert np.ndim(new) == 0
+        assert new == _overhangs_with_reductions(row)

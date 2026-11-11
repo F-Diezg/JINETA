@@ -286,7 +286,7 @@ imported by the engine.
 | 7 | Project goal, repo reduced to the engine, new README and DESIGN | ✅ Done |
 | 8 | Indoor world: room, floor, gates, obstacles, collisions; course files | ✅ Done |
 | 9 | Fast batch engine (many drones at once), checked against the reference | ✅ Done |
-| 10 | Training environment (observation, action, reward) + classical baseline | ⏳ |
+| 10 | Training environment (observation, action, reward) + classical baseline | 🔄 In progress |
 | 11 | **MVP:** the Iris learns the course (reinforcement learning) | ⏳ |
 | 12 | Realism for the real drone: motor lag, ground effect, sensor noise, latency, randomised parameters | ⏳ |
 | 13 | 3D viewer of recorded flights | ⏳ |
@@ -544,6 +544,67 @@ riders moving together).
    reset; each lap's end is reported once; `fly_laps` restarts each drone on its
    own; inconsistent input rejected. Speed (table below).
 9. ✅ **Close the phase**: this document and the README.
+
+**Phase 10 — in progress.** The training environment and the classical baseline,
+in a new package `jineta/picadero/` (the riding school where horse and rider
+train).
+
+Plan agreed with the author at the start of the phase (each step: tests green,
+ruff clean, commit + push). Decided with the author: the environment has the
+shape of Gymnasium's interface (`reset(seed)`, `step(action)` returning
+observation, reward, terminated, truncated, info; spaces with limits and shape)
+without depending on the library, which cannot be installed in Claude's
+workspace; a thin adapter to the library chosen in phase 11 comes at its start
+and is checked there with Gymnasium's own environment checker. The policy acts
+at 50 Hz: each action is held for two steps of the physics and the rate loop
+(100 Hz) (loose end 8). Loose end 29 (+40 % for the batch) is the first step.
+1. ✅ **Speed: the overhang formula written out** (loose end 29,
+   `campo.indoor._distance_from_overhangs`, used by boxes, the room, columns and
+   gate frames): the two or three components added and compared one by one
+   instead of NumPy's reductions. Tests: equal to the old formula bit for bit on
+   100 000 random overhangs (2 and 3 components, 12 orders of magnitude, zeros,
+   points inside) and one point at a time; every geometry, collision, gate,
+   referee, course and batch test unchanged. Speed (Claude's workspace, before
+   and after alternated twice in one session): the batch at 1 024 drones from
+   ~59 000-64 000 to ~86 000-88 000 drone-steps/s (+~45 %); the reference lap
+   unchanged within the noise (~1 500-1 600 steps/s both).
+2. ⏳ **Rate pilot with a landed state** (loose end 32; `jinete.control.RatePilot`,
+   `escuadron.control.BatchRatePilot`): the entry point of a policy (collective
+   thrust and body rates through the rate loop), with the landed state of PX4:
+   while landed the rate integrators are held at zero; it takes off when the
+   commanded thrust exceeds the weight. Tests: standing on the floor with rate
+   commands charges nothing; take-off at the right step; in the air it is the
+   rate loop; the batch equal to the reference over flights (1e-9), a drone alone
+   or in a batch bit for bit, reset per drone.
+3. ⏳ **Action and observation** (`picadero/spaces.py`): the action is four numbers
+   in [-1, 1] mapped to collective thrust and body rates, by default inside the
+   autopilot's own envelope (thrust 10-90 % of the maximum, rates 3.5 / 3.5 /
+   1.5 rad/s), so the comparison with the baseline measures the pilot, not the
+   limits; the observation, in body axes: velocity, attitude matrix, body rates,
+   four points on the edge of the opening of each of the next two gates, and the
+   previous action. Tests against geometry by hand.
+4. ⏳ **Reward and end of an episode** (`picadero/reward.py`): progress towards
+   the target gate (measured against the gate targeted at the start of the step,
+   so crossing it gives no jump), a bonus per gate, a penalty for a crash;
+   terminated by a crash or the finish, truncated by the time limit. Tests: the
+   progress of a scripted lap adds up to the distances by hand, each bonus and the
+   penalty paid once.
+5. ⏳ **The environment** (`picadero/env.py`): n drones at once, each its own
+   episode, restarted on its own when it ends (its last observation returned
+   apart); observations float32, physics float64. Tests: shapes and types; with
+   n = 1 the same actions fly the reference engine's flight (1e-9); a drone alone
+   or in a batch; resets per drone; seeds. Speed measured; an example with random
+   actions.
+6. ⏳ **Classical baseline** (`picadero/baseline.py`): the velocity autopilot at
+   100 Hz through the gate centres, planned (loose ends 10 and 28): a path with
+   entry and exit points along each gate's heading, pursuit of a point ahead on
+   the path with a cross-track correction, the speed limited in turns by a lateral
+   acceleration. The batch engine tries many settings at once and keeps the
+   fastest lap that finishes: the time to beat. Tests: path geometry; it finishes
+   the first course; n = 1 against the reference engine (1e-9); the lap time as a
+   regression value; flown through the environment's actions it finishes too (the
+   action envelope allows a winning lap). An example with a figure.
+7. ⏳ **Close the phase**: this document and the README.
 
 ## 6. Decision log
 
