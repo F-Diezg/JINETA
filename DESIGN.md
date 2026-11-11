@@ -67,8 +67,8 @@ code should be clear and every concept explained before it is used.
   newline and fixes blank lines that are easy to lose when pasting code. In VS
   Code, "Files: Insert Final Newline" and format-on-save with the Ruff formatter
   do the same automatically.
-- The full test run, in one process, takes ~2.5 min (688 tests, in Claude's
-  workspace at the end of phase 9, about twice slower than the author's computer);
+- The full test run, in one process, takes ~1.2-2.5 min (688 tests, in Claude's
+  workspace at the end of phase 9, whose speed changes from session to session);
   the batch tests that fly the first course and compare it with the reference are
   the slowest (~5-11 s each). `pytest -n auto` divides that by the number of cores.
 - `scipy` is used for the trim (`scipy.optimize.root`) and in the Kalman tests
@@ -615,9 +615,9 @@ Phase 9 (fast batch engine):
   second, and times real time in brackets; the author's computer measured after
   the phase was closed (2026-11-11, Windows, Python 3.13):
 
-  | drones | Claude's workspace | author's computer |
+  | drones | Claude's workspace (2026-11-04) | author's computer |
   |---|---|---|
-  | reference engine | ~700 (~7×) | not measured since step 1 |
+  | reference engine | ~700 (~7×) | 1 031 (10.3×) |
   | 1 | ~200 (~2×) | 241 (2.4×) |
   | 16 | ~2 800 (~28×) | 3 665 (37×) |
   | 64 | ~7 900 (~79×) | 11 813 (118×) |
@@ -625,10 +625,14 @@ Phase 9 (fast batch engine):
   | 1024 | ~28 000 (~280×) | 43 764 (438×) |
   | 4096 | ~30 000 (~300×) | not measured |
 
-  The author's computer runs the batch ~1.5 times faster than Claude's workspace
-  (1.2 times at one drone), less than the ~2 times measured for the reference at
-  the end of phase 8. Not explained: two different computers and operating
-  systems, one run each; the speed-ups of later phases are judged on one computer.
+  On the author's computer the batch at 1 024 drones is 42 times the reference
+  (43 764 against 1 031), as in Claude's workspace (~40 times). Absolute numbers
+  from Claude's workspace are not comparable from one session to the next: on
+  2026-11-11, in another session, the same code gave 1 640-1 807 steps/s for the
+  reference and 53 839 drone-steps/s at 1 024 drones, about twice the numbers of
+  2026-11-04 (its machine changes between sessions). Ratios measured in one session
+  (batch against reference, before against after a change) hold; absolute speeds
+  are the author's computer's.
 
   About 40 times the reference from ~1 000 drones on; the gain flattens there, when
   every array operation is large enough that NumPy's fixed cost per call no longer
@@ -638,6 +642,13 @@ Phase 9 (fast batch engine):
   drones: the collision checks ~60 % (most of it NumPy's reductions over the last
   axis of small arrays, `np.linalg.norm(..., axis=-1)` and `np.max(..., axis=-1)`
   in the shapes' distances), the dynamics with RK4 ~35 %.
+- **Speeds are judged on the author's computer** (after the phase): Claude's
+  workspace runs on a different machine from one session to the next (the same
+  code was about twice as fast there on 2026-11-11 as on 2026-11-04), so only
+  ratios measured within one session of it count: batch against reference, before
+  against after a change. Absolute speeds and comparisons with Swift's 700× come
+  from `python -m examples.benchmark` and `python -m examples.batch_course` run by
+  the author.
 - **A further 40 % is measured but not taken** (step 8): writing the distance from
   overhangs (`campo.indoor._distance_from_overhangs`) without reductions, the two
   or three components added by hand, gives the same numbers bit for bit (checked on
@@ -674,7 +685,7 @@ Phase 9 (fast batch engine):
   3-vector that set-up is the whole cost. `core/vector.cross` writes the formula
   out (the same operations in the same order, so the same rounding): the lap of
   the first course gives the same states bit for bit and runs 1.7 times faster
-  (~390 → ~650 steps/s there; the author's computer is about twice as fast). The
+  (~390 → ~650 steps/s there; 1 031 on the author's computer afterwards). The
   same fixed cost per call is what the batch engine spreads over N drones.
 - **The benchmark keeps the fastest of several runs**: the slower ones were slowed
   down by the rest of the computer, not by the simulator.
@@ -1830,8 +1841,8 @@ Phase 6c (Kalman filter):
   21. Speed (one core, the first course with its referee): the batch engine at
       1 024 drones does 43 764 drone-steps/s on the author's computer (~440× real
       time; ~28 000 in Claude's workspace, the gain flat from ~1 000 drones there);
-      the reference ~700 steps/s in Claude's workspace (not measured on the
-      author's computer since step 1). Swift trained at over 700×. Next gains, in
+      the reference 1 031 steps/s there (10.3× real time), so the batch is 42
+      times the reference. Swift trained at over 700×. Next gains, in
       order: loose end 29 (+40 %, measured in Claude's workspace; ~610× expected on
       the author's computer, not measured),
       then the dynamics' many small array operations; compiled code (Numba) or a
