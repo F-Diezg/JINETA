@@ -505,9 +505,18 @@ riders moving together).
    crash 2 ms before a gate, and a crashed drone reset onto a lap it finishes; a
    drone on its own clock repeats the lap time of another; ended laps are not
    judged again.
-8. **Batch loop**: `step` and `reset` of chosen drones; speed against N measured
-   (table here). Tests: a drone reset in the middle of a run repeats its first lap
-   bit for bit; the others are not disturbed.
+8. ✅ **Batch loop** (`escuadron/simulation.py`: `BatchFlight`;
+   `examples/batch_course.py`: the gate guidance for n drones, `fly_laps`, and the
+   speed against N): `step` (controller, RK4 and renormalisation, referee; returns
+   the laps that ended in that step) and `reset` of chosen drones; each drone on its
+   own lap clock; a drone whose lap ended stays where it ended. Tests: four Iris
+   at 2, 2.5, 3 and 4 m/s in one batch fly the first course as the reference
+   engine flies it at each speed (states within 1e-9 at every step, the same end,
+   moment and passes; the 4 m/s one clips gate 2's frame, as measured in phase 8);
+   a drone that crashes and starts its next lap at once repeats its first lap bit
+   for bit, while the other drone flies exactly as in a batch where nobody is
+   reset; each lap's end is reported once; `fly_laps` restarts each drone on its
+   own; inconsistent input rejected. Speed (table below).
 9. **Close the phase**: this document and the README.
 
 ## 6. Decision log
@@ -573,6 +582,49 @@ Phase 9 (fast batch engine):
   replayed, 13 spheres, 3 obstacles, 4 gates): ~1 000 drone-checks/s at N = 1,
   ~28 000 at 64, ~45 000 at 1024, about half the speed of the dynamics with RK4
   (step 3): the collision check is a large share of a batch step.
+- **Speed of the batch engine, measured** (step 8, Claude's workspace, one core;
+  the Iris flying the first course with the gate guidance, the whole autopilot, the
+  floor contact and the referee with 13 spheres, 3 obstacles and 4 gates; drones
+  that end a lap start the next at once; `python -m examples.batch_course`):
+
+  | drones | drone-steps/s | x real time |
+  |---|---|---|
+  | reference engine | ~700 | ~7 |
+  | 1 | ~200 | ~2 |
+  | 16 | ~2 800 | ~28 |
+  | 64 | ~7 900 | ~79 |
+  | 256 | ~19 000 | ~190 |
+  | 1024 | ~28 000 | ~280 |
+  | 4096 | ~30 000 | ~300 |
+
+  About 40 times the reference from ~1 000 drones on; the gain flattens there, when
+  every array operation is large enough that NumPy's fixed cost per call no longer
+  matters. Below ~4 drones the batch is slower than the reference (every line is
+  an array operation). Swift trained at over 700 times real time; the author's
+  computer is about twice as fast as Claude's workspace (end of phase 8), which
+  would put the batch around 550 times, not measured. Where the time goes at 1024
+  drones: the collision checks ~60 % (most of it NumPy's reductions over the last
+  axis of small arrays, `np.linalg.norm(..., axis=-1)` and `np.max(..., axis=-1)`
+  in the shapes' distances), the dynamics with RK4 ~35 %.
+- **A further 40 % is measured but not taken** (step 8): writing the distance from
+  overhangs (`campo.indoor._distance_from_overhangs`) without reductions, the two
+  or three components added by hand, gives the same numbers bit for bit (checked on
+  100 000 random points) and takes the batch at 1024 drones from ~28 000 to
+  ~39 000 drone-steps/s. It changes the reference's geometry module, which the
+  plan did not include: it is the first item of the next speed work (loose end 29).
+- **The batch loop advances only the drones still flying**: every drone is
+  integrated (the arrays keep their shape), and the ended ones get their old state
+  and clock back. `step` returns the laps that ended in that step, so a caller can
+  restart exactly those; `reset` starts a drone's next lap (state, clock, referee),
+  and its controller's memory is the caller's to reset (`GateGuidance.reset` puts
+  the autopilot back to landed).
+- **The step 8 tests were checked by breaking the code** (7 mistakes). The
+  referee not reset with the lap made two tests loop for ever (the drone never
+  starts again): the loops in the tests and in `fly_laps` are bounded now, so such
+  a mistake fails instead of hanging. One mistake is equivalent with this guidance:
+  a drone reset without `landed` takes off the same way, because the guidance asks
+  it to climb from the first step (a landed drone asked to climb resets its loops
+  and takes off; a flying one with its loops just reset flies the same climb).
 - **The whole cascade goes into the batch engine** (decided with the author). It
   adds no realism (the physics is the same), but it pays twice: the classical
   baseline of phase 10 can be flown on many courses at once (phase 11 compares the
@@ -1689,8 +1741,8 @@ Phase 6c (Kalman filter):
   28. The demonstration guidance (straight at each gate centre) only works slowly
       (3 m/s; it hits gate 2 at 4 m/s). The classical baseline of phase 10 must plan
       through the gates (look ahead to the next one, a position loop: loose end 10).
-- Next: phase 9 (fast batch engine), step 8 (the batch loop, reset per drone,
-  speed against N); the plan is in section 5.
+- Next: phase 9 (fast batch engine), step 9 (close the phase); the plan is in
+  section 5.
 
 ## 8. Working with Claude
 
