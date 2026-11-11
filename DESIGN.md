@@ -34,9 +34,10 @@ collisions with its 13-sphere hitbox (checked between samples too since phase 9)
 and a referee that times a lap. The Iris flies the first course through the gate
 centres with its autopilot (8.81 s). The batch engine (phase 9) flies many drones
 of one profile on one course at once, each lap ending and restarting on its own,
-equal to the reference engine to rounding: ~30 000 drone-steps/s, ~300 times real
-time, on one core of Claude's workspace (the reference: ~700, 7 times). There is
-no training loop and no viewer yet (phase 10 next).
+equal to the reference engine to rounding: ~44 000 drone-steps/s at 1 024 drones,
+~440 times real time, on one core of the author's computer (~28 000 in Claude's
+workspace, where the reference does ~700). There is no training loop and no
+viewer yet (phase 10 next).
 
 Name: *Jineta* is a working name until the project has its own.
 
@@ -431,8 +432,8 @@ with each drone on its own lap clock and reset on its own; every part equal to
 the reference to rounding, a drone's numbers independent of its batch. The
 reference was made 1.7 times faster without changing a number (`core.vector`) and
 its collisions are now checked between samples too (loose end 26). Measured
-speed: ~40 times the reference from ~1 000 drones (~300 times real time in
-Claude's workspace). Tests: 688, ruff clean.
+speed: ~40 times the reference from ~1 000 drones (~440 times real time at 1 024
+drones on the author's computer). Tests: 688, ruff clean.
 
 Plan agreed with the author at the start of the phase
 (each step: tests green, ruff clean, commit + push). Decided with the author: the
@@ -607,27 +608,33 @@ Phase 9 (fast batch engine):
   replayed, 13 spheres, 3 obstacles, 4 gates): ~1 000 drone-checks/s at N = 1,
   ~28 000 at 64, ~45 000 at 1024, about half the speed of the dynamics with RK4
   (step 3): the collision check is a large share of a batch step.
-- **Speed of the batch engine, measured** (step 8, Claude's workspace, one core;
-  the Iris flying the first course with the gate guidance, the whole autopilot, the
-  floor contact and the referee with 13 spheres, 3 obstacles and 4 gates; drones
-  that end a lap start the next at once; `python -m examples.batch_course`):
+- **Speed of the batch engine, measured** (step 8, one core; the Iris flying the
+  first course with the gate guidance, the whole autopilot, the floor contact and
+  the referee with 13 spheres, 3 obstacles and 4 gates; drones that end a lap
+  start the next at once; `python -m examples.batch_course`). Drone-steps per
+  second, and times real time in brackets; the author's computer measured after
+  the phase was closed (2026-11-11, Windows, Python 3.13):
 
-  | drones | drone-steps/s | x real time |
+  | drones | Claude's workspace | author's computer |
   |---|---|---|
-  | reference engine | ~700 | ~7 |
-  | 1 | ~200 | ~2 |
-  | 16 | ~2 800 | ~28 |
-  | 64 | ~7 900 | ~79 |
-  | 256 | ~19 000 | ~190 |
-  | 1024 | ~28 000 | ~280 |
-  | 4096 | ~30 000 | ~300 |
+  | reference engine | ~700 (~7×) | not measured since step 1 |
+  | 1 | ~200 (~2×) | 241 (2.4×) |
+  | 16 | ~2 800 (~28×) | 3 665 (37×) |
+  | 64 | ~7 900 (~79×) | 11 813 (118×) |
+  | 256 | ~19 000 (~190×) | 28 048 (280×) |
+  | 1024 | ~28 000 (~280×) | 43 764 (438×) |
+  | 4096 | ~30 000 (~300×) | not measured |
+
+  The author's computer runs the batch ~1.5 times faster than Claude's workspace
+  (1.2 times at one drone), less than the ~2 times measured for the reference at
+  the end of phase 8. Not explained: two different computers and operating
+  systems, one run each; the speed-ups of later phases are judged on one computer.
 
   About 40 times the reference from ~1 000 drones on; the gain flattens there, when
   every array operation is large enough that NumPy's fixed cost per call no longer
   matters. Below ~4 drones the batch is slower than the reference (every line is
-  an array operation). Swift trained at over 700 times real time; the author's
-  computer is about twice as fast as Claude's workspace (end of phase 8), which
-  would put the batch around 550 times, not measured. Where the time goes at 1024
+  an array operation). Swift trained at over 700 times real time; at 1 024 drones
+  the author's computer gives ~440 times. Where the time goes at 1024
   drones: the collision checks ~60 % (most of it NumPy's reductions over the last
   axis of small arrays, `np.linalg.norm(..., axis=-1)` and `np.max(..., axis=-1)`
   in the shapes' distances), the dynamics with RK4 ~35 %.
@@ -1820,11 +1827,13 @@ Phase 6c (Kalman filter):
       and not rescheduled with speed. Tested from 18 to 30 m/s.
   20. The course loop uses the airspeed in its gains (Beard & McLain use the ground
       speed): equal in still air, different in a strong wind.
-  21. Speed (Claude's workspace, one core, the first course with its referee):
-      the reference engine ~700 steps/s (~7× real time); the batch engine ~28 000
-      drone-steps/s at 1 024 drones and ~30 000 at 4 096 (~300× real time), the
-      gain flat from ~1 000 drones. Swift trained at over 700×. Not yet measured on
-      the author's computer. Next gains, in order: loose end 29 (+40 %, measured),
+  21. Speed (one core, the first course with its referee): the batch engine at
+      1 024 drones does 43 764 drone-steps/s on the author's computer (~440× real
+      time; ~28 000 in Claude's workspace, the gain flat from ~1 000 drones there);
+      the reference ~700 steps/s in Claude's workspace (not measured on the
+      author's computer since step 1). Swift trained at over 700×. Next gains, in
+      order: loose end 29 (+40 %, measured in Claude's workspace; ~610× expected on
+      the author's computer, not measured),
       then the dynamics' many small array operations; compiled code (Numba) or a
       GPU only if the training of phases 10–11 shows the need.
   22. Stochastic turbulence (Dryden/von Kármán) is not modelled; indoors it only
