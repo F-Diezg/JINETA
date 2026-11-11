@@ -617,12 +617,23 @@ at 50 Hz: each action is held for two steps of the physics and the rate loop
    breaking the code (6 mistakes: the gate's u axis, R for R^T in the velocity and
    in the offsets, wrapping instead of repeating the last gate, R^T in the
    attitude part, the thrust mapping); each made a test fail.
-4. ⏳ **Reward and end of an episode** (`picadero/reward.py`): progress towards
-   the target gate (measured against the gate targeted at the start of the step,
-   so crossing it gives no jump), a bonus per gate, a penalty for a crash;
-   terminated by a crash or the finish, truncated by the time limit. Tests: the
-   progress of a scripted lap adds up to the distances by hand, each bonus and the
-   penalty paid once.
+4. ✅ **Reward and end of an episode** (`picadero/reward.py`: `RewardWeights`,
+   `RewardTerms`, `Reward`, `episode_end`): per step of the physics, progress (the
+   metres closer to the centre of the gate targeted at the start of the step, so
+   crossing it gives no jump), a bonus per gate crossed and a penalty for a crash;
+   starting weights 1 per metre, 1 per gate, 5 per crash (to be tuned in phase
+   11). Terminated by a crash or the finish, truncated by the time limit. Tests: a
+   straight lap of three gates 5 m apart, sampled every 0.1 m, gives 0.1 m of
+   progress at every step (crossing steps included), 14 m in all and three
+   bonuses at the crossing steps; through a gate backwards: no bonus and the
+   progress back to zero; into a wall: the penalty once and nothing afterwards;
+   the weights scale the terms; the gate guidance's lap of the first course adds
+   up gate by gate to the distances between where the drone started flying to
+   each gate and where it was just after crossing it (17.29 m, against 17.93 m
+   from the start through the four centres); drones not flying at the start of a
+   step get nothing; many drones equal to one by one; bad weights rejected.
+   Checked by breaking the code (4 mistakes); a crash penalty not masked for the
+   drones already ended survived the first tests and got its own.
 5. ⏳ **The environment** (`picadero/env.py`): n drones at once, each its own
    episode, restarted on its own when it ends (its last observation returned
    apart); observations float32, physics float64. Tests: shapes and types; with
