@@ -25,16 +25,18 @@ their purpose (a course, a warehouse, an inspection route; a racing quadrotor, a
 heavier camera drone) and trains a drone for it, with the confidence that the
 simulated vehicle behaves like the real one.
 
-**Where it stands (end of phase 8):** the physics engine is built and validated
+**Where it stands (end of phase 9):** the physics engine is built and validated
 (phases 1–6c): integrators, rigid body, atmosphere and wind, a quadrotor with its
 cascaded autopilot, a fixed-wing aircraft with its own autopilot, and a Kalman
 filter. The indoor world is built (phase 8): a room with obstacles and gates read
 from a course file, a drone that takes off from the floor on its landing gear,
-collisions with its 13-sphere hitbox, and a referee that times a lap. The Iris
-flies the first course through the gate centres with its autopilot (8.81 s). There
-is no training loop and no viewer yet. The measured limit is speed: a lap
-simulates at ~800 steps/s, 8 times real time, on one core, far too slow to train
-(section 5, phase 9).
+collisions with its 13-sphere hitbox (checked between samples too since phase 9),
+and a referee that times a lap. The Iris flies the first course through the gate
+centres with its autopilot (8.81 s). The batch engine (phase 9) flies many drones
+of one profile on one course at once, each lap ending and restarting on its own,
+equal to the reference engine to rounding: ~30 000 drone-steps/s, ~300 times real
+time, on one core of Claude's workspace (the reference: ~700, 7 times). There is
+no training loop and no viewer yet (phase 10 next).
 
 Name: *Jineta* is a working name until the project has its own.
 
@@ -64,9 +66,10 @@ code should be clear and every concept explained before it is used.
   newline and fixes blank lines that are easy to lose when pasting code. In VS
   Code, "Files: Insert Final Newline" and format-on-save with the Ruff formatter
   do the same automatically.
-- The full test run, in one process, takes ~50 s (594 tests, in Claude's workspace
-  at the end of phase 8); the closed-loop fixed-wing tests are the slowest (the
-  orbit hold, 5 s). `pytest -n auto` divides that by the number of cores.
+- The full test run, in one process, takes ~2.5 min (688 tests, in Claude's
+  workspace at the end of phase 9, about twice slower than the author's computer);
+  the batch tests that fly the first course and compare it with the reference are
+  the slowest (~5-11 s each). `pytest -n auto` divides that by the number of cores.
 - `scipy` is used for the trim (`scipy.optimize.root`) and in the Kalman tests
   (`scipy.stats.chi2`).
 - Regenerate dependencies with `pip freeze | Set-Content -Encoding ascii
@@ -204,6 +207,18 @@ code should be clear and every concept explained before it is used.
   of being silently truncated (ruff B905).
 - Dynamics expose `derivative(t, state) -> d(state)/dt`; integrators know nothing
   about physics.
+- **Batch engine (`escuadron`):** the states of n drones are the rows of an
+  (n, 13) array; every batch class takes n (`BatchMultirotor(params, n)`, ...), and
+  all its drones share one vehicle profile and one course. Each drone's memory
+  (integrals, landed, previous sample, collision, passes) is its own row, and
+  `reset(drones)` takes all (None), a boolean mask (n,) or indices. No operation
+  mixes rows (sums over rotors or feet are loops over them, 3 x 3 products are
+  `core.vector.matvec`), so a drone gives the same numbers alone or in any batch.
+  Every batch module mirrors a reference one term by term and is tested against it
+  to rounding (1e-12 per call, 1e-9 over flights); the reference stays the truth.
+  An `if` per drone becomes a mask (`np.where`, all branches computed). Times can
+  be one per drone (each on its own lap clock). Environment models are the
+  reference's, called with arrays (altitudes (n,), positions (n, 3)).
 - **The simulator never draws.** It produces data (states and events over time);
   visualisation is a separate layer that reads that data.
 - Type hints and docstrings on every public function.
@@ -229,7 +244,10 @@ jineta/
 │   │               #   contact (landing gear on the floor), hitbox (collision
 │   │               #   spheres), fixed_wing, propulsion, trim, stability,
 │   │               #   fixed_wing_control, profiles
-│   └── atalaya/    # estimation: kalman.py (later: onboard sensors)
+│   ├── atalaya/    # estimation: kalman.py (later: onboard sensors)
+│   └── escuadron/  # batch engine: quaternion, rigid_body, multirotor, contact,
+│                   #   control (whole autopilot), collision, referee, simulation
+│                   #   (BatchFlight: n drones flying laps, reset per drone)
 ├── tests/
 ├── courses/        # course files (YAML)
 ├── examples/       # runnable scripts (python -m examples.<name>)
@@ -241,9 +259,6 @@ jineta/
 Planned (each package arrives with its phase; names are proposals, settled when the
 phase starts):
 
-- a **fast batch engine** (phase 9): the same physics for N drones at once on
-  arrays, checked against the reference engine in `core` + `jinete`, which stays as
-  the truth.
 - a **training layer** (phase 10–11): the environment interface (observation,
   action, reward, end of episode), the classical baseline and the training scripts.
 - `atalaya/` grows **onboard sensors** (IMU, position from a motion-capture system
@@ -269,7 +284,7 @@ imported by the engine.
 | 6c | Estimation groundwork: linear Kalman filter | ✅ Done |
 | 7 | Project goal, repo reduced to the engine, new README and DESIGN | ✅ Done |
 | 8 | Indoor world: room, floor, gates, obstacles, collisions; course files | ✅ Done |
-| 9 | Fast batch engine (many drones at once), checked against the reference | ⏳ |
+| 9 | Fast batch engine (many drones at once), checked against the reference | ✅ Done |
 | 10 | Training environment (observation, action, reward) + classical baseline | ⏳ |
 | 11 | **MVP:** the Iris learns the course (reinforcement learning) | ⏳ |
 | 12 | Realism for the real drone: motor lag, ground effect, sensor noise, latency, randomised parameters | ⏳ |
@@ -409,7 +424,17 @@ ground contact model), and gates are rectangular or circular from the start.
    point is on the gate's plane, inside the opening.
 9. ✅ **Close the phase**: this document and the README.
 
-**Phase 9 — in progress.** Plan agreed with the author at the start of the phase
+**Phase 9 — done.** The batch engine (`jineta/escuadron/`): the rigid body, the
+multirotor forces, the floor contact, the whole autopilot, the collision monitor
+(with the swept check) and the referee for n drones at once, and the batch loop
+with each drone on its own lap clock and reset on its own; every part equal to
+the reference to rounding, a drone's numbers independent of its batch. The
+reference was made 1.7 times faster without changing a number (`core.vector`) and
+its collisions are now checked between samples too (loose end 26). Measured
+speed: ~40 times the reference from ~1 000 drones (~300 times real time in
+Claude's workspace). Tests: 688, ruff clean.
+
+Plan agreed with the author at the start of the phase
 (each step: tests green, ruff clean, commit + push). Decided with the author: the
 batch engine carries the whole multirotor cascade (velocity, attitude, rate, landed
 state), not only the rate loop the policy needs; all the drones of a batch fly the
@@ -517,7 +542,7 @@ riders moving together).
    for bit, while the other drone flies exactly as in a batch where nobody is
    reset; each lap's end is reported once; `fly_laps` restarts each drone on its
    own; inconsistent input rejected. Speed (table below).
-9. **Close the phase**: this document and the README.
+9. ✅ **Close the phase**: this document and the README.
 
 ## 6. Decision log
 
@@ -1272,7 +1297,10 @@ Phase 6c (Kalman filter):
 ## 7. Current state
 
 - `jineta/core/integrators.py` — `euler_step`, `rk4_step`, `Derivative` type alias.
-  Tested against free fall.
+  Tested against free fall. `rk4_step` works on any array shape (an (n, 13) batch).
+- `jineta/core/vector.py` — `cross(a, b)` (3-vectors or stacks, bit for bit equal
+  to `np.cross`, ~10 times faster on one pair) and `matvec(matrix, vector)` (3 x 3
+  products on stacks, the terms added in a fixed order).
 - `jineta/core/environment.py` — interfaces between dynamics and environment:
   `GRAVITY`, `DensityModel`, `WindModel`, and the defaults `sea_level_density` and
   `no_wind`.
@@ -1412,13 +1440,43 @@ Phase 6c (Kalman filter):
 - `jineta/campo/collision.py` — `Collision(kind, index, time, position)`,
   `CollisionMonitor(room, obstacles, sphere_centers, sphere_radii, floor_points,
   gates=())`: `margins(state)` ([room, obstacles..., gates..., floor], negative =
-  touching), callable
-  `stop` (`collision`, `airborne`), `reset()`. `Obstacle` protocol (anything with
-  `signed_distance`).
+  touching), callable `stop` (`collision`, `airborne`), `reset()`; walls,
+  obstacles and gates also checked along the spheres' straight moves between
+  samples (conservative advancement, `SWEEP_TOLERANCE` = 1 µm). `Obstacle`
+  protocol (anything with `signed_distance`).
 - `jineta/atalaya/kalman.py` — `predict`, `update` (returns the innovation and its
   covariance too), `nees`, `constant_velocity_transition`,
   `white_noise_acceleration`, `piecewise_white_acceleration`, `alpha_beta_gains`.
-- Tests (594 passing, ruff check + ruff format clean):
+- `jineta/escuadron/` — the batch engine (conventions in section 3):
+  - `quaternion.py` — `to_matrix`, `derivative`, `normalize`, `multiply`,
+    `conjugate`, `to_rotation_vector`, `from_matrix` on stacks (..., 4).
+  - `rigid_body.py` — `BatchRigidBody(mass, inertia, force_moment)` with
+    `derivative(t, states)` (n, 13); `BatchForceMomentModel`, `zero_force_moment`,
+    `normalize_attitudes`.
+  - `multirotor.py` — `BatchMultirotor(params, n, density, wind, contact)`:
+    `rotor_speed_command` (n, rotors), `derivative`, `force_moment`.
+  - `contact.py` — `contact_forces(gear, states, floor_z)`,
+    `BatchGroundContact(gear, floor_z)`.
+  - `control.py` — `rotor_speeds_for_wrench`, `BatchRateController`,
+    `BatchAttitudeController`, `BatchVelocityController` (each `(params, gains,
+    dt, n)` with `reset(drones)` where they have memory), `BatchAutopilot(vehicle,
+    gains, dt, landed)` (`velocity_command` (n, 3), `yaw_command` (n,), `landed`
+    (n,), `still_time`; callable `(t, states)`; `reset(drones)`); `Drones` (None,
+    a mask or indices).
+  - `collision.py` — `BatchCollisionMonitor(room, obstacles, sphere_centers,
+    sphere_radii, floor_points, n, gates)`: callable `(t, states, drones)`,
+    `margins`, `collided`, `check`, `time`, `position`, `airborne`, `kinds`,
+    `collision(i)`, `reset(drones)`.
+  - `referee.py` — `BatchReferee(gates, monitor, time_limit)`: callable
+    `(t, states)`, `status` (codes `FLYING`, `FINISHED`, `CRASHED`, `TIMEOUT`;
+    words in `STATUS_NAMES`), `end_time`, `passed`, `pass_time`, `pass_point`,
+    `ended`, `next_gate` (-1 when none), `lap_time`, `passes(i)`, `status_name(i)`,
+    `reset(drones)`; `forward_crossings(gate, start, end)`; `batch_referee(course,
+    sphere_centers, sphere_radii, floor_points, n)`.
+  - `simulation.py` — `BatchFlight(vehicles, referee, dt, start)`: `states`
+    (n, 13), `clock` (n,), `step(controller)` (returns the laps that ended in that
+    step), `reset(drones, start)`; `BatchController`.
+- Tests (688 passing, ruff check + ruff format clean):
   - integrators (2): RK4 exact on free fall; Euler's error shrinks with dt.
   - rotation (5): 90° about z maps North to East; proper orthogonal matrix; steady
     spin about a principal axis; constant torque spins up linearly; torque-free
@@ -1587,7 +1645,7 @@ Phase 6c (Kalman filter):
     (0.2 mm past the bounding sphere) and give back 0.233 / 0.104 / 0.036 m up,
     forward and sideways; the profile carries them; rejects invalid input (8
     cases); read-only.
-  - collisions (28), with the bounding sphere unless said: straight at the north
+  - collisions (37), with the bounding sphere unless said: straight at the north
     wall, the ceiling, a crate and a pillar, the moment exact (1e-9) and the
     obstacle named by its index; a sphere ahead of
     the nose on a 90° heading; the earliest of two contacts in one step wins; a
@@ -1601,7 +1659,12 @@ Phase 6c (Kalman filter):
     ceiling they touch 0.233 m higher than the sphere, rolled 90° 0.197 m sooner
     than level (exact moments); nose first into a wall at 0.280 m; take-off and
     hover are no crash; a thin wall head on needs 58 m/s; a graze at 20 m/s is
-    missed up to 3.1 cm, deeper than with the sphere.
+    missed up to 3.1 cm by the samples alone, deeper than with the sphere. The
+    swept check: the thin wall jumped by the samples found at every phase at the
+    exact moment; pillar grazes from 2 µm deep found within 2e-5 s of the first
+    touch; passing 10 µm or 1 mm away is no contact, within 1 µm is; a graze
+    between samples beats a contact at the sample; the move is the chord; far from
+    everything nothing is advanced; the Iris's 13 spheres' grazes found.
   - gates (41): rectangular frame distances by hand (7 points) and equal to its four
     bars (3000 random, seeded); torus distances by hand (5 points) and against its
     centre circle by brute force; the yaw is a heading (30°); many points at once,
@@ -1625,6 +1688,42 @@ Phase 6c (Kalman filter):
     gates in order without a contact (lap 8.81 ± 0.02 s); it starts on its gear,
     takes off and stays inside the room; every crossing is on the gate's plane and
     in its opening.
+  - vector (22): `cross` bit for bit equal to `np.cross` (single pairs, stacks,
+    broadcasting, components over 16 orders of magnitude), basis vectors,
+    perpendicular to both, wrong shapes rejected; `matvec` equal to `@` to rounding
+    on five shape combinations, its terms added in order, rows independent of the
+    batch, wrong shapes rejected.
+  - batch rigid body (12): quaternion matrices, derivatives (bit for bit) and
+    normalisation against the reference; every body's derivative (1e-12) and 2 s
+    of RK4 flight (1e-12) against `RigidBody`; a body alone or among 1000 bit for
+    bit; free fall of tumbling bodies; one time per drone; invalid input.
+  - batch multirotor (11): the floor contact against the reference on two floor
+    heights; no force in the air; every drone's derivative against `Multirotor`
+    (with and without contact, with a changing density and wind; 1e-12); alone or
+    in a batch bit for bit; resting on the gear is at rest; commands start at zero;
+    the 882 rotor commands of the reference lap replayed within 1e-9.
+  - batch rate control (11): the mixer's inverse with both clips; 300 updates of
+    50 drones against `RateController`; alone or in a batch bit for bit; 3 s of
+    closed-loop flight of 12 drones within 1e-9; the exact discrete first order of
+    the P-only loop; reset of chosen drones; invalid input.
+  - batch autopilot (12): quaternion product, conjugate, rotation vector and
+    `from_matrix` (every branch) against the reference; the attitude loop and 200
+    updates of the velocity loop against the reference; four drones taking off at
+    different moments, climbing, turning, descending and landing within 1e-9 of
+    their reference flights and landed at the same steps; alone or in a batch;
+    drones on the ground keep their loops at zero; a drone declared landed in the
+    air takes off from clean loops; reset keeps `landed`; the first course flown
+    by three drones within 1e-9 of the reference lap.
+  - batch referee (12): 95 sampled flights (every kind of contact, grazes between
+    samples, drones standing on the floor) against the reference monitor; margins;
+    alone or in a batch; chosen drones checked and reset; laps (the reference lap,
+    moved, backwards, random flights; two time limits) against the reference
+    referee; forward crossings of both gate types; events in the same step and a
+    crashed drone reset; a drone on its own clock; ended laps not judged again;
+    invalid input.
+  - batch flight (5): four speeds in one batch against the reference engine
+    (states 1e-9, end, passes); a reset drone repeats its lap bit for bit and
+    disturbs nobody; each lap's end reported once; `fly_laps`; invalid input.
   - Kalman filter (20): the running mean and σ²/k exactly; the steady-state gains of
     Kalata's alpha-beta filter; the lag behind a constant acceleration (a T²/β and
     its two companions); two updates one after the other equal one stacked update
@@ -1647,7 +1746,12 @@ Phase 6c (Kalman filter):
     (speed, pitch, rotor speeds, altitude), plus the top speed (20.7 m/s at 45°).
   - `iris_course.py` — the Iris flies the first course through the gate centres at
     3 m/s (lap 8.81 s): the course from above and from the side, path coloured by
-    speed, crossings marked. `fly_course(course, speed)` is reused by a test.
+    speed, crossings marked. `fly_course(course, speed)` is reused by tests.
+  - `benchmark.py` — times a lap of the first course in the reference engine
+    (best of several runs), `--profile` shows where the time goes.
+  - `batch_course.py` — five Iris at 2 to 4 m/s fly two laps each in one batch
+    (the 3.5 and 4 m/s ones clip a gate), and the batch's speed against n.
+    `GateGuidance`, `course_flight` and `fly_laps` are reused by tests.
 - Physics note (intermediate-axis instability, torque-free): spin Ω about the
   intermediate axis grows any tiny perturbation at rate
   `λ = Ω·sqrt((I2−I1)(I3−I2)/(I1·I3))`. The example perturbation (0.01 rad/s on p
@@ -1661,9 +1765,10 @@ Phase 6c (Kalman filter):
      the floor). The events that matter give their moment interpolated inside the
      step (collisions, gate crossings, the lap time); the state at that moment is
      not stored (the run keeps samples only).
-  2. The ISA functions are scalar-only (`if` on the altitude, `math`). Vectorise
-     with `np.where` in the batch engine (phase 9). Indoors the density is
-     constant over the height of a room.
+  2. The ISA functions are scalar-only (`if` on the altitude, `math`), so the batch
+     engine cannot use them (it calls environment models with arrays). Indoors the
+     density is constant over the height of a room; vectorise them (`np.where`)
+     only if a batch ever flies outdoors.
   3. `RotatingBody` and `RigidBody` still duplicate Euler's equations (inertia
      validation is already shared). Revisit when a vehicle needs attitude-only runs.
   4. Mixer saturation is plain clipping. It already happens for an instant at every
@@ -1715,10 +1820,13 @@ Phase 6c (Kalman filter):
       and not rescheduled with speed. Tested from 18 to 30 m/s.
   20. The course loop uses the airspeed in its gains (Beard & McLain use the ground
       speed): equal in still air, different in a strong wind.
-  21. Speed: ~1 000 steps/s for the Iris with its autopilot at 100 Hz on one core
-      (~10× real time, end of phase 7); ~800 steps/s (8× real time) flying a lap of
-      the first course with its referee (end of phase 8; Claude's workspace).
-      Training needs much more: the batch engine of phase 9.
+  21. Speed (Claude's workspace, one core, the first course with its referee):
+      the reference engine ~700 steps/s (~7× real time); the batch engine ~28 000
+      drone-steps/s at 1 024 drones and ~30 000 at 4 096 (~300× real time), the
+      gain flat from ~1 000 drones. Swift trained at over 700×. Not yet measured on
+      the author's computer. Next gains, in order: loose end 29 (+40 %, measured),
+      then the dynamics' many small array operations; compiled code (Numba) or a
+      GPU only if the training of phases 10–11 shows the need.
   22. Stochastic turbulence (Dryden/von Kármán) is not modelled; indoors it only
       matters as the drone's own wash off walls and floor, which is beyond this
       model.
@@ -1739,10 +1847,32 @@ Phase 6c (Kalman filter):
       envelope (a 0.47 x 0.47 x 0.11 m box for arms, body and legs). A real drone's
       shape, measured, comes with its profile (phase 14).
   28. The demonstration guidance (straight at each gate centre) only works slowly
-      (3 m/s; it hits gate 2 at 4 m/s). The classical baseline of phase 10 must plan
-      through the gates (look ahead to the next one, a position loop: loose end 10).
-- Next: phase 9 (fast batch engine), step 9 (close the phase); the plan is in
-  section 5.
+      (3 m/s; it hits gate 2 at 3.5 and 4 m/s). The classical baseline of phase 10
+      must plan through the gates (look ahead to the next one, a position loop:
+      loose end 10).
+  29. 60 % of a batch step is the collision checks, most of it NumPy's reductions
+      over the last axis of small arrays in the shapes' distances
+      (`_distance_from_overhangs`: `np.linalg.norm(..., axis=-1)`,
+      `np.max(..., axis=-1)`). Written out by hand they give the same numbers bit
+      for bit (100 000 random points) and the batch runs ~40 % faster (28 000 →
+      39 000 drone-steps/s at 1 024 drones). A change to `campo.indoor`, so to the
+      reference: do it as its own step, with the reference's tests as the check.
+  30. A batch has one vehicle profile and one course. Phase 11 trains on randomised
+      gates (a course per drone, or a batch per course) and phase 12 randomises the
+      vehicle's parameters (per drone): the batch classes will need per-drone
+      arrays for those (mass, inertia, gate positions).
+  31. The batch rounds of the swept check end with the slowest drone, so a rare
+      near miss of a few micrometres (a few thousand rounds, loose end 26) holds up
+      its whole batch for that step.
+  32. A drone reset without being put back to landed takes off the same way with
+      the gate guidance (it asks to climb at once); a policy that does not climb at
+      once would sit on the floor with its loops running. Whoever resets a drone
+      on the floor must set `landed` (as `GateGuidance.reset` does); the training
+      environment of phase 10 must do the same, or give the rate loop its own
+      landed state (the policy commands thrust and rates directly).
+- Next: phase 10 (training environment and classical baseline). Its step plan is
+  drawn up with the author at its start. New chat in the Project: "Seguimos con
+  Jineta, fase 10: entorno de entrenamiento".
 
 ## 8. Working with Claude
 
