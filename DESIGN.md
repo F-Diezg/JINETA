@@ -811,13 +811,29 @@ risking the next gate (loose end 38).
    log-probability without log sigma, the log sigma gradient without -1, the
    variances combined without the means' difference, acting without the
    normaliser); each made a test fail.
-4. ⏳ **PPO** (`doma/ppo.py`): experience from any environment with
-   `CourseEnv`'s shape (same-step restarts; a truncated episode is completed with
-   the value of its final observation, a terminated one is not), advantages by
-   GAE, clipped objective, value loss, minibatches, diagnostics. Tests: GAE by
-   hand and equal to Monte Carlo returns with lambda = 1, truncated against
-   terminated, toy problems with a known optimum solved, the same seed the same
-   training.
+4. ✅ **PPO** (`doma/ppo.py`: `PPOSettings`, `gae`, `Rollout`, `Episodes`,
+   `PPO` with `collect`, `update`, `learn`): experience from any environment with
+   `CourseEnv`'s shape (same-step restarts; after a truncation the critic's value
+   of the episode's last observation, after a termination nothing), advantages
+   by GAE, the clipped objective, the critic's squared error, advantages
+   normalised per minibatch, gradients clipped by global norm (0.5), the
+   learning rate falling linearly to zero, the normaliser frozen during a
+   rollout and updated after it; diagnostics (approximate KL, clipped fraction,
+   explained variance, entropy, spread). Tests: GAE by hand, with lambda = 1 the
+   Monte Carlo return minus the value, with lambda = 0 one step, cut at an
+   episode's end (truncated and terminated); the experience of a scripted
+   environment completed as each step ended; a continuous bandit's best action
+   learned (RMS error < 0.03); the double integrator's optimal regulator: every
+   episode cut after 8 steps, the learned feedback within 5 % of the discounted
+   LQR gain of the Riccati equation (measured 1.6 %: [1.740, 1.769] against
+   [1.723, 1.742]); the same seed the same training bit for bit; the learning
+   rate schedule and the diagnostics; a short training on the first course.
+   Checked by breaking the code (6 mistakes: truncations treated as ends (the
+   regulator's gain falls to about a third), GAE not cut at ends, the clipped
+   objective's gradient mask inverted, terminated steps given the next value,
+   the probability ratio inverted, log_std never learned); each made a test
+   fail. The experience test was added when it showed that no learning test
+   had a terminated episode with gamma > 0.
 5. ⏳ **The Iris learns the first course** (`picadero/training.py`,
    `examples/train_course.py`): training with a log and checkpoints, evaluation
    with the mean action against the baseline (success rate, lap time), the
@@ -847,6 +863,18 @@ Phase 11 (the Iris learns the course):
   training many times slower and the policy no more right. So a policy flown on
   another computer gives actions equal to rounding, and a lap's regression test
   allows for it.
+- **PPO's choices are the usual ones** (Stable-Baselines3 and CleanRL): a
+  Gaussian with a spread learned apart from the observation, actions clipped by
+  the environment (not squashed by tanh), separate networks and optimisers for
+  the policy and the critic, advantages normalised per minibatch, gradients
+  clipped to 0.5, Adam's epsilon 1e-5, the learning rate falling to zero, no
+  clipping of the critic. The normaliser is updated once per rollout (frozen
+  while it is collected, so a rollout's observations are all scaled alike).
+- **PPO is checked against a problem with a known optimum**: the discounted LQR
+  of a double integrator, whose gain the Riccati equation gives exactly. With
+  episodes cut after 8 steps, the right gain is learned only if truncations are
+  completed with the critic's value; treating them as ends gives a gain of about
+  a third (measured: [0.64, 0.44] against [1.72, 1.74]).
 
 Phase 10 (training environment and classical baseline):
 - **The environment has Gymnasium's shape without depending on it** (decided
