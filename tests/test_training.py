@@ -197,16 +197,34 @@ def test_a_short_training_on_random_courses(tmp_path):
     assert isinstance(result, CourseSetEvaluation) and len(result.lap_times) == 2
 
 
+def test_a_second_stage_counts_the_steps_of_the_first(tmp_path):
+    """An agent trained further keeps counting: its info's steps are those it
+    brought plus the new ones."""
+    settings = PPOSettings(rollout_steps=16, minibatch_size=64, epochs=1)
+    first, _ = train(
+        SHORT, 16 * 4, tmp_path / "a", n=4, settings=settings, evaluate_every=1,
+        margin=0.0,
+    )  # fmt: skip
+    brought = first.info["steps"]
+    assert brought == 64
+    second, _ = train(
+        SHORT, 2 * 16 * 4, tmp_path / "b", n=4, settings=settings,
+        evaluate_every=1, agent=first,
+    )  # fmt: skip
+    assert Agent.load(tmp_path / "b" / "last.npz").info["steps"] == brought + 128
+    assert second.info["steps"] in (brought + 64, brought + 128)
+
+
 POLICY_FILE = Path(__file__).resolve().parent.parent / "policies" / "first_course.npz"
 
 
 def test_the_trained_policy_beats_the_baseline():
-    """The policy of phase 11 (policies/first_course.npz) finishes the first
-    course faster than the baseline, keeping more than the 5 cm the baseline's
-    robust laps keep; its actions, replayed in the reference engine (Multirotor,
-    RatePilot, the course's referee), give the same lap. The lap time is a
-    regression value: on another computer the network's products round
-    differently in the last digits."""
+    """The policy of phase 11 (policies/first_course.npz, trained on the author's
+    computer) finishes the first course in half the baseline's time, keeping
+    more than the 5 cm the baseline's robust laps keep; its actions, replayed in
+    the reference engine (Multirotor, RatePilot, the course's referee), give the
+    same lap. The lap time is a regression value: on another computer the
+    network's products round differently in the last digits."""
     agent = Agent.load(POLICY_FILE)
     env = CourseEnv(COURSE, n=1)
     observations, _ = env.reset()
@@ -222,8 +240,8 @@ def test_the_trained_policy_beats_the_baseline():
         clearance = min(clearance, margins[0, :-1].min())
     assert info["status"][0] == FINISHED
     lap = info["lap_time"][0]
-    assert lap == pytest.approx(4.325, abs=0.05)
-    assert lap < BEST_LAP - 2.0
+    assert lap == pytest.approx(3.235, abs=0.05)
+    assert lap < BEST_LAP - 3.0
     assert clearance > 0.05
     _, referee, _ = reference_episode(np.array(actions))
     assert referee.status == "finished"

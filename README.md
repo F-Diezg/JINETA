@@ -8,14 +8,14 @@ vehicle.
 *Jineta* is a working name.
 
 > **Status: phase 11 done — the MVP works.** The Iris learned the first course
-> with reinforcement learning (PPO, written in NumPy in this project): **4.32 s
+> with reinforcement learning (PPO, written in NumPy in this project): **3.23 s
 > against 6.77 s** for a classical controller tuned on the same course, with the
 > same thrust and rate limits and keeping more than 5 cm from everything; the
 > lap is replayed exactly by the reference engine. Random courses with gates and
 > obstacles are ready to train on, and the policy can see the nearest walls and
 > obstacles; a first training on them is not yet a pilot for any course (1 of 20
 > courses it never saw). See [`DESIGN.md`](DESIGN.md) for the roadmap and the
-> decision log (835 tests).
+> decision log (836 tests).
 
 ## The goal
 
@@ -49,7 +49,7 @@ inertia, rotors, limits) they need, and trains a drone for their purpose.
 | Training environment | n drones learning a course at once, with the shape of Gymnasium's interface (`reset`, `step`): actions are collective thrust and body rates at 50 Hz through the rate loop (as PX4 accepts them), observations in body axes (velocity, attitude, rates, the next two gates, the last action), reward for progress, gates and crashes; each drone's episode ends and restarts on its own |
 | Classical baseline | The velocity autopilot following a planned path through the gates (pure pursuit, corner speed plan), its settings swept in the batch for the fastest robust lap: 6.77 s on the first course, the time a policy has to beat |
 | Learning | PPO in NumPy (`jineta/doma`): neural networks with backpropagation by hand, a Gaussian policy, GAE; checked against the optimal regulator (LQR) of a double integrator. An adapter makes the environment a Gymnasium `Env` / `VectorEnv` |
-| The learned pilot | The Iris flies the first course in 4.32 s (`policies/first_course.npz`): faster than the baseline by a third, never closer than 15 cm to anything, 97 % of its laps with exploration noise finish. Random courses (gates and obstacles) to train on and to measure on; the policy can see the nearest walls and obstacles |
+| The learned pilot | The Iris flies the first course in 3.23 s (`policies/first_course.npz`): in half the baseline's time, never closer than 13 cm to anything, every one of its laps with exploration noise finishes. Random courses (gates and obstacles) to train on and to measure on; the policy can see the nearest walls and obstacles |
 
 Every physics module is tested against known results: closed-form motion,
 published reference values, exact discrete solutions of the control loops.
@@ -82,7 +82,7 @@ minutes of training look like) and measures its speed; `baseline_course` sweeps
 the classical baseline's settings and draws its best lap of the first course.
 `policy_course` flies the trained policy and draws its lap next to the
 baseline's; `train_course` trains one from scratch (two stages, ~30 M steps:
-about 45 minutes on one core), and `train_random` trains on random courses and
+about 45-75 minutes on one core), and `train_random` trains on random courses and
 compares the result with the baseline on courses it never saw.
 
 ## Layout

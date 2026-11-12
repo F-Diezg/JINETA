@@ -35,9 +35,9 @@ once, equal to the reference engine to rounding. The training environment
 (phase 10) commands collective thrust and body rates at 50 Hz, as PX4 accepts
 them from a companion computer, and the classical baseline flies the first
 course in 6.77 s. **The MVP works (phase 11):** PPO, written in NumPy in the
-project, taught the Iris to fly the first course in **4.32 s**, a third faster
-than the baseline with the same thrust and rate limits, never closer than 15 cm
-to anything; the reference engine replays the lap exactly. Random courses with
+project, taught the Iris to fly the first course in **3.23 s**, half the
+baseline's time with the same thrust and rate limits, never closer than 13 cm to
+anything; the reference engine replays the lap exactly. Random courses with
 gates and obstacles, a policy that sees the nearest surfaces, and training on
 many courses at once are built; a pilot for any course needs a longer training
 than one session here (loose end 40). Next: phase 12, realism for the real
@@ -52,6 +52,10 @@ code should be clear and every concept explained before it is used.
 
 - OS: Windows (two machines: laptop + desktop, synced via GitHub)
 - Python **3.13** in a `.venv` virtual environment
+- The author's computer has 8 cores; a training uses one (loose end 21). Several
+  trainings can run at once, one per PowerShell window, each started after
+  `$env:OPENBLAS_NUM_THREADS = 1` (otherwise NumPy's threads compete for the
+  cores).
 - Editor: VS Code (extensions: Python, Pylance, Ruff, GitLens)
 - Dependencies: `numpy`, `scipy`, `pyyaml`, `matplotlib`, `pytest`, `pytest-xdist`,
   `ruff`, and `gymnasium` (1.4.0, phase 11; only the adapter and its tests use
@@ -74,7 +78,7 @@ code should be clear and every concept explained before it is used.
   newline and fixes blank lines that are easy to lose when pasting code. In VS
   Code, "Files: Insert Final Newline" and format-on-save with the Ruff formatter
   do the same automatically.
-- The full test run, in one process, takes ~3.5 min (835 tests, in Claude's
+- The full test run, in one process, takes ~3.5 min (836 tests, in Claude's
   workspace at the end of phase 11, whose speed changes from session to session);
   the slowest are PPO's regulator test (~14 s), the training tests (~5-15 s) and
   the batch tests that fly the first course against the reference (~5-11 s).
@@ -771,11 +775,12 @@ at 50 Hz: each action is held for two steps of the physics and the rate loop
 reinforcement learning: PPO written in NumPy (`jineta/doma`, checked against the
 LQR optimum of a double integrator), an adapter to Gymnasium, a time penalty and
 a 5 cm safety margin found by measurement, and two-stage training. Its policy
-flies the first course in 4.325 s against the baseline's 6.773 s, more than
-15 cm from everything, its lap replayed exactly by the reference engine. Random
+(trained on the author's computer) flies the first course in 3.235 s against
+the baseline's 6.773 s, 13 cm from everything at the closest, its lap replayed
+exactly by the reference engine. Random
 courses with gates and obstacles, the surroundings in the observation and
 training on many courses at once are built and tested; a first training on them
-(23 M steps) is not yet a pilot for any course (loose end 40). Tests: 835 (with
+(23 M steps) is not yet a pilot for any course (loose end 40). Tests: 836 (with
 Gymnasium), ruff clean.
 
 Plan agreed with the author at the start of the phase (each step: tests green,
@@ -891,7 +896,12 @@ risking the next gate (loose end 38).
    engine gives the same lap (1e-6). Checked by breaking the code (4 mistakes:
    the time penalty after the lap's end, the margin not applied, the final
    state taken after the restart, the margin ignored when choosing the best);
-   each made a test fail.
+   each made a test fail. **After the phase, the author ran the same recipe on
+   his computer (72.7 minutes): 3.235 s, 13.0 cm from everything at the
+   closest, every one of 256 noisy laps finished (3.26 s on average); the
+   reference engine gives the same lap (3.2346 s).** That policy replaced this
+   one in `policies/first_course.npz` (decision log); the regression test is
+   now 3.235 +- 0.05 s.
 6. ✅ **Surroundings and randomised courses** (loose ends 33 and 30;
    `spaces.Surroundings`, `closest_points`, `CourseEnv(nearest=...)`;
    `picadero/courses.py`: `CourseRanges`, `random_course`, `CourseSetEnv`;
@@ -1024,6 +1034,23 @@ Phase 11 (the Iris learns the course):
 - **The trained policy is kept in the repository** (`policies/first_course.npz`,
   120 kB: the normaliser, the policy and the critic), so its lap is a
   regression test and `examples.policy_course` draws it without training.
+- **The same recipe, two computers, two policies** (after the phase): run as
+  written on the author's computer (`python -m examples.train_course`, 72.7
+  minutes), the recipe gave a lap of 3.235 s where Claude's workspace had given
+  4.325 s. Nothing differs but the rounding of the network's products, which a
+  training amplifies (loose end 42): one run is one sample, and 4.3 s was not
+  the recipe's limit. The author's policy is the repository's now: faster,
+  every noisy lap finished (100 % against 97 %), and it does not flip at the
+  finish (it crosses the last gate tilted 18° at 1.19 m, 7.6 m/s, still turning
+  at ~3.6 rad/s in roll and pitch; the earlier one crossed it at 144°). Its
+  flight: top speed 8.6 m/s, tilt at most 84.6° (more than 60° for 0.95 s), no
+  detour at gate 3, every turn cut inside the baseline's path; checked in
+  Claude's workspace (the same lap, 3.2346 s, in the batch and the reference
+  engines). Its best agent came from the first stage: the second stage's best
+  was its first evaluation, after 163 840 steps (weights changed by at most
+  0.013), and no later agent beat it. That also showed that an agent's
+  `info["steps"]` counted only its own stage; it now counts the steps the agent
+  brought with it too (17 694 720 for this policy).
 - **PPO is checked against a problem with a known optimum**: the discounted LQR
   of a double integrator, whose gain the Riccati equation gives exactly. With
   episodes cut after 8 steps, the right gain is learned only if truncations are
@@ -2152,8 +2179,8 @@ Phase 6c (Kalman filter):
     `Rollout`, `Episodes`, `PPO(env, settings, seed, agent, episode_info)`
     (`collect`, `update`, `learn(steps, callback)`, `steps`, `agent`).
 - `policies/first_course.npz` — the policy of phase 11 on the first course
-  (4.325 s).
-- Tests (835 passing with Gymnasium installed, 829 and one skipped module
+  (3.235 s; trained on the author's computer).
+- Tests (836 passing with Gymnasium installed, 830 and one skipped module
   without it; ruff check + ruff format clean):
   - integrators (2): RK4 exact on free fall; Euler's error shrinks with dt.
   - rotation (5): 90° about z maps North to East; proper orthogonal matrix; steady
@@ -2460,13 +2487,13 @@ Phase 6c (Kalman filter):
     (measured 1.6 %); the same seed the same training; the learning-rate
     schedule and diagnostics; a short training on the first course; bad
     settings.
-  - training (9): the baseline through `fly` (lap, clearance, states recorded to
-    where the lap ended); laps that time out and crash; an evaluation repeated;
-    which evaluation is better (the margin first); a short training's log and
-    agents, repeated by its seed; the margin turns the closest pass into a
-    crash; a set of courses evaluated; a short training on random courses; the
-    saved policy (4.325 +- 0.05 s, > 5 cm, the same lap in the reference
-    engine).
+  - training (10): the baseline through `fly` (lap, clearance, states recorded
+    to where the lap ended); laps that time out and crash; an evaluation
+    repeated; which evaluation is better (the margin first); a short training's
+    log and agents, repeated by its seed; the margin turns the closest pass into
+    a crash; a set of courses evaluated; a short training on random courses; a
+    second stage counts the first's steps; the saved policy (3.235 +- 0.05 s,
+    > 5 cm, the same lap in the reference engine).
   - courses and surroundings (11): closest points by hand (box face, edge and
     corner; column; torus); the room's faces and the nearest first, in body
     axes (nose North and East); an obstacle among the surfaces; the
@@ -2635,26 +2662,36 @@ Phase 6c (Kalman filter):
   38. (Closed in phase 11, step 5: a time penalty of 0.25 per second, found by
       measurement; the decision log has the experiments.)
   39. A lap ends at the last gate, so a policy does not care what comes after
-      it: the first course's policy crosses the last gate rolled 137° at 1.3 m,
-      and a real drone would crash right after. A real finish needs the drone
+      it: Claude's first policy crossed the last gate rolled 144° at 1.25 m, and
+      a real drone would crash right after (the author's, now the repository's,
+      crosses it tilted 18° but still turning fast). A real finish needs the drone
       under control after the last gate (an episode that goes on to a hover, or
       a penalty on the attitude at the finish).
   40. The policy on random courses is undertrained (step 6: 1 of 20 test
       courses after 23 M steps): it needs more experience, and more courses per
       update, than Claude's workspace gives in a session; `python -m examples.train_random` on the
       author's computer (8 courses of 128 drones) is the next measurement.
-  41. The first course's policy flies hard (8.3 m/s, 64° of bank, 137° at the
-      finish) with instantaneous motors (loose end 5), a perfect state and no
-      delay: what it does may not survive the realism of phase 12. Its margin
-      (15.8 cm) and its 97 % of noisy laps are a start, not a proof.
+  41. The first course's policy flies hard (8.6 m/s, up to 84.6° of tilt) with
+      instantaneous motors (loose end 5), a perfect state and no delay: what it
+      does may not survive the realism of phase 12. Its margin (13 cm) and its
+      100 % of noisy laps are a start, not a proof.
   42. A training repeats only on the same computer (the network's products
       round differently elsewhere, and a training amplifies it): a policy is
-      kept as a file, and its regression tests allow for rounding.
-- Next: the random-course training on the author's computer (`python -m
-  examples.train_random`, loose end 40), its result recorded at the start of the
-  next chat; then phase 12 (realism: motor lag, ground effect, sensor noise and
-  delay, randomised parameters), whose step plan is drawn up with the author at
-  its start. New chat in the Project: "Seguimos con Jineta, fase 12: realismo".
+      kept as a file, and its regression tests allow for rounding. Measured: the
+      same recipe gave 4.325 s in Claude's workspace and 3.235 s on the author's
+      computer; one training is one sample.
+  43. Training saves only the best and the last agent. To show how a policy
+      learns (the 3D viewer of phase 13: from crashing to a clean lap), a
+      training should keep an agent every so often (e.g. every 1 M steps).
+- Next: phase 12 (realism: motor lag, ground effect, sensor noise and delay,
+  randomised parameters), whose step plan is drawn up with the author at its
+  start. Proposed as its first step, to be decided then: a training spread over
+  the author's 8 cores (one batch per process; estimated, not measured, x2-3 for
+  one course and x3-5 for random courses, since the network's update stays in
+  one process), because every step of phase 12 changes the physics and means
+  training again. The random-course training (loose end 40) is worth running
+  after that. New chat in the Project: "Seguimos con Jineta, fase 12:
+  realismo".
 
 ## 8. Working with Claude
 
@@ -2676,8 +2713,11 @@ Phase 6c (Kalman filter):
   (`Expand-Archive -Path "..\buffer\<zip>" -DestinationPath . -Force`). Files to
   delete or move are named with their `git rm` / `Move-Item` command. When a change
   touches several places of one file, Claude gives the whole file: partial
-  insertions lose imports and blocks. Each step ends with two blocks of commands:
-  the checks, and then, once they passed, the commit (one-line message) and push.
+  insertions lose imports and blocks. Each step ends with one block of commands
+  (asked by the author): the checks, then the commit (one-line message) and
+  push, guarded so that nothing is committed if a check failed (each check's
+  `$LASTEXITCODE` gathered in `$ok`; `if ($ok) { git add -A; git commit ...;
+  git push } else { ... }`).
 - Claude checks every push against its own copy (same files, `ruff check`, the
   tests) before going on. Its working copy carries local commits that never leave
   the workspace. Package versions in Claude's workspace can differ slightly from

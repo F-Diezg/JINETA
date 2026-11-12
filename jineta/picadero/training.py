@@ -229,13 +229,18 @@ def run_training(
     """Train an agent on any environment with CourseEnv's shape. Every
     `evaluate_every` updates `judge(agent)` gives (a rank, higher is better; the
     log's eval_ fields; a result): the agent with the highest rank so far is
-    saved as `out/best.npz`, the latest as `out/last.npz`. Writes `out/log.csv`
+    saved as `out/best.npz`, the latest as `out/last.npz` (their `info["steps"]`
+    counts the steps the agent was trained for, those of an `agent` given to
+    continue included). Writes `out/log.csv`
     and calls `report(row)` after every update. Returns the best agent and its
     result (the last agent and None if it was never judged)."""
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     ppo = PPO(env, settings, seed, agent, episode_info=("status", "lap_time"))
     info = {**(info or {}), "seed": seed}
+    # The steps an agent has been trained for, counting those it brought with it
+    # (a second stage starts from the first stage's agent).
+    trained = int(agent.info.get("steps", 0)) if agent is not None else 0
     best_rank: tuple[float, float] | None = None
     best_result: Any = None
     best_agent = ppo.agent
@@ -266,7 +271,7 @@ def run_training(
                 if key in stats and key not in row:
                     row[key] = stats[key]
             if stats["iteration"] % evaluate_every == 0:
-                ppo.agent.info = {**info, "steps": ppo.steps}
+                ppo.agent.info = {**info, "steps": trained + ppo.steps}
                 rank, fields, result = judge(ppo.agent)
                 row.update(fields)
                 ppo.agent.save(out / "last.npz")
@@ -285,7 +290,7 @@ def run_training(
                 report(row)
 
         ppo.learn(total_steps, callback)
-    ppo.agent.info = {**info, "steps": ppo.steps}
+    ppo.agent.info = {**info, "steps": trained + ppo.steps}
     ppo.agent.save(out / "last.npz")
     return best_agent, best_result
 
