@@ -23,6 +23,18 @@ or which way it faces (only on where things are from the drone's point of view):
     the next `lookahead` gates: 4 points on the edge of each
       opening, relative to the drone, in body axes R^T (p - x)   12 per gate
     the previous action                                          4
+    the nearest `nearest` surfaces (optional, phase 11): the
+      vector to the closest point of each, in body axes, the
+      closest first                                              3 per surface
+
+The surroundings. On a course the policy has flown many times it can learn where
+the walls and obstacles are; on a course it has never seen it has to see them.
+The surfaces are the room's six faces (floor, ceiling, four walls), every
+obstacle and every gate's frame; for each, the closest point to the drone's
+centre of mass (on a face, the foot of the perpendicular; on a shape, the point
+p - d grad(d) of its signed distance d, whose gradient is taken by central
+differences), and the `nearest` closest are given, nearest first. Like the gate
+points, they are relative to the drone, in body axes.
 
 Units are SI (m, m/s, rad/s): scaling the numbers for learning is the training's
 business (phase 11). The four points of a rectangular opening are its corners;
@@ -39,6 +51,7 @@ import numpy as np
 import numpy.typing as npt
 
 from jineta.campo.gates import CircularGate, Gate, RectangularGate
+from jineta.campo.indoor import Room
 from jineta.core.vector import matvec
 from jineta.escuadron import quaternion
 from jineta.jinete.control import MultirotorGains
@@ -175,13 +188,91 @@ def opening_points(gate: Gate) -> np.ndarray:
     return gate.center + np.column_stack([-s * u, c * u, v])
 
 
+GRADIENT_STEP = 1e-5  # [m], for the gradients of the signed distances
+
+
+def closest_points(shape, points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """The closest points (n, 3) of a shape (anything with `signed_distance`) to
+    points (n, 3) outside it, and their distances (n,): p - d grad(d), the
+    gradient by central differences and scaled to length 1 (exactly 1 for a
+    Euclidean signed distance, outside the shape)."""
+    distance = np.asarray(shape.signed_distance(points), dtype=float)
+    gradient = np.empty_like(points)
+    for axis in range(3):
+        step = np.zeros(3)
+        step[axis] = GRADIENT_STEP
+        up = shape.signed_distance(points + step)
+        down = shape.signed_distance(points - step)
+        gradient[:, axis] = (up - down) / (2.0 * GRADIENT_STEP)
+    length = np.sqrt(
+        gradient[:, 0] * gradient[:, 0]
+        + gradient[:, 1] * gradient[:, 1]
+        + gradient[:, 2] * gradient[:, 2]
+    )
+    gradient /= np.maximum(length, 1e-12)[:, None]
+    return points - distance[:, None] * gradient, distance
+
+
+@dataclass(frozen=True)
+class Surroundings:
+    """The `nearest` surfaces around n drones in a room with obstacles and gate
+    frames (`shapes`: anything with `signed_distance`)."""
+
+    room: Room
+    shapes: Sequence = ()
+    nearest: int = 4
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "shapes", tuple(self.shapes))
+        if not 1 <= self.nearest <= 6 + len(self.shapes):
+            raise ValueError("nearest must be between 1 and the number of surfaces")
+
+    @property
+    def size(self) -> int:
+        return 3 * self.nearest
+
+    def points(self, positions: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """The closest point of every surface (n, surfaces, 3) and its distance
+        (n, surfaces): the room's faces (floor, ceiling, walls x = 0, x = length,
+        y = 0, y = width), then the shapes in order."""
+        length, width, height = self.room.size
+        x, y, z = positions[:, 0], positions[:, 1], positions[:, 2]
+        n = len(positions)
+        faces = np.repeat(positions[:, None, :], 6, axis=1)
+        faces[:, 0, 2] = 0.0  # floor
+        faces[:, 1, 2] = -height  # ceiling
+        faces[:, 2, 0] = 0.0
+        faces[:, 3, 0] = length
+        faces[:, 4, 1] = 0.0
+        faces[:, 5, 1] = width
+        distances = [-z, z + height, x, length - x, y, width - y]
+        points = [faces]
+        for shape in self.shapes:
+            point, distance = closest_points(shape, positions)
+            points.append(point[:, None, :])
+            distances.append(distance)
+        return np.concatenate(points, axis=1), np.column_stack(distances).reshape(n, -1)
+
+    def __call__(self, positions: np.ndarray, to_body: np.ndarray) -> np.ndarray:
+        """The vectors to the nearest surfaces' closest points, nearest first, in
+        body axes (n, 3 * nearest), for positions (n, 3) and the rotations NED
+        -> BODY (n, 3, 3)."""
+        points, distances = self.points(positions)
+        order = np.argsort(distances, axis=1, kind="stable")[:, : self.nearest]
+        chosen = np.take_along_axis(points, order[:, :, None], axis=1)
+        relative = chosen - positions[:, None, :]
+        return matvec(to_body[:, None], relative).reshape(len(positions), -1)
+
+
 @dataclass(frozen=True)
 class Observer:
     """Builds the observation of n drones flying through `gates` (in order),
-    looking `lookahead` gates ahead."""
+    looking `lookahead` gates ahead, and seeing the nearest surfaces if given
+    `surroundings`."""
 
     gates: Sequence[Gate]
     lookahead: int = 2
+    surroundings: Surroundings | None = None
 
     def __post_init__(self) -> None:
         gates = tuple(self.gates)
@@ -196,7 +287,8 @@ class Observer:
 
     @property
     def size(self) -> int:
-        return 3 + 9 + 3 + 3 * OPENING_POINTS * self.lookahead + ACTION_SIZE
+        around = 0 if self.surroundings is None else self.surroundings.size
+        return 3 + 9 + 3 + 3 * OPENING_POINTS * self.lookahead + ACTION_SIZE + around
 
     @property
     def space(self) -> BoxSpace:
@@ -226,12 +318,13 @@ class Observer:
         points = self._points[self.targets(next_gate)]  # (n, lookahead, 4, 3)
         relative = (points - states[:, None, None, 0:3]).reshape(n, -1, 3)
         in_body = matvec(to_body[:, None], relative)  # (n, lookahead * 4, 3)
-        return np.column_stack(
-            [
-                velocity,
-                rotation.reshape(n, 9),
-                states[:, 10:13],
-                in_body.reshape(n, -1),
-                np.asarray(previous_action, dtype=float),
-            ]
-        )
+        parts = [
+            velocity,
+            rotation.reshape(n, 9),
+            states[:, 10:13],
+            in_body.reshape(n, -1),
+            np.asarray(previous_action, dtype=float),
+        ]
+        if self.surroundings is not None:
+            parts.append(self.surroundings(states[:, 0:3], to_body))
+        return np.column_stack(parts)

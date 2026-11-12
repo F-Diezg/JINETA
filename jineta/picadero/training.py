@@ -15,7 +15,7 @@ flight, until phase 12 randomises the vehicle).
 """
 
 import csv
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -175,6 +175,42 @@ def _better(new: Evaluation, old: Evaluation | None, margin: float = 0.0) -> boo
     return old is None or _rank(new, margin) > _rank(old, margin)
 
 
+@dataclass
+class CourseSetEvaluation:
+    """How an agent's mean action flies a set of courses.
+
+    finished: how many of the laps finished; lap_times (courses,) nan where not.
+    gates: gates passed on each course; clearances: closest approach on each.
+    """
+
+    finished: int
+    lap_times: np.ndarray
+    gates: np.ndarray
+    clearances: np.ndarray
+
+    @property
+    def success_rate(self) -> float:
+        return self.finished / len(self.lap_times)
+
+    @property
+    def mean_lap_time(self) -> float:
+        done = np.isfinite(self.lap_times)
+        return float(np.mean(self.lap_times[done])) if np.any(done) else float("nan")
+
+
+def evaluate_courses(
+    agent: Agent, courses: Sequence[Course], **env_kwargs: Any
+) -> CourseSetEvaluation:
+    """The deterministic policy's lap on each course."""
+    laps = [fly(agent, CourseEnv(c, n=1, **env_kwargs)) for c in courses]
+    return CourseSetEvaluation(
+        finished=sum(int(lap["status"][0] == FINISHED) for lap in laps),
+        lap_times=np.array([lap["lap_time"][0] for lap in laps]),
+        gates=np.array([lap["gates"][0] for lap in laps]),
+        clearances=np.array([lap["clearance"][0] for lap in laps]),
+    )
+
+
 Judge = Callable[[Agent], tuple[tuple[float, float], dict[str, Any], Any]]
 
 
@@ -264,14 +300,16 @@ def train(
     weights: RewardWeights = TRAINING_WEIGHTS,
     evaluate_every: int = 10,
     agent: Agent | None = None,
+    nearest: int = 0,
     margin: float = TRAINING_MARGIN,
     report: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[Agent, Evaluation | None]:
     """Train an agent on one course for `total_steps` environment steps with n
-    drones, every sphere of their hitbox `margin` larger; the best agent is the
-    one whose mean action flies the fastest lap, preferring laps that keep the
-    margin (judged on the course as it is; see `run_training`). Returns the best
-    agent and its evaluation.
+    drones, seeing the `nearest` surfaces around them (0: none), every sphere
+    of their hitbox `margin` larger; the best agent is the one whose mean action
+    flies the fastest lap, preferring laps that keep the margin (judged on the
+    course as it is; see `run_training`). Returns the best agent and its
+    evaluation.
 
     The policies of phase 11 are trained in two stages (`examples.train_course`):
     without the margin first (with it from the start, crashes are so frequent
@@ -279,7 +317,7 @@ def train(
     from the first stage's agent."""
 
     def judge(candidate: Agent):
-        result = evaluate(candidate, course, 16, seed)
+        result = evaluate(candidate, course, 16, seed, nearest=nearest)
         fields = {
             "eval_status": result.status,
             "eval_lap_time": result.lap_time,
@@ -287,8 +325,76 @@ def train(
         }
         return _rank(result, margin), fields, result
 
-    env = CourseEnv(course, n=n, weights=weights, margin=margin)
-    info = {"course": course.name, "drones": n}
+    env = CourseEnv(course, n=n, weights=weights, nearest=nearest, margin=margin)
+    info = {"course": course.name, "drones": n, "nearest": nearest}
+    return run_training(
+        env, total_steps, out, judge, seed, settings, evaluate_every, agent, info,
+        report,
+    )  # fmt: skip
+
+
+VALIDATION_SEED = 1000  # the courses a training on random courses is judged on
+TEST_SEED = 2000  # the courses a trained agent is measured on (never trained on)
+
+
+def random_courses(count: int, seed: int, ranges: Any = None) -> list[Course]:
+    """`count` random courses drawn from one seeded generator."""
+    from jineta.picadero.courses import random_course
+
+    rng = np.random.default_rng(seed)
+    return [
+        random_course(rng, ranges, name=f"Random course {seed}-{i}")
+        for i in range(count)
+    ]
+
+
+def train_random(
+    total_steps: int,
+    out: str | Path,
+    k: int = 4,
+    n: int = 64,
+    renew_every: int = 500,
+    nearest: int = 4,
+    seed: int = 0,
+    settings: PPOSettings | None = None,
+    weights: RewardWeights = TRAINING_WEIGHTS,
+    ranges: Any = None,
+    validation: int = 8,
+    evaluate_every: int = 10,
+    agent: Agent | None = None,
+    margin: float = TRAINING_MARGIN,
+    report: Callable[[dict[str, Any]], None] | None = None,
+) -> tuple[Agent, CourseSetEvaluation | None]:
+    """Train an agent on random courses: k at once, n drones each, each course
+    replaced by a new one every `renew_every` steps, the drones seeing the
+    `nearest` surfaces around them. The best agent is the one whose mean action
+    finishes the most of `validation` fixed courses (`VALIDATION_SEED`), and
+    among those the fastest on average. Returns it and its evaluation."""
+    from jineta.picadero.courses import CourseSetEnv, random_course
+
+    validation_courses = random_courses(validation, VALIDATION_SEED, ranges)
+
+    def judge(candidate: Agent):
+        result = evaluate_courses(candidate, validation_courses, nearest=nearest)
+        lap = result.mean_lap_time
+        fields = {
+            "eval_status": f"{result.finished}/{validation} finished",
+            "eval_lap_time": lap,
+            "eval_gates": int(np.sum(result.gates)),
+        }
+        rank = (float(result.finished), -lap if np.isfinite(lap) else 0.0)
+        return rank, fields, result
+
+    env = CourseSetEnv(
+        lambda rng: random_course(rng, ranges),
+        k,
+        n,
+        renew_every,
+        weights=weights,
+        nearest=nearest,
+        margin=margin,
+    )
+    info = {"course": "random", "drones": k * n, "nearest": nearest}
     return run_training(
         env, total_steps, out, judge, seed, settings, evaluate_every, agent, info,
         report,

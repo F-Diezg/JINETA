@@ -25,24 +25,23 @@ their purpose (a course, a warehouse, an inspection route; a racing quadrotor, a
 heavier camera drone) and trains a drone for it, with the confidence that the
 simulated vehicle behaves like the real one.
 
-**Where it stands (end of phase 10):** the physics engine is built and validated
+**Where it stands (end of phase 11):** the physics engine is built and validated
 (phases 1–6c): integrators, rigid body, atmosphere and wind, a quadrotor with its
 cascaded autopilot, a fixed-wing aircraft with its own autopilot, and a Kalman
-filter. The indoor world is built (phase 8): a room with obstacles and gates read
-from a course file, a drone that takes off from the floor on its landing gear,
-collisions with its 13-sphere hitbox (checked between samples too since phase 9),
-and a referee that times a lap. The batch engine (phase 9) flies many drones of
-one profile on one course at once, each lap ending and restarting on its own,
-equal to the reference engine to rounding (a third faster since phase 10). The
-training environment is built (phase 10): n drones commanded by a policy through
-collective thrust and body rates (50 Hz) executed by the rate loop, an
-observation in body axes, a reward for progress, gates and crashes, episodes
-restarted on their own, with the shape of Gymnasium's interface and checked
-against the reference engine; ~32 500 environment steps/s at 1 024 drones on one
-core of the author's computer (~650 times real time). The classical baseline (the velocity
-autopilot following a planned path through the gates, its settings swept in the
-batch for the fastest robust lap) flies the first course in **6.77 s**: the time
-a policy has to beat. No policy has been trained yet (phase 11 next).
+filter. The indoor world is built (phase 8): rooms with obstacles and gates read
+from course files, take-off from the floor, collisions with a 13-sphere hitbox,
+a referee that times a lap. The batch engine (phase 9) flies many drones at
+once, equal to the reference engine to rounding. The training environment
+(phase 10) commands collective thrust and body rates at 50 Hz, as PX4 accepts
+them from a companion computer, and the classical baseline flies the first
+course in 6.77 s. **The MVP works (phase 11):** PPO, written in NumPy in the
+project, taught the Iris to fly the first course in **4.32 s**, a third faster
+than the baseline with the same thrust and rate limits, never closer than 15 cm
+to anything; the reference engine replays the lap exactly. Random courses with
+gates and obstacles, a policy that sees the nearest surfaces, and training on
+many courses at once are built; a pilot for any course needs a longer training
+than one session here (loose end 40). Next: phase 12, realism for the real
+drone.
 
 Name: *Jineta* is a working name until the project has its own.
 
@@ -55,10 +54,13 @@ code should be clear and every concept explained before it is used.
 - Python **3.13** in a `.venv` virtual environment
 - Editor: VS Code (extensions: Python, Pylance, Ruff, GitLens)
 - Dependencies: `numpy`, `scipy`, `pyyaml`, `matplotlib`, `pytest`, `pytest-xdist`,
-  `ruff` (pinned in `requirements.txt`). After pulling on the other computer, run
-  `pip install -r requirements.txt` when `requirements.txt` changed: `git pull`
-  brings the list, not the packages. `pyyaml` is not used by the code today; the
-  course files of phase 8 will use it.
+  `ruff`, and `gymnasium` (1.4.0, phase 11; only the adapter and its tests use
+  it, and those tests are skipped without it), pinned in `requirements.txt`.
+  After pulling on the other computer, run `pip install -r requirements.txt`
+  when `requirements.txt` changed: `git pull` brings the list, not the packages.
+  The learning algorithm is the project's own (`jineta/doma`, NumPy): no PyTorch.
+- Training outputs (`runs/`) are ignored by Git; a trained policy kept in the
+  repository lives in `policies/` (a .npz of ~120 kB).
 - Run tests from repo root: `pytest -n auto` (pytest-xdist spreads the tests over
   every core) or `pytest -v` (one by one, every name listed); one file:
   `pytest tests\test_trim.py`; by name: `pytest -k orbit`; the last failures:
@@ -72,10 +74,10 @@ code should be clear and every concept explained before it is used.
   newline and fixes blank lines that are easy to lose when pasting code. In VS
   Code, "Files: Insert Final Newline" and format-on-save with the Ruff formatter
   do the same automatically.
-- The full test run, in one process, takes ~1.2-2.5 min (777 tests, in Claude's
-  workspace at the end of phase 10, whose speed changes from session to session);
-  the batch tests that fly the first course and compare it with the reference are
-  the slowest (~5-11 s each), with the baseline's sweep and laps (~2-6 s each).
+- The full test run, in one process, takes ~3.5 min (835 tests, in Claude's
+  workspace at the end of phase 11, whose speed changes from session to session);
+  the slowest are PPO's regulator test (~14 s), the training tests (~5-15 s) and
+  the batch tests that fly the first course against the reference (~5-11 s).
   `pytest -n auto` divides that by the number of cores.
 - `scipy` is used for the trim (`scipy.optimize.root`) and in the Kalman tests
   (`scipy.stats.chi2`).
@@ -248,6 +250,19 @@ code should be clear and every concept explained before it is used.
   penalty per crash (`RewardWeights`); an environment step adds up its physics
   steps. A classical controller can fly through the same interface
   (`ActionLimits.actions`).
+- **Training (`doma`, `picadero.training`):** the learning algorithm (`doma`:
+  network, policy, PPO) imports only NumPy and knows nothing about drones; it
+  trains on anything with `CourseEnv`'s shape. An `Agent` (observation
+  normaliser, Gaussian policy, critic) is what training produces and what flies
+  (`agent.act(observations)`: the mean action; with a generator, drawn from the
+  policy); it is saved to one .npz with an `info` dictionary (what it was trained
+  on, how). `CourseEnv` options of phase 11: `margin` (every hitbox sphere that
+  much larger: a safety margin, 5 cm in training), `nearest` (the nearest
+  surfaces in the observation, 4 on random courses), and the reward's `time`
+  weight (0.25 per second in training). A policy is measured by its deterministic
+  lap (status, lap time, closest approach) and by the success rate of laps flown
+  with its own noise; on random courses, on courses it never saw (seed 2000; the
+  courses that choose the best agent during training are seed 1000).
 - **The classical baseline** of a course is the fastest robust lap of the
   velocity autopilot following the path through its gates (`picadero.baseline`,
   `sweep`): every copy with its settings changed by 2 % finishes, never within
@@ -282,11 +297,16 @@ jineta/
 │   │               #   control (whole autopilot, rate pilot), collision,
 │   │               #   referee, simulation (BatchFlight: n drones flying laps,
 │   │               #   reset per drone)
-│   └── picadero/   # training layer: spaces (action, observation), reward
-│                   #   (and end of an episode), env (CourseEnv), baseline (the
-│                   #   classical path follower and its sweep)
+│   ├── doma/       # learning: network (MLP, backpropagation, Adam), policy
+│   │               #   (Gaussian policy, critic, normaliser, Agent), ppo
+│   └── picadero/   # training layer: spaces (action, observation, surroundings),
+│                   #   reward (and end of an episode), env (CourseEnv), baseline
+│                   #   (the classical path follower and its sweep),
+│                   #   gymnasium_adapter, training (train, evaluate), courses
+│                   #   (random courses, many courses at once)
 ├── tests/
 ├── courses/        # course files (YAML)
+├── policies/       # trained policies kept in the repository (.npz)
 ├── examples/       # runnable scripts (python -m examples.<name>)
 ├── pyproject.toml  # pytest + ruff configuration
 ├── DESIGN.md
@@ -296,8 +316,6 @@ jineta/
 Planned (each package arrives with its phase; names are proposals, settled when the
 phase starts):
 
-- the **training layer** (`picadero`, phase 10) grows in phase 11: the adapter to
-  the learning library chosen then, and the training scripts.
 - `atalaya/` grows **onboard sensors** (IMU, position from a motion-capture system
   or a camera) for the realism phase (12).
 - a **visualisation layer** outside `jineta/` (phase 13), which reads recorded
@@ -306,7 +324,8 @@ phase starts):
 Dependency rule: `core` imports nothing of the project; `campo` and `jinete` import
 `core`; layers that compose others (world, batch engine, training) sit on top and
 are never imported by the engine: `escuadron` imports `core`, `campo` and
-`jinete`; `picadero` imports all of them and nothing imports `picadero`.
+`jinete`; `doma` imports only NumPy; `picadero` imports all of them and nothing
+imports `picadero`.
 
 ## 5. Roadmap
 
@@ -324,7 +343,7 @@ are never imported by the engine: `escuadron` imports `core`, `campo` and
 | 8 | Indoor world: room, floor, gates, obstacles, collisions; course files | ✅ Done |
 | 9 | Fast batch engine (many drones at once), checked against the reference | ✅ Done |
 | 10 | Training environment (observation, action, reward) + classical baseline | ✅ Done |
-| 11 | **MVP:** the Iris learns the course (reinforcement learning) | ⏳ |
+| 11 | **MVP:** the Iris learns the course (reinforcement learning) | ✅ Done |
 | 12 | Realism for the real drone: motor lag, ground effect, sensor noise, latency, randomised parameters | ⏳ |
 | 13 | 3D viewer of recorded flights | ⏳ |
 | 14 | Towards the real drone: its profile, PX4 software-in-the-loop, offboard interface | ⏳ |
@@ -748,8 +767,16 @@ at 50 Hz: each action is held for two steps of the physics and the rate loop
    in Claude's workspace.
 7. ✅ **Close the phase**: this document and the README.
 
-**Phase 11 — in progress.** The Iris learns to fly a course with reinforcement
-learning.
+**Phase 11 — done.** The Iris learned to fly the first course with
+reinforcement learning: PPO written in NumPy (`jineta/doma`, checked against the
+LQR optimum of a double integrator), an adapter to Gymnasium, a time penalty and
+a 5 cm safety margin found by measurement, and two-stage training. Its policy
+flies the first course in 4.325 s against the baseline's 6.773 s, more than
+15 cm from everything, its lap replayed exactly by the reference engine. Random
+courses with gates and obstacles, the surroundings in the observation and
+training on many courses at once are built and tested; a first training on them
+(23 M steps) is not yet a pilot for any course (loose end 40). Tests: 835 (with
+Gymnasium), ruff clean.
 
 Plan agreed with the author at the start of the phase (each step: tests green,
 ruff clean, commit + push). Decided with the author: the learning algorithm is
@@ -865,12 +892,40 @@ risking the next gate (loose end 38).
    the time penalty after the lap's end, the margin not applied, the final
    state taken after the restart, the margin ignored when choosing the best);
    each made a test fail.
-6. ⏳ **Surroundings and randomised courses**: the nearest surfaces in the
-   observation (walls, floor, ceiling, obstacles, frames; loose end 33), a
-   generator of valid random courses with gates and obstacles, training over
-   several batches (a course per batch, renewed during training; loose end 30),
-   evaluation on courses never seen against the baseline swept on each.
-7. ⏳ **Close the phase**: this document and the README.
+6. ✅ **Surroundings and randomised courses** (loose ends 33 and 30;
+   `spaces.Surroundings`, `closest_points`, `CourseEnv(nearest=...)`;
+   `picadero/courses.py`: `CourseRanges`, `random_course`, `CourseSetEnv`;
+   `training.evaluate_courses`, `train_random`; `examples/train_random.py`):
+   the observation can include the nearest surfaces (the room's six faces,
+   every obstacle and frame; the vector to each closest point, in body axes,
+   nearest first; 4 of them: 12 more numbers); random courses with 3 to 6 gates
+   (in practice mostly 3 and 4: longer ones rarely fit the room) and 1 to 4
+   obstacles beside the path, every one flyable along the baseline's path;
+   training on k courses at once, n drones each, each course replaced by a new
+   one in turn (its drones' episodes truncated); the best agent chosen on 8
+   validation courses (seed 1000), measured on 20 test courses (seed 2000)
+   against the baseline swept on each (a smaller grid, ~10 s a course: it
+   finishes all 20, 6.29 s on average). Tests: closest points by hand (box face,
+   edge and corner by 3-4-5; column; torus); the room's faces and the nearest
+   first, nose North and East; an obstacle among them; the observation with
+   surroundings keeps the old part and gives each drone the same alone or in a
+   batch; 200 random courses keep their promises; a seed repeats a course; a
+   cautious baseline (2.5 m/s) finishes six of them; many courses fly as their
+   own environments until renewed, then truncated with their last observation;
+   seeds repeat; a short training on random courses. Checked by breaking the
+   code (5 mistakes: the surfaces left in NED axes, the farthest first, the
+   closest point on the wrong side, a renewal without truncation, obstacles
+   not kept off the path); each made a test fail. **Result: not yet a pilot
+   that flies any course.** Trained here 23 M steps (2 courses of 128 drones at
+   a time, the time penalty, no margin; ~70 minutes): the best agent on the
+   validation courses (1 of 8 finished, at 15 M steps) finishes 0 of the 20 test
+   courses (18 of their 68 gates); the last one 1 of 20 (4.61 s where the
+   baseline flies 3.94 s), 27 gates. The return swung from update to update
+   (only 2 courses per update), and late in the run episodes grew long with few
+   crashes: the waiting habit again, this time until the course is renewed. The
+   longer training on the author's computer, with 8 courses per update, is loose
+   end 40.
+7. ✅ **Close the phase**: this document and the README.
 
 ## 6. Decision log
 
@@ -911,8 +966,8 @@ Phase 11 (the Iris learns the course):
   by 6 M steps every episode ended by the time limit (the drone waited:
   discounted at 0.99, waiting costs at most ~0.5, a crash 5); stopped. E: C's
   best agent trained 10 M more steps with the margin (learning rate 1e-4): the
-  policy kept (4.325 s, 15.8 cm; 15 minutes). Two stages (a curriculum) is the recipe of
-  `examples.train_course`; run as written it repeats C and E on Claude's
+  policy kept (4.325 s, 15.8 cm; 15 minutes). Two stages (a curriculum) is the
+  recipe of `examples.train_course`; run as written it repeats C and E on Claude's
   workspace, and gives a different policy of the same kind on another computer
   (the products round differently and a training amplifies it).
 - **The time penalty is small on purpose**: rewarding speed only through the
@@ -933,6 +988,39 @@ Phase 11 (the Iris learns the course):
   up: the lap ends there, so what comes after does not count (loose end 39).
   The comparison is fair in the commands and in the 5 cm, not in the attitude:
   the baseline keeps PX4's tilt limit.
+- **The surroundings are the nearest surfaces' closest points** (step 6): the
+  room's faces analytically, each obstacle and frame by p - d grad(d) with the
+  gradient of its signed distance by central differences (1e-5 m), the four
+  nearest in body axes, nearest first. A fixed number of numbers whatever the
+  course (unlike a list of obstacles), and the same kind of information a range
+  sensor gives. Rejected: rays cast in fixed directions (a depth image), many
+  signed-distance evaluations per ray, left for when sensors come (phase 12).
+  Cost (Claude's workspace, 256 drones, random actions): the environment at
+  ~0.75 of its speed without them.
+- **Random courses are drawn, checked and redrawn** (step 6): every course must
+  be flyable along the baseline's path (it keeps 1 m from every obstacle, 0.6 m
+  from the walls and the ceiling, and passes no frame but its gate's), so a
+  course the policy fails is the policy's failure, and the baseline can be
+  measured on every test course (it finished all 20). Validation (choosing the
+  best agent, seed 1000) and test (measuring it, seed 2000) courses are never
+  trained on.
+- **One course per batch, several batches** (`CourseSetEnv`; loose end 30): the
+  batch engine flies one course per batch, so k courses are k environments
+  stepped in turn. Small batches pay NumPy's fixed cost per call k times: in
+  Claude's workspace 2 courses of 128 drones trained at ~5 000 steps/s and 8 of
+  32 at ~3 000 (one course of 256: ~12 000). A course per drone in the batch
+  engine would remove that cost (loose end 30 stays open).
+- **Few courses per update make training swing** (measured, step 6): with 2
+  courses at a time the return jumped between -2 and +7 from one update to the
+  next (each update learns from the 2 courses in flight); the recipe of
+  `examples.train_random` flies 8 courses of 128 drones (1 024 drones, meant for
+  the author's computer).
+- **A warm start from the first course's policy did not help** (step 6, measured):
+  its first layer widened with zero weights for the 12 new inputs (so it starts
+  flying as before and learns to use them) crossed 3 validation gates after
+  5.2 M steps, against 5 for a policy from scratch at the same point; its spread
+  had already shrunk to 0.21 (from scratch: 0.42), and new courses need
+  exploration. Not kept.
 - **The trained policy is kept in the repository** (`policies/first_course.npz`,
   120 kB: the normaliser, the policy and the critic), so its lap is a
   regression test and `examples.policy_course` draws it without training.
@@ -2007,13 +2095,19 @@ Phase 6c (Kalman filter):
     `sample(rng, n)`), `ActionLimits(thrust_min, thrust_max, max_rate)`
     (`space`, `commands(actions)`, `actions(thrust, rates)`),
     `autopilot_envelope(params, gains)`, `opening_points(gate)`,
-    `Observer(gates, lookahead=2)` (`size`, `space`, `targets(next_gate)`,
-    callable `(states, next_gate, previous_action)`); `ACTION_SIZE`.
-  - `reward.py` — `RewardWeights(progress=1, gate=1, crash=5)` (`total`),
-    `RewardTerms`, `Reward(gates, weights)` (`terms(...)`, callable),
-    `episode_end(status)` → (terminated, truncated).
+    `closest_points(shape, points)`, `Surroundings(room, shapes, nearest=4)`
+    (`size`, `points(positions)`, callable `(positions, to_body)`),
+    `Observer(gates, lookahead=2, surroundings=None)` (`size`, `space`,
+    `targets(next_gate)`, callable `(states, next_gate, previous_action)`);
+    `ACTION_SIZE`.
+  - `reward.py` — `RewardWeights(progress=1, gate=1, crash=5, time=0)`
+    (`total`), `RewardTerms` (progress, gate, crash, time), `Reward(gates,
+    weights, dt)` (`terms(...)`, callable), `episode_end(status)` →
+    (terminated, truncated).
   - `env.py` — `CourseEnv(course, n=1, profile, limits, weights, dt=0.01,
-    action_repeat=2, lookahead=2)`: `reset(seed, options)`, `step(action)`,
+    action_repeat=2, lookahead=2, nearest=0, margin=0)`: `reset(seed,
+    options)`, `step(action)` (info: `final_observation`, `final_state`,
+    `status`, `lap_time`, `episode_return`, `episode_steps`),
     `observation_space`, `action_space`, `step_time`, `np_random`; `flight`,
     `pilot`, `observer`, `reward`, `start`.
   - `baseline.py` — `BaselineSettings(cruise, lateral_accel, braking_accel,
@@ -2024,7 +2118,43 @@ Phase 6c (Kalman filter):
     `baseline_flight`, `fly_baseline` (statuses, lap times, clearances, flight),
     `sweep(course, ...)` → `SweepResult(best, lap_time, tried, robust,
     lap_times)`.
-- Tests (777 passing, ruff check + ruff format clean):
+  - `gymnasium_adapter.py` — `CourseGymEnv(course, **env)` (`gymnasium.Env`,
+    one drone), `CourseVectorEnv(course, n, **env)` (`VectorEnv`, same-step
+    autoreset), `to_box`, `EPISODE_KEYS`. Needs Gymnasium; nothing imports it.
+  - `training.py` — `fly(agent, env, rng=None, record=False)`,
+    `Evaluation`, `evaluate(agent, course, n, seed, **env)`,
+    `CourseSetEvaluation`, `evaluate_courses(agent, courses, **env)`,
+    `run_training(env, steps, out, judge, ...)`, `train(course, steps, out, n,
+    seed, settings, weights, evaluate_every, agent, nearest, margin, report)`,
+    `random_courses(count, seed)`, `train_random(steps, out, k, n,
+    renew_every, nearest, ...)`; `TRAINING_WEIGHTS` (time 0.25),
+    `TRAINING_MARGIN` (0.05), `LOG_COLUMNS`, `VALIDATION_SEED` (1000),
+    `TEST_SEED` (2000).
+  - `courses.py` — `CourseRanges` (what a random course may be),
+    `random_course(rng, ranges, name)`, `gate_count`, `CourseSetEnv(make_course,
+    k, n, renew_every, **env)` (k courses of n drones, renewed in turn, with
+    `CourseEnv`'s shape).
+- `jineta/doma/` — learning (conventions in section 3):
+  - `network.py` — `MLP(weights, biases)` (`create(sizes, rng, output_gain)`,
+    `sizes`, `parameters`, `forward` → (outputs, cache), `backward(cache,
+    grad)`, `state`, `from_state`), `orthogonal`, `Adam(parameters,
+    learning_rate, beta1, beta2, epsilon)` (`step(grads)`, `state`,
+    `load_state`), `clip_by_global_norm`, `save_arrays`, `load_arrays`.
+  - `policy.py` — `RunningNormalizer(size, clip=10, epsilon=1e-8)` (`update`,
+    callable, `state`, `from_state`), `gaussian_log_prob`,
+    `gaussian_log_prob_gradients`, `gaussian_entropy`, `GaussianPolicy(network,
+    log_std)` (`create`, `parameters`, `mean`, `sample`, `entropy`),
+    `Agent(normalizer, policy, value, info)` (`create`, `act`, `values`,
+    `save`, `load`).
+  - `ppo.py` — `PPOSettings` (rollout_steps 64, epochs 5, minibatch 4096,
+    gamma 0.99, gae_lambda 0.95, clip 0.2, learning rate 3e-4 annealed,
+    max_grad_norm 0.5, entropy 0, hidden (64, 64), log_std -0.5), `gae`,
+    `Rollout`, `Episodes`, `PPO(env, settings, seed, agent, episode_info)`
+    (`collect`, `update`, `learn(steps, callback)`, `steps`, `agent`).
+- `policies/first_course.npz` — the policy of phase 11 on the first course
+  (4.325 s).
+- Tests (835 passing with Gymnasium installed, 829 and one skipped module
+  without it; ruff check + ruff format clean):
   - integrators (2): RK4 exact on free fall; Euler's error shrinks with dt.
   - rotation (5): 90° about z maps North to East; proper orthogonal matrix; steady
     spin about a principal axis; constant torque spins up linearly; torque-free
@@ -2295,10 +2425,10 @@ Phase 6c (Kalman filter):
     by hand (rectangle, turned 30°, circle) and on the edge in order; the
     observation by hand nose North and East, the attitude matrix, 200 random
     attitudes rotated back, the last gate repeated, many drones bit for bit.
-  - reward (12): a straight lap by hand (0.1 m every step, 14 m, three bonuses);
+  - reward (13): a straight lap by hand (0.1 m every step, 14 m, three bonuses);
     backwards through a gate; a crash paid once; weights; the first course's lap
-    adds up gate by gate; drones not flying get nothing; many drones; episode
-    end; bad weights.
+    adds up gate by gate; drones not flying get nothing; many drones; the time
+    term (dt per step while the lap goes on); episode end; bad weights.
   - environment (14): reset and step shapes and types; least thrust stands and is
     truncated; three episodes against the reference engine (states 1e-9,
     rewards, end, final observation); alone or among four with restarts; a
@@ -2311,6 +2441,41 @@ Phase 6c (Kalman filter):
     the environment's actions at 50 Hz (finishes) and at 100 Hz (the return gate
     by gate, 1e-9); the sweep keeps the robust setting and fails loudly; bad
     paths and settings.
+  - Gymnasium adapter (6, skipped without Gymnasium): `check_env` passes;
+    spaces; one and n drones bit for bit as `CourseEnv` (final observations
+    included); the same as Gymnasium's `SyncVectorEnv` over copies; a finished
+    lap's time in the info.
+  - network (12): the forward pass by hand; gradients against central
+    differences (3 shapes); orthogonal initial weights; a row alone or in a
+    batch to 1e-13; Adam by hand; sin(x) learned; clipping; save and load bit
+    for bit; bad input.
+  - policy (8): log-probability and entropy against `scipy.stats`; their
+    gradients; samples with the policy's mean and spread; a new policy near
+    zero; the normaliser in pieces equal to all the data at once; clipping and
+    a constant input; the agent acts with the mean and is saved bit for bit;
+    bad input.
+  - PPO (11): the experience of a scripted environment completed as each step
+    ended; GAE by hand, with lambda 1 (Monte Carlo) and 0 (one step), cut at an
+    end; a continuous bandit; the double integrator's LQR gain within 5 %
+    (measured 1.6 %); the same seed the same training; the learning-rate
+    schedule and diagnostics; a short training on the first course; bad
+    settings.
+  - training (9): the baseline through `fly` (lap, clearance, states recorded to
+    where the lap ended); laps that time out and crash; an evaluation repeated;
+    which evaluation is better (the margin first); a short training's log and
+    agents, repeated by its seed; the margin turns the closest pass into a
+    crash; a set of courses evaluated; a short training on random courses; the
+    saved policy (4.325 +- 0.05 s, > 5 cm, the same lap in the reference
+    engine).
+  - courses and surroundings (11): closest points by hand (box face, edge and
+    corner; column; torus); the room's faces and the nearest first, in body
+    axes (nose North and East); an obstacle among the surfaces; the
+    observation with surroundings (the old part unchanged, many drones bit for
+    bit); 200 random courses keep their promises (ranges, spacing, the path's
+    clearance from obstacles and walls); a seed repeats a course; a cautious
+    baseline finishes six random courses; many courses fly as their own
+    environments until renewed, then truncated with their last observation;
+    seeds repeat; bad input.
 - Examples (all run, `python -m examples.<name>`):
   - `projectile_drag.py` — vacuum vs drag.
   - `density_comparison.py` — constant vs exponential vs ISA density (~1.7 km apogee:
@@ -2337,6 +2502,12 @@ Phase 6c (Kalman filter):
     episode a crash after ~0.8 s) and its speed against n.
   - `baseline_course.py` — the baseline's sweep on the first course (time to
     beat 6.77 s) and the best lap drawn with the planned path.
+  - `train_course.py` — trains the Iris on the first course in two stages
+    (without and with the 5 cm margin) and measures it against the baseline.
+  - `policy_course.py` — flies a trained policy (by default
+    `policies/first_course.npz`) and draws its lap with the baseline's.
+  - `train_random.py` — trains on random courses and compares the policy with
+    the baseline swept on 20 test courses (`--compare` for an agent).
 - Physics note (intermediate-axis instability, torque-free): spin Ω about the
   intermediate axis grows any tiny perturbation at rate
   `λ = Ω·sqrt((I2−I1)(I3−I2)/(I1·I3))`. The example perturbation (0.01 rad/s on p
@@ -2409,9 +2580,12 @@ Phase 6c (Kalman filter):
   21. Speed (one core, the first course, author's computer, end of phase 10): the
       batch engine at 1 024 drones does 58 093 drone-steps/s (~580× real time),
       the environment 32 475 steps/s (~650×; table in the phase 10 decision log).
-      Swift trained at over 700×. Next gains: the dynamics' many small array
-      operations; several processes (one batch per core); compiled code (Numba)
-      or a GPU only if phase 11's training shows the need.
+      Swift trained at over 700×. Training (phase 11, Claude's workspace, two
+      runs on two cores): ~10 500 environment steps/s with 256 drones on one
+      course (20 M steps in 32 minutes), ~5 000 on two random courses of 128 with
+      the surroundings. Next gains: several processes (one batch per core), a
+      course per drone (loose end 30); compiled code (Numba) or a GPU only if
+      that is not enough.
   22. Stochastic turbulence (Dryden/von Kármán) is not modelled; indoors it only
       matters as the drone's own wash off walls and floor, which is beyond this
       model.
@@ -2435,28 +2609,25 @@ Phase 6c (Kalman filter):
       along its path; the straight-at-each-centre guidance stays as an example.)
   29. (Closed in phase 10, step 1: the overhang formula written out, the same
       numbers bit for bit, the batch a third faster on the author's computer.)
-  30. A batch has one vehicle profile and one course. Phase 11 trains on randomised
-      gates (a course per drone, or a batch per course) and phase 12 randomises the
-      vehicle's parameters (per drone): the batch classes will need per-drone
-      arrays for those (mass, inertia, gate positions).
+  30. A batch has one vehicle profile and one course. Phase 11 trains on random
+      courses with a batch per course (`CourseSetEnv`), which costs speed with
+      small batches (decision log); a course per drone in the batch engine, and
+      the vehicle's parameters per drone (phase 12), need per-drone arrays
+      (gate positions, obstacles, mass, inertia).
   31. The batch rounds of the swept check end with the slowest drone, so a rare
       near miss of a few micrometres (a few thousand rounds, loose end 26) holds up
       its whole batch for that step.
   32. (Closed in phase 10: `RatePilot` has a landed state, and the environment
       puts a restarted drone back landed.)
-  33. Obstacles are not in the observation: on one fixed course a policy learns
-      where they are; on randomised courses (phase 11) or with obstacles moved, it
-      needs them (the nearest surfaces' signed distances, or the obstacles' shapes
-      relative to the drone).
-  34. The adapter to the learning library (Gymnasium's `Env` / `VectorEnv` or
-      Stable-Baselines3's `VecEnv`) comes at the start of phase 11 and must pass
-      Gymnasium's environment checker; `BoxSpace` becomes the library's `Box`.
-  35. The observation is in SI units, from ~0.1 to ~15: learning needs it scaled
-      (fixed scales, or running normalisation such as `VecNormalize`), phase 11.
-  36. The action envelope is the autopilot's (3.5 / 3.5 / 1.5 rad/s, thrust
-      10-90 %). A racing policy may need more (PX4's documentation suggests
-      720 deg/s for acro pilots); widening it changes what "beating the baseline"
-      means, so it is decided and recorded when it happens.
+  33. (Closed in phase 11, step 6: the nearest surfaces in the observation,
+      `CourseEnv(nearest=4)`.)
+  34. (Closed in phase 11, step 1: `picadero/gymnasium_adapter.py`, which passes
+      Gymnasium's checker; the learning algorithm is the project's own.)
+  35. (Closed in phase 11, step 3: a running normaliser, part of the agent.)
+  36. The action envelope stays the autopilot's (decided at the start of phase
+      11): the policy beat the baseline within it. Widening it (PX4's
+      documentation suggests 720 deg/s for acro pilots) is for an agile profile
+      (loose end 9).
   37. The baseline is a robust pure-pursuit follower, not the classical optimum;
       a minimum-time trajectory through the gates with a tracking controller
       would set a harder time to beat. The sweep's robustness test (four copies
@@ -2468,10 +2639,22 @@ Phase 6c (Kalman filter):
       and a real drone would crash right after. A real finish needs the drone
       under control after the last gate (an episode that goes on to a hover, or
       a penalty on the attitude at the finish).
-- Next: phase 11 (MVP: the Iris learns the first course with reinforcement
-  learning; the library is chosen at its start). Its step plan is drawn up with
-  the author at its start. New chat in the Project: "Seguimos con Jineta, fase 11:
-  la Iris aprende el circuito".
+  40. The policy on random courses is undertrained (step 6: 1 of 20 test
+      courses after 23 M steps): it needs more experience, and more courses per
+      update, than Claude's workspace gives in a session; `python -m examples.train_random` on the
+      author's computer (8 courses of 128 drones) is the next measurement.
+  41. The first course's policy flies hard (8.3 m/s, 64° of bank, 137° at the
+      finish) with instantaneous motors (loose end 5), a perfect state and no
+      delay: what it does may not survive the realism of phase 12. Its margin
+      (15.8 cm) and its 97 % of noisy laps are a start, not a proof.
+  42. A training repeats only on the same computer (the network's products
+      round differently elsewhere, and a training amplifies it): a policy is
+      kept as a file, and its regression tests allow for rounding.
+- Next: the random-course training on the author's computer (`python -m
+  examples.train_random`, loose end 40), its result recorded at the start of the
+  next chat; then phase 12 (realism: motor lag, ground effect, sensor noise and
+  delay, randomised parameters), whose step plan is drawn up with the author at
+  its start. New chat in the Project: "Seguimos con Jineta, fase 12: realismo".
 
 ## 8. Working with Claude
 

@@ -55,6 +55,7 @@ from jineta.picadero.spaces import (
     ActionLimits,
     BoxSpace,
     Observer,
+    Surroundings,
     autopilot_envelope,
 )
 
@@ -72,6 +73,8 @@ class CourseEnv:
     action_repeat: physics steps per action (the policy acts every
         action_repeat * dt seconds).
     lookahead: gates ahead in the observation.
+    nearest: surfaces around the drone in the observation (0: none; walls,
+        floor, ceiling, obstacles and gate frames, see spaces.Surroundings).
     margin: added to the radius of every sphere of the hitbox [m]: coming that
         close to a wall, the ceiling, an obstacle or a frame is a crash (a safety
         margin the policy learns to keep; the floor is still judged by the
@@ -86,6 +89,7 @@ class CourseEnv:
     dt: float = 0.01
     action_repeat: int = 2
     lookahead: int = 2
+    nearest: int = 0
     margin: float = 0.0
     np_random: np.random.Generator = field(init=False, repr=False)
 
@@ -101,7 +105,14 @@ class CourseEnv:
         params, gains, gear, hitbox = self.profile
         if self.limits is None:
             self.limits = autopilot_envelope(params, gains)
-        self.observer = Observer(self.course.gates, self.lookahead)
+        surroundings = None
+        if self.nearest > 0:
+            surroundings = Surroundings(
+                self.course.room,
+                (*self.course.obstacles, *self.course.gates),
+                self.nearest,
+            )
+        self.observer = Observer(self.course.gates, self.lookahead, surroundings)
         self.reward = Reward(self.course.gates, self.weights, self.dt)
         self.vehicles = BatchMultirotor(
             params, self.n, contact=BatchGroundContact(gear)

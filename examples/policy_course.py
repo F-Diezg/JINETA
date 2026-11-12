@@ -44,8 +44,9 @@ def main() -> None:
 
     course = load_course(COURSE_FILE)
     agent = Agent.load(args.policy)
-    lap = fly(agent, CourseEnv(course, n=1), record=True)
-    result = evaluate(agent, course, n=256)
+    nearest = int(agent.info.get("nearest", 0))
+    lap = fly(agent, CourseEnv(course, n=1, nearest=nearest), record=True)
+    result = evaluate(agent, course, n=256, nearest=nearest)
     states = lap["states"]
     speed = np.linalg.norm(states[:, 3:6], axis=1)
     reference, reference_lap = baseline_states(course)

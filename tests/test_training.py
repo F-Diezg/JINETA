@@ -18,14 +18,18 @@ from jineta.escuadron.control import BatchAttitudeController, BatchVelocityContr
 from jineta.escuadron.referee import CRASHED, FINISHED, TIMEOUT
 from jineta.jinete.profiles import IRIS, IRIS_GAINS
 from jineta.picadero.baseline import PathGuidance
+from jineta.picadero.courses import CourseRanges
 from jineta.picadero.env import CourseEnv
 from jineta.picadero.training import (
     LOG_COLUMNS,
+    CourseSetEvaluation,
     Evaluation,
     _better,
     evaluate,
+    evaluate_courses,
     fly,
     train,
+    train_random,
 )
 from tests.test_baseline import BEST, BEST_LAP
 from tests.test_env import reference_episode
@@ -166,6 +170,31 @@ def test_the_margin_makes_a_near_pass_a_crash():
     assert fly(BaselineAgent(loose), loose)["status"][0] == FINISHED
     with pytest.raises(ValueError):
         CourseEnv(COURSE, margin=-0.01)
+
+
+def test_evaluate_courses():
+    """Standing on the floor: no course finished, no gate, no lap time."""
+    courses = [SHORT, SHORT]
+    result = evaluate_courses(ConstantAgent([-1.0, 0.0, 0.0, 0.0]), courses)
+    assert result.finished == 0 and result.success_rate == 0.0
+    assert np.isnan(result.mean_lap_time) and list(result.gates) == [0, 0]
+    assert len(result.lap_times) == 2
+
+
+def test_a_short_training_on_random_courses(tmp_path):
+    """Two courses of four drones, the surroundings seen; the log is written,
+    the agent judged on validation courses and saved with what it saw."""
+    rows = []
+    settings = PPOSettings(rollout_steps=16, minibatch_size=64, epochs=1)
+    agent, result = train_random(
+        2 * 16 * 8, tmp_path, k=2, n=4, renew_every=10, settings=settings,
+        ranges=CourseRanges(time_limit=3.0), validation=2, evaluate_every=1,
+        report=rows.append,
+    )  # fmt: skip
+    assert len(rows) == 2 and rows[-1]["eval_status"].endswith("/2 finished")
+    assert agent.info["nearest"] == 4 and agent.info["course"] == "random"
+    assert agent.normalizer.size == 43 + 12
+    assert isinstance(result, CourseSetEvaluation) and len(result.lap_times) == 2
 
 
 POLICY_FILE = Path(__file__).resolve().parent.parent / "policies" / "first_course.npz"
