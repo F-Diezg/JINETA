@@ -794,11 +794,23 @@ risking the next gate (loose end 38).
    the code (4 mistakes: tanh's slope, no bias correction, mean for sum in the
    bias gradient, the input gradient of the first layer); the last is
    equivalent (that gradient is never used).
-3. ⏳ **Gaussian policy and observation normaliser** (`doma/policy.py`, loose end
-   35): the network gives the mean action, the spread is learned; log-probability
-   and entropy; running mean and variance of the observations. Tests: against
-   `scipy.stats`, the normaliser fed in pieces equal to the statistics of all the
-   data at once, gradients against finite differences.
+3. ✅ **Gaussian policy and observation normaliser** (loose end 35;
+   `doma/policy.py`: `RunningNormalizer`, `gaussian_log_prob`,
+   `gaussian_log_prob_gradients`, `gaussian_entropy`, `GaussianPolicy`,
+   `Agent`): the network gives the mean action, the spread (one log standard
+   deviation per action number, the same for every observation) is learned; the
+   observations are scaled by their running mean and variance (combined exactly,
+   Chan et al.) and clipped to +-10; the `Agent` (normaliser, policy, critic)
+   acts with the mean and is saved to one .npz. Tests: log-probability and
+   entropy against `scipy.stats` (1e-12); their gradients against central
+   differences; 100 000 samples with the policy's mean and spread, their average
+   -log-probability the entropy; a new policy starts near zero; the normaliser
+   fed in seven pieces equals the mean and variance of all the data (1e-12), and
+   epsilon's effect on a tiny variance as computed; clipping; an agent saved and
+   loaded acts bit for bit. Checked by breaking the code (4 mistakes: the
+   log-probability without log sigma, the log sigma gradient without -1, the
+   variances combined without the means' difference, acting without the
+   normaliser); each made a test fail.
 4. ⏳ **PPO** (`doma/ppo.py`): experience from any environment with
    `CourseEnv`'s shape (same-step restarts; a truncated episode is completed with
    the value of its final observation, a terminated one is not), advantages by
