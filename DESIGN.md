@@ -767,18 +767,33 @@ the time, the update ~1/3); after ~9 M steps it crossed gates and finished a few
 laps (15.2 s), then settled on passing some gates and hovering until the time
 limit: with the starting reward, hovering without a crash pays more than
 risking the next gate (loose end 38).
-1. ⏳ **Adapter to Gymnasium** (loose end 34; `picadero/gymnasium_adapter.py`):
-   `CourseGymEnv` (one drone, `gymnasium.Env`) and `CourseVectorEnv` (n drones,
-   `VectorEnv` with same-step autoreset). Tests (skipped without Gymnasium): it
-   passes Gymnasium's `check_env`; spaces; one and n drones fly exactly as
-   `CourseEnv`; the same final observations and final infos as Gymnasium's
-   `SyncVectorEnv` over copies of `CourseGymEnv`; a finished lap gives its lap
-   time.
-2. ⏳ **Neural network in NumPy** (`doma/network.py`): multilayer perceptron with
-   tanh, backpropagation by hand, orthogonal initialisation, Adam, gradient
-   clipping, save and load. Tests: gradients against finite differences, Adam
-   against its formulas, fitting a known function, save and load bit for bit, a
-   row the same alone or in a batch.
+1. ✅ **Adapter to Gymnasium** (loose end 34; `picadero/gymnasium_adapter.py`:
+   `CourseGymEnv`, `CourseVectorEnv`, `to_box`): one drone as a `gymnasium.Env`
+   (its last observation returned when an episode ends) and n drones as a
+   `VectorEnv` with same-step autoreset (`final_obs`, `final_info` and their
+   masks, Gymnasium's vector format). Tests (skipped without Gymnasium): it passes
+   Gymnasium's `check_env`; spaces; one and n drones fly exactly as `CourseEnv`
+   (bit for bit, final observations included); the same observations, rewards,
+   ends, final observations and final infos as Gymnasium's own `SyncVectorEnv`
+   over copies of `CourseGymEnv`; the baseline flown through it finishes and its
+   info has the lap time. Checked by breaking the code (3 mistakes: the restarted
+   observation returned at the end, no `super().reset(seed)`, the wrong final
+   observations); each made a test fail.
+2. ✅ **Neural network in NumPy** (`doma/network.py`: `MLP`, `Adam`,
+   `orthogonal`, `clip_by_global_norm`, `save_arrays`, `load_arrays`):
+   multilayer perceptron with tanh, backpropagation by hand, orthogonal initial
+   weights (gain sqrt(2) in hidden layers), Adam with its bias correction,
+   clipping by global norm, saving to .npz. Tests: the forward pass by hand;
+   gradients against central differences on three shapes (1e-6); the initial
+   weights orthonormal and repeatable; Adam three steps by hand (1e-15) and its
+   first step the learning rate whatever the gradient; sin(x) on [-pi, pi]
+   learned to an RMS error below 0.02; clipping; a network and its optimiser
+   saved, loaded and stepped on bit for bit; a row alone or in a batch of 2048
+   to 1e-13 (the plan said bit for bit: NumPy's matrix product adds in another
+   order for other sizes, see the decision log); bad input. Checked by breaking
+   the code (4 mistakes: tanh's slope, no bias correction, mean for sum in the
+   bias gradient, the input gradient of the first layer); the last is
+   equivalent (that gradient is never used).
 3. ⏳ **Gaussian policy and observation normaliser** (`doma/policy.py`, loose end
    35): the network gives the mean action, the spread is learned; log-probability
    and entropy; running mean and variance of the observations. Tests: against
@@ -805,6 +820,21 @@ risking the next gate (loose end 38).
 7. ⏳ **Close the phase**: this document and the README.
 
 ## 6. Decision log
+
+Phase 11 (the Iris learns the course):
+- **Gymnasium 1.4.0** (the newest, for Python 3.10-3.14) is an optional
+  dependency: only `picadero/gymnasium_adapter.py` and its tests need it (they
+  are skipped without it). Its checker found that the lap time, nan until a lap
+  finishes, made two equal runs look different (nan != nan): the lap time is now
+  in the info only once there is one. Gymnasium's source was read and the
+  adapter tested against it in Claude's workspace, where it cannot be installed.
+- **The network's products use NumPy's matrix product (BLAS)**: a row gives the
+  same numbers alone or in a batch to ~1e-14, not bit for bit (measured: BLAS
+  adds the terms in another order for other sizes, and for other processors).
+  Writing the products out in a fixed order, as the physics does, would make
+  training many times slower and the policy no more right. So a policy flown on
+  another computer gives actions equal to rounding, and a lap's regression test
+  allows for it.
 
 Phase 10 (training environment and classical baseline):
 - **The environment has Gymnasium's shape without depending on it** (decided
