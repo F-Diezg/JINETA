@@ -748,6 +748,62 @@ at 50 Hz: each action is held for two steps of the physics and the rate loop
    in Claude's workspace.
 7. ✅ **Close the phase**: this document and the README.
 
+**Phase 11 — in progress.** The Iris learns to fly a course with reinforcement
+learning.
+
+Plan agreed with the author at the start of the phase (each step: tests green,
+ruff clean, commit + push). Decided with the author: the learning algorithm is
+written in NumPy in a new package `jineta/doma/` (the *doma* is where a horse is
+trained), because Claude's workspace has no PyTorch, Gymnasium or
+Stable-Baselines3 and cannot install them, and every step must run and be tested
+before it is handed over; the environment is also given to Gymnasium through a
+thin adapter (an optional dependency), checked with Gymnasium's own checker on
+the author's computer. The randomised courses have gates and obstacles, so the
+observation grows the surroundings (loose end 33). The action envelope stays the
+autopilot's (loose end 36), so the comparison with the baseline measures the
+pilot. A prototype of PPO in NumPy, measured before planning (Claude's
+workspace, 256 drones, 20 minutes): ~14 000 samples/s (the environment ~2/3 of
+the time, the update ~1/3); after ~9 M steps it crossed gates and finished a few
+laps (15.2 s), then settled on passing some gates and hovering until the time
+limit: with the starting reward, hovering without a crash pays more than
+risking the next gate (loose end 38).
+1. ⏳ **Adapter to Gymnasium** (loose end 34; `picadero/gymnasium_adapter.py`):
+   `CourseGymEnv` (one drone, `gymnasium.Env`) and `CourseVectorEnv` (n drones,
+   `VectorEnv` with same-step autoreset). Tests (skipped without Gymnasium): it
+   passes Gymnasium's `check_env`; spaces; one and n drones fly exactly as
+   `CourseEnv`; the same final observations and final infos as Gymnasium's
+   `SyncVectorEnv` over copies of `CourseGymEnv`; a finished lap gives its lap
+   time.
+2. ⏳ **Neural network in NumPy** (`doma/network.py`): multilayer perceptron with
+   tanh, backpropagation by hand, orthogonal initialisation, Adam, gradient
+   clipping, save and load. Tests: gradients against finite differences, Adam
+   against its formulas, fitting a known function, save and load bit for bit, a
+   row the same alone or in a batch.
+3. ⏳ **Gaussian policy and observation normaliser** (`doma/policy.py`, loose end
+   35): the network gives the mean action, the spread is learned; log-probability
+   and entropy; running mean and variance of the observations. Tests: against
+   `scipy.stats`, the normaliser fed in pieces equal to the statistics of all the
+   data at once, gradients against finite differences.
+4. ⏳ **PPO** (`doma/ppo.py`): experience from any environment with
+   `CourseEnv`'s shape (same-step restarts; a truncated episode is completed with
+   the value of its final observation, a terminated one is not), advantages by
+   GAE, clipped objective, value loss, minibatches, diagnostics. Tests: GAE by
+   hand and equal to Monte Carlo returns with lambda = 1, truncated against
+   terminated, toy problems with a known optimum solved, the same seed the same
+   training.
+5. ⏳ **The Iris learns the first course** (`picadero/training.py`,
+   `examples/train_course.py`): training with a log and checkpoints, evaluation
+   with the mean action against the baseline (success rate, lap time), the
+   reward tuned by measurement (loose end 38), the trained policy saved in
+   `policies/`. Tests: the evaluation, a short training repeated, the saved
+   policy's lap.
+6. ⏳ **Surroundings and randomised courses**: the nearest surfaces in the
+   observation (walls, floor, ceiling, obstacles, frames; loose end 33), a
+   generator of valid random courses with gates and obstacles, training over
+   several batches (a course per batch, renewed during training; loose end 30),
+   evaluation on courses never seen against the baseline swept on each.
+7. ⏳ **Close the phase**: this document and the README.
+
 ## 6. Decision log
 
 Phase 10 (training environment and classical baseline):
