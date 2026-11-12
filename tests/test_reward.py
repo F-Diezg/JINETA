@@ -60,7 +60,7 @@ def judge(course, paths, weights=None):
     )
     reward = Reward(course.gates, weights or RewardWeights())
     referee(0.0, level(paths[0]))
-    progress, gate, crash, total = [], [], [], []
+    progress, gate, crash, time, total = [], [], [], [], []
     for k in range(1, len(paths)):
         active = ~referee.ended
         target, passed = referee.next_gate.copy(), referee.passed.copy()
@@ -78,9 +78,10 @@ def judge(course, paths, weights=None):
         progress.append(terms.progress)
         gate.append(terms.gate)
         crash.append(terms.crash)
+        time.append(terms.time)
         total.append(reward(*args))
-    as_array = [np.array(x) for x in (progress, gate, crash, total)]
-    return RewardTerms(*as_array[:3]), as_array[3], referee
+    as_array = [np.array(x) for x in (progress, gate, crash, time, total)]
+    return RewardTerms(*as_array[:4]), as_array[4], referee
 
 
 def straight_path(start: float, end: float, step: float) -> np.ndarray:
@@ -185,6 +186,23 @@ def test_many_drones_give_the_same_as_one_by_one():
         for a, b in zip(alone, together, strict=True):
             np.testing.assert_array_equal(a[:, 0], b[:, i])
         np.testing.assert_array_equal(alone_total[:, 0], total[:, i])
+
+
+def test_the_time_term_counts_the_seconds_flown():
+    """Every physics step of a drone still flying costs dt seconds; a drone whose
+    lap ended costs nothing; the weight scales it (and the default is none)."""
+    paths = straight_path(2.0, 19.0, 0.1)  # through the three gates and on
+    terms, total, _ = judge(STRAIGHT, paths)
+    ended = int(np.flatnonzero(terms.gate[:, 0])[-1]) + 1  # finished at the third
+    assert ended == 130  # from x = 2 m to the plane of the gate at 15 m, 0.1 m a step
+    np.testing.assert_array_equal(terms.time[:ended, 0], DT)
+    np.testing.assert_array_equal(terms.time[ended:, 0], 0.0)
+    weights = RewardWeights(time=2.0)
+    _, timed, _ = judge(STRAIGHT, paths, weights)
+    np.testing.assert_allclose(timed[:, 0], total[:, 0] - 2.0 * terms.time[:, 0])
+    assert RewardWeights().time == 0.0
+    with pytest.raises(ValueError):
+        Reward(STRAIGHT.gates, dt=0.0)
 
 
 def test_episode_end():

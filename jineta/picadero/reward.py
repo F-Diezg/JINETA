@@ -15,10 +15,16 @@ action lasts):
   - gate: a bonus for each gate crossed (in order and forward, as the referee
     counts them).
   - crash: a penalty when the lap ends in a collision.
+  - time: a penalty per second of flight (the step's duration while the lap
+    goes on), so that hovering in front of a gate costs something (phase 11:
+    with the first three terms alone, a policy learned to pass some gates and
+    then hover until the time limit).
 
-    reward = progress_weight * progress + gate_weight * gates - crash_weight * crash
+    reward = progress_weight * progress + gate_weight * gates
+             - crash_weight * crash - time_weight * seconds
 
-The weights are a starting point, to be tuned in training (phase 11).
+The weights were tuned in training (phase 11); the defaults are the starting
+point of phase 10 (no time penalty), which the tests of the terms use.
 
 The end of an episode, in the words of Gymnasium: *terminated* when the lap ends
 for good, by a crash or by the finish (nothing comes after it, so the policy must
@@ -44,18 +50,21 @@ class RewardTerms(NamedTuple):
     progress: np.ndarray  # metres closer to the target gate's centre
     gate: np.ndarray  # gates crossed (0 or 1)
     crash: np.ndarray  # 1 where the lap ended in a crash
+    time: np.ndarray | float = 0.0  # seconds flown in the step
 
 
 @dataclass(frozen=True)
 class RewardWeights:
-    """How much each term counts: per metre of progress, per gate, per crash."""
+    """How much each term counts: per metre of progress, per gate, per crash,
+    per second of flight."""
 
     progress: float = 1.0
     gate: float = 1.0
     crash: float = 5.0
+    time: float = 0.0
 
     def __post_init__(self) -> None:
-        for name in ("progress", "gate", "crash"):
+        for name in ("progress", "gate", "crash", "time"):
             value = getattr(self, name)
             if not (np.isfinite(value) and value >= 0.0):
                 raise ValueError(f"the {name} weight must be finite and >= 0")
@@ -66,17 +75,22 @@ class RewardWeights:
             self.progress * terms.progress
             + self.gate * terms.gate
             - self.crash * terms.crash
+            - self.time * terms.time
         )
 
 
 @dataclass(frozen=True)
 class Reward:
-    """The reward of n drones flying through `gates` (in order)."""
+    """The reward of n drones flying through `gates` (in order), one step of
+    the physics lasting `dt` seconds."""
 
     gates: Sequence[Gate]
     weights: RewardWeights = RewardWeights()
+    dt: float = 0.01
 
     def __post_init__(self) -> None:
+        if not self.dt > 0.0:
+            raise ValueError("dt must be > 0")
         gates = tuple(self.gates)
         if len(gates) == 0:
             raise ValueError("a course needs at least one gate")
@@ -106,7 +120,7 @@ class Reward:
         progress = np.where(active, before - after, 0.0)
         gate = np.where(active, np.asarray(gates_crossed, dtype=float), 0.0)
         crash = np.where(active & np.asarray(crashed, dtype=bool), 1.0, 0.0)
-        return RewardTerms(progress, gate, crash)
+        return RewardTerms(progress, gate, crash, np.where(active, self.dt, 0.0))
 
     def __call__(
         self,

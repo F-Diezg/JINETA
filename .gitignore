@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Training outputs (logs and agents of examples.train_course and train_random);
+# the policies kept in the repository live in policies/
+runs/

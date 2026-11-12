@@ -834,12 +834,37 @@ risking the next gate (loose end 38).
    the probability ratio inverted, log_std never learned); each made a test
    fail. The experience test was added when it showed that no learning test
    had a terminated episode with gamma > 0.
-5. ⏳ **The Iris learns the first course** (`picadero/training.py`,
-   `examples/train_course.py`): training with a log and checkpoints, evaluation
-   with the mean action against the baseline (success rate, lap time), the
-   reward tuned by measurement (loose end 38), the trained policy saved in
-   `policies/`. Tests: the evaluation, a short training repeated, the saved
-   policy's lap.
+5. ✅ **The Iris learns the first course** (`picadero/training.py`: `fly`,
+   `evaluate`, `Evaluation`, `run_training`, `train`, `TRAINING_WEIGHTS`,
+   `TRAINING_MARGIN`; `RewardWeights.time`; `CourseEnv(margin=...)` and
+   `info["final_state"]`; `examples/train_course.py`,
+   `examples/policy_course.py`; `policies/first_course.npz`): the reward gets a
+   time term (a penalty per second of flight), the environment a safety margin
+   (every hitbox sphere that much larger: coming that close to anything is a
+   crash); training writes a log (CSV) and keeps the best agent (the fastest lap
+   of the mean action that keeps the margin); an agent is measured by its
+   deterministic lap (status, time, closest approach) and by the success rate of
+   laps flown with its own noise. Five reward experiments (decision log) gave
+   the recipe: progress 1, gate 1, crash 5, time 0.25 per second; 20 M steps
+   without the margin, then 10 M with 5 cm, starting from the first stage's best
+   agent (256 drones, ~45 minutes in Claude's workspace). **The policy flies the
+   first course in 4.325 s (the baseline 6.773 s: 36 % faster), never closer
+   than 15.8 cm to anything; 97 % of 256 laps flown with its noise finish (4.35 s
+   on average); its actions replayed in the reference engine give the same lap
+   (4.3247 s).** Tests: the time term counts the seconds flown while the lap goes
+   on and nothing after; the baseline flown through `fly` (lap, gates,
+   clearance, the recorded states ending where the lap ended, not where the
+   drone was put back); drones standing (time out, no gate) and climbing into
+   the ceiling (crash); the evaluation repeated by its seed; which evaluation is
+   better (a lap that keeps the margin beats a faster one that does not); a
+   short training writes its log and agents and is repeated by its seed; the
+   margin turns the baseline's closest pass into a crash and a slightly smaller
+   one does not; the saved policy finishes in 4.325 +- 0.05 s, more than 2 s
+   faster than the baseline, more than 5 cm from everything, and the reference
+   engine gives the same lap (1e-6). Checked by breaking the code (4 mistakes:
+   the time penalty after the lap's end, the margin not applied, the final
+   state taken after the restart, the margin ignored when choosing the best);
+   each made a test fail.
 6. ⏳ **Surroundings and randomised courses**: the nearest surfaces in the
    observation (walls, floor, ceiling, obstacles, frames; loose end 33), a
    generator of valid random courses with gates and obstacles, training over
@@ -870,6 +895,47 @@ Phase 11 (the Iris learns the course):
   clipped to 0.5, Adam's epsilon 1e-5, the learning rate falling to zero, no
   clipping of the critic. The normaliser is updated once per rollout (frozen
   while it is collected, so a rollout's observations are all scaled alike).
+- **The reward and the training recipe were found by measurement** (Claude's
+  workspace, the first course, 256 drones, PPO's defaults, two runs at a time
+  on two cores, ~6 000 steps/s each). A: the reward of phase 10 (progress 1,
+  gate 1, crash 5): first laps finished at ~5.7 M steps; best mean-action lap
+  6.43 s (20 M), but 1.3 cm from a frame and 87.5 % of its noisy laps
+  finished. (The prototype before the phase, with a constant learning rate and
+  no gradient clipping, had settled on hovering; A did not.) B: a time penalty
+  of 1 per second: stuck after the first gate for 7 M steps (stopped). C: 0.25
+  per second: its mean action finished a lap from ~2.6 M steps (its noisy laps
+  from ~3.8 M), best 4.39 s at 20 M (32 minutes), every noisy
+  lap finished, but it passed 0.8 mm from something: it flies on the edge of
+  the collision model, where the baseline was required to keep 5 cm. D: 0.25
+  per second with the 5 cm margin from the start: crashes were so frequent that
+  by 6 M steps every episode ended by the time limit (the drone waited:
+  discounted at 0.99, waiting costs at most ~0.5, a crash 5); stopped. E: C's
+  best agent trained 10 M more steps with the margin (learning rate 1e-4): the
+  policy kept (4.325 s, 15.8 cm; 15 minutes). Two stages (a curriculum) is the recipe of
+  `examples.train_course`; run as written it repeats C and E on Claude's
+  workspace, and gives a different policy of the same kind on another computer
+  (the products round differently and a training amplifies it).
+- **The time penalty is small on purpose**: rewarding speed only through the
+  discount (A) gives a slower lap; a penalty larger than about the crash
+  penalty times (1 - gamma) per step makes an early crash look cheap (B).
+- **The safety margin is the baseline's robustness test made a rule of
+  training**: the baseline's laps count only if they keep 5 cm from
+  everything; the policy's are trained to keep it (the hitbox spheres 5 cm
+  larger), and its best agent is chosen among laps that keep it. Judged on the
+  course as it is (no margin).
+- **How the policy beats the baseline** (its lap, measured): it takes off tilted
+  54° forward and reaches 8.3 m/s (the baseline 4.6), banks up to 64° in the
+  turns (the baseline's velocity loop limits the tilt to 45°, PX4's
+  MPC_TILTMAX_AIR; the policy commands rates, within the same thrust and rate
+  limits, and nothing limits its tilt), overshoots gate 3 and comes back
+  through it (the referee counts only forward crossings of the opening, so
+  this is allowed), and rolls past 90° (137°) to reach the last gate at 1.3 m
+  up: the lap ends there, so what comes after does not count (loose end 39).
+  The comparison is fair in the commands and in the 5 cm, not in the attitude:
+  the baseline keeps PX4's tilt limit.
+- **The trained policy is kept in the repository** (`policies/first_course.npz`,
+  120 kB: the normaliser, the policy and the critic), so its lap is a
+  regression test and `examples.policy_course` draws it without training.
 - **PPO is checked against a problem with a known optimum**: the discounted LQR
   of a double integrator, whose gain the Riccati equation gives exactly. With
   episodes cut after 8 steps, the right gain is learned only if truncations are
@@ -2395,10 +2461,13 @@ Phase 6c (Kalman filter):
       a minimum-time trajectory through the gates with a tracking controller
       would set a harder time to beat. The sweep's robustness test (four copies
       at 2 %, 5 cm) is a choice, and the best lap is sensitive to it.
-  38. The reward weights (1 per metre, 1 per gate, 5 per crash) are untuned, and
-      the progress term pays a lap's length whatever its time: whether the
-      discount alone makes the policy fast enough, or a time penalty is needed, is
-      for phase 11 to find out.
+  38. (Closed in phase 11, step 5: a time penalty of 0.25 per second, found by
+      measurement; the decision log has the experiments.)
+  39. A lap ends at the last gate, so a policy does not care what comes after
+      it: the first course's policy crosses the last gate rolled 137° at 1.3 m,
+      and a real drone would crash right after. A real finish needs the drone
+      under control after the last gate (an episode that goes on to a hover, or
+      a penalty on the attitude at the finish).
 - Next: phase 11 (MVP: the Iris learns the first course with reinforcement
   learning; the library is chosen at its start). Its step plan is drawn up with
   the author at its start. New chat in the Project: "Seguimos con Jineta, fase 11:

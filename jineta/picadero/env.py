@@ -27,6 +27,8 @@ reward of an environment step is the sum of the rewards of its physics steps.
 `info` (arrays, one entry per drone; meaningful where `done = terminated |
 truncated`):
     final_observation (n, size)   the last observation of an episode that ended
+    final_state (n, 13)           the drones' states at the end of the step (where
+                                  an episode ended, before its drone restarted)
     status (n,)                   how it ended (codes of escuadron.referee)
     lap_time (n,)                 [s], nan unless it finished
     episode_return (n,)           the sum of its rewards
@@ -70,6 +72,10 @@ class CourseEnv:
     action_repeat: physics steps per action (the policy acts every
         action_repeat * dt seconds).
     lookahead: gates ahead in the observation.
+    margin: added to the radius of every sphere of the hitbox [m]: coming that
+        close to a wall, the ceiling, an obstacle or a frame is a crash (a safety
+        margin the policy learns to keep; the floor is still judged by the
+        landing gear).
     """
 
     course: Course
@@ -80,6 +86,7 @@ class CourseEnv:
     dt: float = 0.01
     action_repeat: int = 2
     lookahead: int = 2
+    margin: float = 0.0
     np_random: np.random.Generator = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -89,16 +96,18 @@ class CourseEnv:
             raise ValueError("action_repeat must be >= 1")
         if not self.dt > 0.0:
             raise ValueError("dt must be > 0")
+        if not self.margin >= 0.0:
+            raise ValueError("margin must be >= 0")
         params, gains, gear, hitbox = self.profile
         if self.limits is None:
             self.limits = autopilot_envelope(params, gains)
         self.observer = Observer(self.course.gates, self.lookahead)
-        self.reward = Reward(self.course.gates, self.weights)
+        self.reward = Reward(self.course.gates, self.weights, self.dt)
         self.vehicles = BatchMultirotor(
             params, self.n, contact=BatchGroundContact(gear)
         )
         referee = batch_referee(
-            self.course, hitbox.centers, hitbox.radii, gear.points, self.n
+            self.course, hitbox.centers, hitbox.radii + self.margin, gear.points, self.n
         )
         self.start = self.course.start_state(resting_height(gear, params.mass))
         self.start.flags.writeable = False
@@ -173,6 +182,7 @@ class CourseEnv:
         done = terminated | truncated
         info: dict[str, Any] = {
             "final_observation": self._observe(),
+            "final_state": self.flight.states.copy(),
             "status": referee.status.copy(),
             "lap_time": referee.lap_time,
             "episode_return": self.episode_return.copy(),
