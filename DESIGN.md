@@ -328,8 +328,9 @@ phase starts):
 Dependency rule: `core` imports nothing of the project; `campo` and `jinete` import
 `core`; layers that compose others (world, batch engine, training) sit on top and
 are never imported by the engine: `escuadron` imports `core`, `campo` and
-`jinete`; `doma` imports only NumPy; `picadero` imports all of them and nothing
-imports `picadero`.
+`jinete`; `atalaya` imports `core` and `escuadron.quaternion` (its estimator
+works on stacks); `doma` imports only NumPy; `picadero` imports all of them and
+nothing imports `picadero`.
 
 ## 5. Roadmap
 
@@ -1037,12 +1038,48 @@ it commands alone (3.45 s), but crashes at the first gate with both, and with
    a test fail. **The phase 11 policy with it**: 3.26 s, 21.8 cm from everything
    at the closest; with the motor lag too, 3.33 s and 20.0 cm; every noisy lap
    finished.
-4. **Sensors and estimator** (`atalaya`): motion capture (position and attitude
-   with noise, at its rate, with its delay), gyroscope (noise and bias, values of
-   PX4 SITL's Iris IMU), and a Kalman filter for position and velocity from the
-   motion-capture positions (`atalaya.kalman`); for many drones at once. Tests:
-   noise statistics in their intervals, delays exact, the filter's consistency
-   (NEES), seeds repeat.
+4. ✅ **Sensors and estimator** (`atalaya/estimator.py`: `Sensors`,
+   `MOCAP_LAB`, `specific_force`, `BatchEstimator`;
+   `escuadron.quaternion.from_rotation_vector`): every physics step, motion
+   capture (position and attitude with white noise, reaching the estimator
+   `mocap_delay` later; the cameras run faster than 100 Hz, so a frame every
+   step), gyroscope and accelerometer (white noise of the given density,
+   N / sqrt(dt) per sample, plus a bias drawn per episode; the accelerometer
+   measures R^T (a - g) with the step's mean acceleration). The estimator, as
+   PX4's EKF2 in a simpler form: a Kalman filter for position and velocity at
+   the delayed horizon (predict with the accelerometer rotated by the frame's
+   attitude, update with the frame's position; Kalata's steady-state gain),
+   then an output predictor that carries it to now with the IMU samples since
+   (attitude by the mean gyroscope rate of each step, then velocity and
+   position); attitude from the frames, rates from the latest gyroscope sample.
+   The estimate is a state (n, 13) in the rigid body's layout. `MOCAP_LAB`:
+   PX4 SITL's IMU noise (gyroscope 0.05 deg/s/sqrt(Hz), accelerometer
+   0.65 mg/sqrt(Hz)), OptiTrack PrimeX 13 (+-0.20 mm, rotational errors below
+   0.5 deg, both taken as two standard deviations: 0.1 mm, 0.25 deg), no
+   biases, 20 ms to the estimator (chosen). Tests: the specific force by hand
+   (1 g up at rest, nothing in free fall, a turned drone accelerating); rotation
+   vectors to quaternions against the reference and back; perfect sensors
+   without delay give the true state along the phase 11 policy's lap (position
+   and rates exactly, velocity 1e-12, attitude 1e-14); with 20 ms of delay the
+   predictor keeps it within 0.1 mm, 0.1 mm/s and 0.015° (the delayed frame
+   alone is up to 17 cm behind); a frame arrives exactly `delay` steps later;
+   2000 still drones with the lab's sensors: gyroscope spread N / sqrt(dt),
+   attitude 0.25°, position and velocity the fixed-gain filter's steady-state
+   covariance (sideways with the attitude's leak of gravity, vertically
+   without), each within 5 %, and sideways the gain is the Kalman filter's
+   optimum (1e-6); along the lap the lab's errors stay within 1 mm, 3 cm/s,
+   1.5° and 0.05 rad/s (measured 0.43 mm, 1.2 cm/s, 1.1°, 0.041 rad/s); biases
+   per drone, constant in an episode, drawn again on a restart of only the
+   restarted drones; a restart puts a drone at rest and leaves the others;
+   seeds repeat. Checked by breaking the code (8 mistakes: the horizon one step
+   off, the end rate instead of the step's mean, R for R^T in the specific
+   force, the noise times sqrt(dt), the bias left out of the gyroscope or never
+   drawn, the velocity gain without 1 / dt, the gravity leak left out of the
+   gain); the last survived the first tests (the spreads were checked against
+   the filter's own gain) and got its own (the gain is the optimum). **What it
+   says**: with motion capture the estimate is very good (sub-millimetre,
+   ~1 cm/s, ~0.25°, ~0.01 rad/s): the latency to the motors, not the noise, is
+   what the policy will feel (step 5).
 5. **The policy sees the estimate, with latency** (`CourseEnv`): the
    observation built from the estimated state, the action applied after the
    latency to the motors. Tests: with no noise and no delay, the environment of
@@ -1110,6 +1147,21 @@ Phase 12 (realism for the real drone):
   open copy. With the training's 5 cm margin the Iris's hubs stay at least
   0.18 m (1.4 R) below the ceiling, where the effect is small, and the courses
   do not fly close to it. Loose end 44.
+- **Sensors "B light" with an output predictor** (step 4): the estimator is
+  built like PX4's EKF2 around a delayed sensor (a filter at the delayed
+  horizon, an output predictor to now with the IMU), so the delay of the motion
+  capture costs accuracy, not time; without the predictor the frames would be
+  20 ms old (17 cm at 8.6 m/s). It is not EKF2: attitude is not filtered (the
+  frames measure it), the biases are not estimated, and the gain is the steady
+  state. The real EKF2 comes with PX4 software-in-the-loop (phase 14).
+- **One generator for the whole batch's noise** (step 4): a generator per drone
+  would keep a drone's numbers independent of its batch, but drawing for 1 024
+  drones one by one costs more than the step; the statistics of a drone's
+  errors do not depend on the batch, its numbers do. The physics keeps its
+  rule (a drone the same alone or in any batch).
+- **`atalaya` uses the batch quaternions** (step 4): the estimator works on
+  stacks, so `atalaya` imports `escuadron.quaternion` (and `core`); nothing in
+  the engine imports `atalaya`.
 
 Phase 11 (the Iris learns the course):
 - **Gymnasium 1.4.0** (the newest, for Python 3.10-3.14) is an optional

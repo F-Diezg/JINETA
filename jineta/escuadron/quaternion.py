@@ -95,6 +95,20 @@ def to_rotation_vector(q: np.ndarray) -> np.ndarray:
     )
 
 
+def from_rotation_vector(vector: np.ndarray) -> np.ndarray:
+    """Unit quaternions (..., 4) of rotation vectors angle * axis (..., 3) [rad]:
+    [cos(angle / 2), sin(angle / 2) axis] (the inverse of `to_rotation_vector`;
+    `core.quaternion.from_axis_angle` on stacks). Below an angle of 1e-12 the
+    vector part is vector / 2 (sin(a / 2) / a -> 1 / 2)."""
+    v0, v1, v2 = vector[..., 0], vector[..., 1], vector[..., 2]
+    angle = np.sqrt(v0 * v0 + v1 * v1 + v2 * v2)
+    small = angle < 1e-12
+    scale = np.where(small, 0.5, np.sin(0.5 * angle) / np.where(small, 1.0, angle))
+    return np.concatenate(
+        [np.cos(0.5 * angle)[..., None], scale[..., None] * vector], axis=-1
+    )
+
+
 def from_matrix(matrix: np.ndarray) -> np.ndarray:
     """Unit quaternions (w >= 0), shape (..., 4), of rotation matrices (..., 3, 3)
     (body -> NED), as `core.quaternion.from_matrix` (Shepperd's method).
