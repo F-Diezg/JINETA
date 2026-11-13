@@ -3,10 +3,14 @@ classical baseline's.
 
     python -m examples.policy_course                      # policies/first_course.npz
     python -m examples.policy_course runs/first_course/best.npz
+    python -m examples.policy_course runs/realism/margin/best.npz --lab
 
 Prints the policy's lap (mean action), its success rate with its own noise, and
 the baseline's lap; the figure shows both paths from above and from the side,
-the policy's coloured by speed.
+the policy's coloured by speed. A policy trained with the stop after the finish
+(phase 12) flies with it (its lap goes on until it stops); `--lab` flies it in
+the motion-capture lab (`realism.LAB`: motor lag, ground effect, sensors, 20 ms
+of latency) instead of the ideal simulator.
 """
 
 import argparse
@@ -20,6 +24,8 @@ from jineta.campo.course import load_course
 from jineta.doma.policy import Agent
 from jineta.picadero.baseline import BaselineSettings, baseline_flight
 from jineta.picadero.env import CourseEnv
+from jineta.picadero.finish import StopAfterFinish
+from jineta.picadero.realism import IDEAL, LAB
 from jineta.picadero.training import evaluate, fly
 
 POLICY_FILE = Path(__file__).resolve().parent.parent / "policies" / "first_course.npz"
@@ -40,13 +46,18 @@ def baseline_states(course) -> tuple[np.ndarray, float]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("policy", nargs="?", default=str(POLICY_FILE))
+    parser.add_argument("--lab", action="store_true", help="fly in realism.LAB")
     args = parser.parse_args()
 
     course = load_course(COURSE_FILE)
     agent = Agent.load(args.policy)
-    nearest = int(agent.info.get("nearest", 0))
-    lap = fly(agent, CourseEnv(course, n=1, nearest=nearest), record=True)
-    result = evaluate(agent, course, n=256, nearest=nearest)
+    effects = {
+        "nearest": int(agent.info.get("nearest", 0)),
+        "stop": StopAfterFinish() if agent.info.get("stop") else None,
+        "realism": LAB if args.lab else IDEAL,
+    }
+    lap = fly(agent, CourseEnv(course, n=1, **effects), record=True)
+    result = evaluate(agent, course, n=256, **effects)
     states = lap["states"]
     speed = np.linalg.norm(states[:, 3:6], axis=1)
     reference, reference_lap = baseline_states(course)

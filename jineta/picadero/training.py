@@ -27,7 +27,9 @@ from jineta.doma.policy import Agent
 from jineta.doma.ppo import PPO, PPOSettings
 from jineta.escuadron.referee import CRASHED, FINISHED, STATUS_NAMES, TIMEOUT
 from jineta.picadero.env import CourseEnv
+from jineta.picadero.finish import StopAfterFinish
 from jineta.picadero.parallel import CourseEnvPart, CourseSetEnvPart, make_parallel
+from jineta.picadero.realism import IDEAL, Realism
 from jineta.picadero.reward import RewardWeights
 
 # The reward the policies of phase 11 are trained with (found by measurement;
@@ -163,6 +165,59 @@ def evaluate(
         mean_lap_time=float(np.nanmean(times)) if np.any(finished) else float("nan"),
         lap_times=times,
     )
+
+
+@dataclass
+class DrawnEvaluation:
+    """How the mean action flies n drones of a course drawn by the realism's
+    randomisation (each its own numbers, latency and sensor noise; phase 12).
+
+    success_rate: the share of the n laps that finished (with a stop rule: and
+        stopped).
+    mean_lap_time: over those (nan if none).
+    lap_times, clearances, gates: per drone.
+    """
+
+    success_rate: float
+    mean_lap_time: float
+    lap_times: np.ndarray = field(repr=False)
+    clearances: np.ndarray = field(repr=False)
+    gates: np.ndarray = field(repr=False)
+
+
+def evaluate_drawn(
+    agent: Agent, course: Course, n: int = 64, seed: int = 0, **env_kwargs: Any
+) -> DrawnEvaluation:
+    """The mean action flown by n drones at once (their draws seeded): how many
+    of the drones the policy flies, and how fast."""
+    lap = fly(agent, CourseEnv(course, n=n, **env_kwargs), seed=seed)
+    finished = lap["status"] == FINISHED
+    times = np.where(finished, lap["lap_time"], np.nan)
+    return DrawnEvaluation(
+        success_rate=float(np.mean(finished)),
+        mean_lap_time=float(np.nanmean(times)) if np.any(finished) else float("nan"),
+        lap_times=times,
+        clearances=lap["clearance"],
+        gates=lap["gates"],
+    )
+
+
+def realism_label(realism: Realism, stop: StopAfterFinish | None = None) -> str:
+    """The effects of a realism (and the stop rule) in a few words, for an
+    agent's info: "ideal" when there are none."""
+    parts = [
+        name
+        for name, on in (
+            ("motor lag", realism.motor_lag),
+            ("ground effect", realism.ground_effect),
+            ("sensors", realism.sensors is not None),
+            (f"latency {1000 * realism.latency:.0f} ms", realism.latency > 0.0),
+            ("randomised", realism.randomization is not None),
+            ("stop", stop is not None),
+        )
+        if on
+    ]
+    return ", ".join(parts) if parts else "ideal"
 
 
 def _rank(result: Evaluation, margin: float = 0.0) -> tuple[float, float]:
@@ -316,7 +371,10 @@ def train(
     margin: float = TRAINING_MARGIN,
     report: Callable[[dict[str, Any]], None] | None = None,
     workers: int = 1,
-) -> tuple[Agent, Evaluation | None]:
+    realism: Realism = IDEAL,
+    stop: StopAfterFinish | None = None,
+    judged_by: int = 64,
+) -> tuple[Agent, Evaluation | DrawnEvaluation | None]:
     """Train an agent on one course for `total_steps` environment steps with n drones
     (split over `workers` processes, n / workers each; the same training with
     any number of workers), seeing the `nearest` surfaces around them (0: none),
@@ -325,29 +383,52 @@ def train(
     margin (judged on the course as it is; see `run_training`). Returns the best
     agent and its evaluation.
 
+    With a `realism` (phase 12) the drones fly with its effects, and with a
+    `stop` they must stop after the finish. When the realism draws (sensors'
+    noise or randomised drones), the best agent is the one whose mean action
+    flies the most of `judged_by` drawn drones, then the fastest
+    (`evaluate_drawn`, seeded: every evaluation flies the same drones).
+
     The policies of phase 11 are trained in two stages (`examples.train_course`):
     without the margin first (with it from the start, crashes are so frequent
     that the policy learns to wait until the time limit), then with it, starting
     from the first stage's agent."""
 
+    effects = {"nearest": nearest, "realism": realism, "stop": stop}
+
     def judge(candidate: Agent):
-        result = evaluate(candidate, course, 16, seed, nearest=nearest)
+        if realism.randomization is None and realism.sensors is None:
+            result = evaluate(candidate, course, 16, seed, **effects)
+            fields = {
+                "eval_status": result.status,
+                "eval_lap_time": result.lap_time,
+                "eval_gates": result.gates,
+            }
+            return _rank(result, margin), fields, result
+        # Drawn drones: the share the mean action flies, then how fast.
+        drawn = evaluate_drawn(candidate, course, judged_by, seed, **effects)
+        lap = drawn.mean_lap_time
         fields = {
-            "eval_status": result.status,
-            "eval_lap_time": result.lap_time,
-            "eval_gates": result.gates,
+            "eval_status": f"{round(drawn.success_rate * judged_by)}/{judged_by}",
+            "eval_lap_time": lap,
+            "eval_gates": float(np.mean(drawn.gates)),
         }
-        return _rank(result, margin), fields, result
+        rank = (drawn.success_rate, -lap if np.isfinite(lap) else -np.inf)
+        return rank, fields, drawn
 
     if workers < 1 or n % workers != 0:
         raise ValueError("workers must be >= 1 and divide n")
     env = make_parallel(
-        CourseEnvPart(
-            course, n // workers, weights=weights, nearest=nearest, margin=margin
-        ),
+        CourseEnvPart(course, n // workers, weights=weights, margin=margin, **effects),
         workers,
     )
-    info = {"course": course.name, "drones": n, "nearest": nearest}
+    info = {
+        "course": course.name,
+        "drones": n,
+        "nearest": nearest,
+        "realism": realism_label(realism, stop),
+        "stop": stop is not None,
+    }
     return run_training(
         env, total_steps, out, judge, seed, settings, evaluate_every, agent, info,
         report,

@@ -36,7 +36,13 @@ import numpy.typing as npt
 
 from jineta.campo.course import Course
 from jineta.escuadron.contact import BatchGroundContact
-from jineta.escuadron.control import BatchAutopilot, Drones, _rows
+from jineta.escuadron.control import (
+    BatchAttitudeController,
+    BatchAutopilot,
+    BatchVelocityController,
+    Drones,
+    _rows,
+)
 from jineta.escuadron.multirotor import BatchMultirotor
 from jineta.escuadron.referee import FINISHED, batch_referee
 from jineta.escuadron.simulation import BatchFlight
@@ -350,3 +356,34 @@ def sweep(
     i = int(np.nanargmin(np.where(robust, times, np.nan)))
     best = BaselineSettings(*tried[i, 1:], approach=float(tried[i, 0]), **kwargs)
     return SweepResult(best, float(times[i]), tried, robust, times)
+
+
+class BaselineAgent:
+    """The baseline flying through a `CourseEnv`'s interface, as a policy does:
+    its path guidance and its velocity and attitude loops run at the
+    environment's action rate on what a policy would see (the onboard estimate
+    with sensors, the true state without), and give thrust and body rates as
+    actions. With the environment's realism it flies the same drones, with the
+    same latency, as a policy (phase 12). A drone whose episode has just
+    restarted (`episode_steps` 0) starts its path and loops again."""
+
+    def __init__(self, env, settings: BaselineSettings) -> None:
+        params, gains, _, _ = env.profile
+        self.env = env
+        self.guidance = PathGuidance(env.course, settings, env.n)
+        self.velocity = BatchVelocityController(
+            params, gains.velocity, env.step_time, env.n
+        )
+        self.attitude = BatchAttitudeController(gains.attitude)
+
+    def act(self, observations=None, rng=None) -> np.ndarray:
+        env = self.env
+        restarted = env.episode_steps == 0
+        if np.any(restarted):
+            self.guidance.reset(restarted)
+            self.velocity.reset(restarted)
+        states = env.flight.states if env.estimator is None else env.estimator.estimate
+        velocity, yaw = self.guidance.commands(states)
+        attitude, thrust = self.velocity.update(velocity, yaw, states)
+        rates = self.attitude.update(attitude, states)
+        return env.limits.actions(thrust, rates)

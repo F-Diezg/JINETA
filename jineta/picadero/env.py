@@ -249,7 +249,7 @@ class CourseEnv:
                 active,
             )
             if self.stop is not None:
-                reward += self._after_finish(active, coasting, weights)
+                reward += self._after_finish(active, coasting, weights, previous)
         self.previous_action = action
         self.episode_return += reward
         self.episode_steps += 1
@@ -274,7 +274,11 @@ class CourseEnv:
         return self._observe(), reward, terminated, truncated, info
 
     def _after_finish(
-        self, active: np.ndarray, coasting: np.ndarray, weights: RewardWeights
+        self,
+        active: np.ndarray,
+        coasting: np.ndarray,
+        weights: RewardWeights,
+        previous: np.ndarray,
     ) -> np.ndarray:
         """One physics step after the finish: the drones that have just crossed
         the last gate start stopping; the ones that were stopping are checked
@@ -297,8 +301,10 @@ class CourseEnv:
         self.outcome[hit] = CRASHED
         self.outcome[stopped] = FINISHED
         self.outcome[late] = TIMEOUT
+        moved = states[:, 0:3] - previous[:, 0:3]
+        flown = np.sqrt(np.sum(moved * moved, axis=1))
         return (
-            np.where(coasting, -weights.time * self.dt, 0.0)
+            np.where(coasting, -weights.time * self.dt - weights.overrun * flown, 0.0)
             - weights.crash * hit
             + weights.stop * stopped
         )

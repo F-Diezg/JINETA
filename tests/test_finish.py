@@ -4,6 +4,8 @@ drone stops (the same lap time, a bonus, the seconds paid), crashes or runs out
 of time, the flight after the finish equal to the reference engine, the flag in
 the observation, and restarts."""
 
+from itertools import pairwise
+
 import numpy as np
 import pytest
 
@@ -239,3 +241,32 @@ def test_the_phase_11_policy_does_not_stop():
         if terminated[0] or truncated[0]:
             break
     assert info["status"][0] == CRASHED
+
+
+def test_every_metre_after_the_finish_costs_the_overrun_weight():
+    """The same stop with an overrun weight of 1 per metre: the return is lower
+    by exactly the length flown after the finish (summed over the physics
+    steps), 1e-9."""
+    returns, flown = [], 0.0
+    for overrun in (0.0, 1.0):
+        weights = RewardWeights(time=0.25, overrun=overrun)
+        env = CourseEnv(OPEN, weights=weights, stop=StopAfterFinish())
+        positions = []
+        step = env.flight.step
+
+        def recording(controller, also=None, step=step, env=env, positions=positions):
+            ended = step(controller, also)
+            positions.append((env.stopping[0], env.flight.states[0, 0:3].copy()))
+            return ended
+
+        env.flight.step = recording
+        *_, info, _ = episode(env, Braking(env))
+        returns.append(info["episode_return"][0])
+        if overrun == 1.0:
+            # From the end of the finish step (the last sample before the
+            # stopping ones) to the stop.
+            first = next(k for k, (stopping, _) in enumerate(positions) if stopping)
+            after = [p for _, p in positions[first - 1 :]]
+            flown = sum(np.linalg.norm(b - a) for a, b in pairwise(after))
+    assert flown > 0.5
+    assert returns[0] - returns[1] == pytest.approx(flown, abs=1e-9)

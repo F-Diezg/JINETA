@@ -233,6 +233,30 @@ class Agent:
         """The critic's values (m,) of raw observations (m, size)."""
         return self.value(self.normalizer(observations))[:, 0]
 
+    def widened(self, extra: int) -> "Agent":
+        """A copy that takes `extra` more numbers at the end of its observation
+        and ignores them until it learns otherwise: their weights in the first
+        layer of the policy and of the critic are zero, and the normaliser
+        starts them at mean 0, variance 1. It acts as this agent does on the
+        old part of the observation (to rounding: the matrix products have more
+        terms, all zero)."""
+        if extra < 1:
+            raise ValueError("extra must be >= 1")
+
+        def widen(network: MLP) -> MLP:
+            weights = [w.copy() for w in network.weights]
+            weights[0] = np.vstack([weights[0], np.zeros((extra, weights[0].shape[1]))])
+            return MLP(weights, [b.copy() for b in network.biases])
+
+        normalizer = RunningNormalizer(
+            self.normalizer.size + extra, self.normalizer.clip, self.normalizer.epsilon
+        )
+        normalizer.mean = np.concatenate([self.normalizer.mean, np.zeros(extra)])
+        normalizer.var = np.concatenate([self.normalizer.var, np.ones(extra)])
+        normalizer.count = self.normalizer.count
+        policy = GaussianPolicy(widen(self.policy.network), self.policy.log_std.copy())
+        return Agent(normalizer, policy, widen(self.value), dict(self.info))
+
     def save(self, path: str | Path) -> None:
         """Everything to one .npz file (`info`: numbers and strings only)."""
         arrays = {

@@ -1185,10 +1185,50 @@ it commands alone (3.45 s), but crashes at the first gate with both, and with
    crosses the last gate of the first course at 7.6 m/s, 2 m from the wall, and
    crashes about 0.3 s later: on this course a policy that must stop has to
    cross the last gate slower.
-8. **Training with realism and measuring it**: a recipe, and the policy
-   measured over many drawn conditions (success rate, lap time, closest
-   approach) against the phase 11 policy and the baseline in the same
-   conditions; a short training here, the long one on the author's computer.
+8. ✅ **Training with realism and measuring it** (`train(..., realism, stop,
+   judged_by)`, `evaluate_drawn`, `DrawnEvaluation`, `realism_label`;
+   `Agent.widened`; `picadero.baseline.BaselineAgent`;
+   `RewardWeights.overrun`; `examples/train_realism.py`; `policy_course
+   --lab`): a training can fly in any `Realism` and with the stop after the
+   finish; when the realism draws (sensors, randomised drones) the best agent is
+   the one whose mean action flies the most of `judged_by` drawn drones (seeded,
+   the same drones at every evaluation), then the fastest. An agent can be
+   widened for new inputs (the stop's flag) with zero weights, so it starts
+   flying as before. The baseline can fly through the environment's interface
+   (reading the estimate, with the latency) for a comparison in the same
+   conditions. After the finish every metre flown can cost `overrun` (a dense
+   hint to brake). Tests: a widened agent acts as before (1e-12) whatever the
+   new input, and saves; the realism's label; the evaluation on drawn drones
+   repeats by its seed (the phase 11 policy flies some of them); a short
+   training in the randomised lab with the stop writes its log ("k/n" drones)
+   and the agent knows what it was trained in; the baseline through the
+   interface finishes in 6.76 s and repeats its lap after a restart; the
+   overrun costs exactly the length flown after the finish (1e-9).
+   **Measured here** (Claude's workspace, 2 cores; 256 drones; continuing the
+   phase 11 policy in `RANDOMISED_LAB` with the 5 cm margin, learning rate 1e-4,
+   8 M steps, ~16 minutes each; measured on 256 drawn drones it never flew):
+
+   | | finish | lap |
+   |---|---|---|
+   | phase 11 policy | 10.2 % | 3.47 s |
+   | continued 8 M steps, no stop | 21.9 % | 3.51 s |
+   | continued 8 M steps, with the stop (overrun 1) | 0 % | |
+   | classical baseline (no stop) | 53.9 % | 6.69 s |
+   | classical baseline, latency alone drawn | 100 % | |
+
+   Training in the randomised lab doubles how many drawn drones the policy flies
+   in 8 M steps, but it is far from a pilot for every drone; with the stop the
+   continued policy reached the last gate but never learned to stop in 8 M
+   steps (crashes after the finish are all it saw: a hard exploration problem
+   on a course whose last gate is 1.5 m from a wall). The braking path
+   follower shows a stop is possible: at a cruise of 3 m/s it finishes and
+   stops (8.34 s); at 3.5 m/s it crashes after the finish. The baseline itself
+   flies only 54 % of the drawn drones, and one range explains it: drawn alone,
+   the rotor drag (x 0.5-2) leaves it 61 %, every other range 100 %
+   (loose end 46). A training from scratch with the stop was stopped at
+   3.8 M steps (its episodes were starting to end by the time limit, the
+   waiting habit of phase 11). The long trainings are the author's (loose end
+   45).
 9. **Close the phase**: this document and the README.
 
 ## 6. Decision log
@@ -1286,6 +1326,17 @@ Phase 12 (realism for the real drone):
   1.5 m from the north wall, so a lap that ends stopped must cross it slower
   than phase 11's policy (7.6 m/s) does. The rule is kept as it is: a real room
   has walls behind its finish line.
+- **Drawn drones judge the best agent** (step 8): with randomness in the
+  environment one lap says little, so the best agent is chosen on 64 drones
+  drawn with a fixed seed (the same 64 at every evaluation, so agents are
+  compared on equal terms), and measured at the end on 256 others (another
+  seed).
+- **A stop must be learned before it pays** (step 8, measured): until a policy
+  can stop, crossing the last gate leads to a crash (-5), worse than not
+  getting there; continuing the phase 11 policy with the stop it kept crashing
+  after the finish for 8 M steps. A dense hint (the overrun, 1 per metre flown
+  after the finish) did not change that in 8 M steps. The proposed recipe
+  learns the course in the randomised lab first, and the stop after.
 
 Phase 11 (the Iris learns the course):
 - **Gymnasium 1.4.0** (the newest, for Python 3.10-3.14) is an optional
@@ -3040,6 +3091,19 @@ Phase 6c (Kalman filter):
       ground effect over the top of an obstacle, nor the multirotor terms of the
       ground effect (neighbouring rotors, the body). A drone flying close to a
       ceiling, or one with small propellers, would need them.
+  45. The policies of phase 12 are not trained yet (step 8): in Claude's
+      workspace 8 M steps in the randomised lab took the phase 11 policy from
+      10 % to 22 % of drawn drones, and the stop after the finish was not
+      learned. The recipe for the author's computer (8 workers, 1 024 drones):
+      `python -m examples.train_realism --no-stop --workers 8 --drones 1024
+      --out runs/realism_course`, then `python -m examples.train_realism --start
+      runs/realism_course/margin/best.npz --refine 20e6 --workers 8 --drones
+      1024 --out runs/realism_stop`.
+  46. The randomisation ranges are chosen, and they compound (step 6): the
+      drawn thrust-to-weight ratio goes from 1.16 to 2.2 (median 1.61, the
+      profile's 1.9), and the rotor drag (x 0.5-2) alone leaves the classical
+      baseline 61 % of the drawn drones. Narrower ranges, or ranges measured on
+      the real drone (phase 14), would make the task easier and more honest.
 - Next: phase 12 (realism: motor lag, ground effect, sensor noise and delay,
   randomised parameters), whose step plan is drawn up with the author at its
   start. Proposed as its first step, to be decided then: a training spread over
