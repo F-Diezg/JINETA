@@ -25,7 +25,7 @@ their purpose (a course, a warehouse, an inspection route; a racing quadrotor, a
 heavier camera drone) and trains a drone for it, with the confidence that the
 simulated vehicle behaves like the real one.
 
-**Where it stands (end of phase 11):** the physics engine is built and validated
+**Where it stands (end of phase 12):** the physics engine is built and validated
 (phases 1–6c): integrators, rigid body, atmosphere and wind, a quadrotor with its
 cascaded autopilot, a fixed-wing aircraft with its own autopilot, and a Kalman
 filter. The indoor world is built (phase 8): rooms with obstacles and gates read
@@ -40,8 +40,16 @@ baseline's time with the same thrust and rate limits, never closer than 13 cm to
 anything; the reference engine replays the lap exactly. Random courses with
 gates and obstacles, a policy that sees the nearest surfaces, and training on
 many courses at once are built; a pilot for any course needs a longer training
-than one session here (loose end 40). Next: phase 12, realism for the real
-drone.
+than one session here (loose end 40). **Realism (phase 12):** the motors lag
+behind their commands, the floor pushes the rotors up (ground effect), the
+policy sees what the drone estimates from simulated motion capture and IMU, its
+commands arrive late, and every episode can draw a different drone (mass,
+inertia, thrust, drag, motor lag, latency); a lap counts only if the drone
+stops under control after it. Training uses every core. Measured: the phase 11
+policy is fragile (20 ms of latency with the motor lag crash it; 10 % of drawn
+drones finish), and the policies that cope with all of it still have to be
+trained on the author's computer (loose end 45). Next: phase 13, a 3D viewer of
+recorded flights.
 
 Name: *Jineta* is a working name until the project has its own.
 
@@ -52,10 +60,10 @@ code should be clear and every concept explained before it is used.
 
 - OS: Windows (two machines: laptop + desktop, synced via GitHub)
 - Python **3.13** in a `.venv` virtual environment
-- The author's computer has 8 cores; a training uses one (loose end 21). Several
-  trainings can run at once, one per PowerShell window, each started after
+- The author's computer has 8 cores. A training spreads its environment over
+  several with `--workers` (phase 12, `picadero.parallel`); start it after
   `$env:OPENBLAS_NUM_THREADS = 1` (otherwise NumPy's threads compete for the
-  cores).
+  cores). Several trainings can also run at once, one per PowerShell window.
 - Editor: VS Code (extensions: Python, Pylance, Ruff, GitLens)
 - Dependencies: `numpy`, `scipy`, `pyyaml`, `matplotlib`, `pytest`, `pytest-xdist`,
   `ruff`, and `gymnasium` (1.4.0, phase 11; only the adapter and its tests use
@@ -78,8 +86,8 @@ code should be clear and every concept explained before it is used.
   newline and fixes blank lines that are easy to lose when pasting code. In VS
   Code, "Files: Insert Final Newline" and format-on-save with the Ruff formatter
   do the same automatically.
-- The full test run, in one process, takes ~3.5 min (836 tests, in Claude's
-  workspace at the end of phase 11, whose speed changes from session to session);
+- The full test run, in one process, takes ~5 min (911 tests, in Claude's
+  workspace at the end of phase 12, whose speed changes from session to session);
   the slowest are PPO's regulator test (~14 s), the training tests (~5-15 s) and
   the batch tests that fly the first course against the reference (~5-11 s).
   `pytest -n auto` divides that by the number of cores.
@@ -226,8 +234,9 @@ code should be clear and every concept explained before it is used.
 - Dynamics expose `derivative(t, state) -> d(state)/dt`; integrators know nothing
   about physics.
 - **Batch engine (`escuadron`):** the states of n drones are the rows of an
-  (n, 13) array; every batch class takes n (`BatchMultirotor(params, n)`, ...), and
-  all its drones share one vehicle profile and one course. Each drone's memory
+  (n, 13) array (more columns with the motor lag); every batch class takes n
+  (`BatchMultirotor(params, n)`, ...), and all its drones share one vehicle
+  profile (each may have its own numbers, phase 12) and one course. Each drone's memory
   (integrals, landed, previous sample, collision, passes) is its own row, and
   `reset(drones)` takes all (None), a boolean mask (n,) or indices. No operation
   mixes rows (sums over rotors or feet are loops over them, 3 x 3 products are
@@ -271,6 +280,30 @@ code should be clear and every concept explained before it is used.
   velocity autopilot following the path through its gates (`picadero.baseline`,
   `sweep`): every copy with its settings changed by 2 % finishes, never within
   5 cm of anything. A policy is measured against it on the same course.
+- **Realism (`picadero.realism`, phase 12):** `CourseEnv(..., realism=
+  Realism(motor_lag, ground_effect, sensors, latency, randomization))`, every
+  effect off by default (then everything is as before, bit for bit); `LAB` is a
+  motion-capture lab with 20 ms of latency, `RANDOMISED_LAB` the same with
+  every drone drawn anew each episode. The reward and the referee always judge
+  the true flight. With the motor lag the state is 13 + one rotor speed per
+  rotor (after the body's 13; every module reads the body's elements by
+  position). A drone's own numbers (`BatchMultirotor.set_parameters`) are
+  arrays only once they differ, and drone i flies as the reference
+  `Multirotor(drone_params(i))`; the controller keeps the profile's numbers.
+  The policy sees the onboard estimate (`atalaya.estimator`) as a state of 13
+  in the rigid body's layout. Random draws (noise, drawn drones) come from the
+  environment's `np_random`, seeded by `reset(seed)`; `fly` resets with a seed.
+- **Stop after the finish (`picadero.finish`, phase 12):** with
+  `CourseEnv(..., stop=StopAfterFinish())` a lap counts only if the drone then
+  stops (speed, tilt and rates small) within 3 s without touching anything; the
+  lap time is still the crossing; the observation gets a flag (1 after the last
+  gate).
+- **Training on several processes (`picadero.parallel`, phase 12):** a
+  `ParallelEnv` joins one environment per worker process as one with all the
+  drones (the same numbers as one process); the environment is given as a
+  picklable `make_env(index)` (`CourseEnvPart`, `CourseSetEnvPart`), and a
+  script that starts workers keeps its work under `if __name__ ==
+  "__main__":`.
 - **The simulator never draws.** It produces data (states and events over time);
   visualisation is a separate layer that reads that data.
 - Type hints and docstrings on every public function.
@@ -292,11 +325,13 @@ jineta/
 │   │               #   crossings), collision.py (collisions in flight),
 │   │               #   referee.py (gates in order, lap time, end of a lap),
 │   │               #   course.py (course files)
-│   ├── jinete/     # vehicles: aero, multirotor, control (multirotor autopilot),
-│   │               #   contact (landing gear on the floor), hitbox (collision
-│   │               #   spheres), fixed_wing, propulsion, trim, stability,
+│   ├── jinete/     # vehicles: aero, multirotor (with motor lag), control
+│   │               #   (multirotor autopilot), contact (landing gear on the
+│   │               #   floor), hitbox (collision spheres), proximity (ground
+│   │               #   effect), fixed_wing, propulsion, trim, stability,
 │   │               #   fixed_wing_control, profiles
-│   ├── atalaya/    # estimation: kalman.py (later: onboard sensors)
+│   ├── atalaya/    # estimation: kalman.py, estimator.py (sensors: motion
+│   │               #   capture, IMU; the onboard estimate, many drones)
 │   ├── escuadron/  # batch engine: quaternion, rigid_body, multirotor, contact,
 │   │               #   control (whole autopilot, rate pilot), collision,
 │   │               #   referee, simulation (BatchFlight: n drones flying laps,
@@ -307,7 +342,9 @@ jineta/
 │                   #   reward (and end of an episode), env (CourseEnv), baseline
 │                   #   (the classical path follower and its sweep),
 │                   #   gymnasium_adapter, training (train, evaluate), courses
-│                   #   (random courses, many courses at once)
+│                   #   (random courses, many courses at once), parallel
+│                   #   (workers), realism, randomization, finish (stop after
+│                   #   the last gate)
 ├── tests/
 ├── courses/        # course files (YAML)
 ├── policies/       # trained policies kept in the repository (.npz)
@@ -320,8 +357,6 @@ jineta/
 Planned (each package arrives with its phase; names are proposals, settled when the
 phase starts):
 
-- `atalaya/` grows **onboard sensors** (IMU, position from a motion-capture system
-  or a camera) for the realism phase (12).
 - a **visualisation layer** outside `jineta/` (phase 13), which reads recorded
   flights and never runs the physics.
 
@@ -349,7 +384,7 @@ nothing imports `picadero`.
 | 9 | Fast batch engine (many drones at once), checked against the reference | ✅ Done |
 | 10 | Training environment (observation, action, reward) + classical baseline | ✅ Done |
 | 11 | **MVP:** the Iris learns the course (reinforcement learning) | ✅ Done |
-| 12 | Realism for the real drone: motor lag, ground effect, sensor noise, latency, randomised parameters | 🔄 In progress |
+| 12 | Realism for the real drone: motor lag, ground effect, sensor noise, latency, randomised parameters | ✅ Done |
 | 13 | 3D viewer of recorded flights | ⏳ |
 | 14 | Towards the real drone: its profile, PX4 software-in-the-loop, offboard interface | ⏳ |
 | 15 | Builder: any user defines the environment and the drone profile | ⏳ |
@@ -938,7 +973,17 @@ risking the next gate (loose end 38).
    end 40.
 7. ✅ **Close the phase**: this document and the README.
 
-**Phase 12 — in progress.** Realism for the real drone.
+**Phase 12 — done.** Realism for the real drone: training on every core
+(processes), the motor lag (rotor speeds in the state), the ground effect, a
+motion-capture lab's sensors with an onboard estimator, the latency of the
+commands, drones drawn anew every episode (each equal to the reference engine
+with its own numbers), and a stop after the finish; every effect off by
+default, so everything of before is unchanged bit for bit, and each measured
+on the phase 11 policy (it is fragile: 10 % of drawn drones). A first training
+in the randomised lab doubled that in 8 M steps; the stop was not learned here;
+the long trainings are the author's (loose end 45). Changed from the plan with
+the author's knowledge: no ceiling effect (loose end 44). Tests: 911 (with
+Gymnasium), ruff clean.
 
 Plan agreed with the author at the start of the phase (each step: tests green,
 ruff clean, commit + push). Measured before planning (a throwaway prototype,
@@ -1229,7 +1274,7 @@ it commands alone (3.45 s), but crashes at the first gate with both, and with
    3.8 M steps (its episodes were starting to end by the time limit, the
    waiting habit of phase 11). The long trainings are the author's (loose end
    45).
-9. **Close the phase**: this document and the README.
+9. ✅ **Close the phase**: this document and the README.
 
 ## 6. Decision log
 
@@ -2485,14 +2530,29 @@ Phase 6c (Kalman filter):
 - `jineta/atalaya/kalman.py` — `predict`, `update` (returns the innovation and its
   covariance too), `nees`, `constant_velocity_transition`,
   `white_noise_acceleration`, `piecewise_white_acceleration`, `alpha_beta_gains`.
+- `jineta/atalaya/estimator.py` — `Sensors` (IMU noise densities, biases, motion
+  capture noise and delay; validated), `MOCAP_LAB`, `specific_force(previous,
+  states, dt)`, `BatchEstimator(sensors, n, dt)` (`reset(drones, states, rng)`,
+  `step(previous, states, rng)` → the estimate (n, 13), `estimate`, `alpha`,
+  `beta`, `delay`).
+- `jineta/jinete/proximity.py` — `GroundEffect(floor_z, min_height)`,
+  `ground_effect_factor(radius, height, thrust, inplane_speed, density,
+  min_height)`. `Multirotor(..., motor_lag, ground_effect)` (`state_size`,
+  `initial_state`, `rotor_speeds`), `motor_derivative`, `lag_derivative`;
+  `MultirotorParams.motor_time_constant_up` / `_down`, `propeller_radius`.
 - `jineta/escuadron/` — the batch engine (conventions in section 3):
   - `quaternion.py` — `to_matrix`, `derivative`, `normalize`, `multiply`,
-    `conjugate`, `to_rotation_vector`, `from_matrix` on stacks (..., 4).
+    `conjugate`, `to_rotation_vector`, `from_rotation_vector`, `from_matrix` on
+    stacks (..., 4).
   - `rigid_body.py` — `BatchRigidBody(mass, inertia, force_moment)` with
-    `derivative(t, states)` (n, 13); `BatchForceMomentModel`, `zero_force_moment`,
+    `derivative(t, states)` (n, 13 or more), `set_bodies` (one mass and inertia
+    per body); `BatchForceMomentModel`, `zero_force_moment`,
     `normalize_attitudes`.
-  - `multirotor.py` — `BatchMultirotor(params, n, density, wind, contact)`:
-    `rotor_speed_command` (n, rotors), `derivative`, `force_moment`.
+  - `multirotor.py` — `BatchMultirotor(params, n, density, wind, contact,
+    motor_lag, ground_effect)`: `rotor_speed_command` (n, rotors),
+    `derivative`, `force_moment`, `state_size`, `initial_state`,
+    `rotor_speeds`, `set_parameters(drones, **values)`, `drone_params(i)`,
+    `per_drone`; `PER_DRONE`.
   - `contact.py` — `contact_forces(gear, states, floor_z)`,
     `BatchGroundContact(gear, floor_z)`.
   - `control.py` — `rotor_speeds_for_wrench`, `BatchRateController`,
@@ -2514,8 +2574,9 @@ Phase 6c (Kalman filter):
     `reset(drones)`; `forward_crossings(gate, start, end)`; `batch_referee(course,
     sphere_centers, sphere_radii, floor_points, n)`.
   - `simulation.py` — `BatchFlight(vehicles, referee, dt, start)`: `states`
-    (n, 13), `clock` (n,), `step(controller)` (returns the laps that ended in that
-    step), `reset(drones, start)`; `BatchController`.
+    (n, state size), `clock` (n,), `step(controller, also=None)` (returns the
+    laps that ended in that step; `also`: drones whose lap ended that fly on),
+    `reset(drones, start)`; `BatchController`.
 - `jineta/picadero/` — the training layer (conventions in section 3):
   - `spaces.py` — `BoxSpace(low, high)` (float32; `shape`, `contains`,
     `sample(rng, n)`), `ActionLimits(thrust_min, thrust_max, max_rate)`
@@ -2523,19 +2584,31 @@ Phase 6c (Kalman filter):
     `autopilot_envelope(params, gains)`, `opening_points(gate)`,
     `closest_points(shape, points)`, `Surroundings(room, shapes, nearest=4)`
     (`size`, `points(positions)`, callable `(positions, to_body)`),
-    `Observer(gates, lookahead=2, surroundings=None)` (`size`, `space`,
+    `Observer(gates, lookahead=2, surroundings=None, finish_flag=False)`
+    (`size`, `space`,
     `targets(next_gate)`, callable `(states, next_gate, previous_action)`);
     `ACTION_SIZE`.
-  - `reward.py` — `RewardWeights(progress=1, gate=1, crash=5, time=0)`
-    (`total`), `RewardTerms` (progress, gate, crash, time), `Reward(gates,
+  - `reward.py` — `RewardWeights(progress=1, gate=1, crash=5, time=0, stop=1,
+    overrun=0)` (`total`), `RewardTerms` (progress, gate, crash, time), `Reward(gates,
     weights, dt)` (`terms(...)`, callable), `episode_end(status)` →
     (terminated, truncated).
   - `env.py` — `CourseEnv(course, n=1, profile, limits, weights, dt=0.01,
-    action_repeat=2, lookahead=2, nearest=0, margin=0)`: `reset(seed,
-    options)`, `step(action)` (info: `final_observation`, `final_state`,
-    `status`, `lap_time`, `episode_return`, `episode_steps`),
-    `observation_space`, `action_space`, `step_time`, `np_random`; `flight`,
-    `pilot`, `observer`, `reward`, `start`.
+    action_repeat=2, lookahead=2, nearest=0, margin=0, realism=Realism(),
+    stop=None)`: `reset(seed, options)`, `step(action)` (info:
+    `final_observation`, `final_state`, `status`, `lap_time`,
+    `episode_return`, `episode_steps`), `close()`, `observation_space`,
+    `action_space`, `step_time`, `np_random`; `flight`, `pilot`, `observer`,
+    `reward`, `start`, `vehicles`, `estimator`, `delays`, `ring`, `stopping`,
+    `outcome`.
+  - `realism.py` — `Realism(motor_lag, ground_effect, sensors, latency,
+    randomization)` (`latency_steps`, `max_latency_steps`), `IDEAL`, `LAB`,
+    `RANDOMISED_LAB`.
+  - `randomization.py` — `Randomization` (ranges; `draw(params, rng, k)` →
+    the drones' numbers and latencies, `max_latency`), `NONE`.
+  - `finish.py` — `StopAfterFinish(window, speed, tilt, rate)` (`stopped`).
+  - `parallel.py` — `ParallelEnv(make_env, workers)`, `SerialEnv`,
+    `make_parallel`, `CourseEnvPart`, `CourseSetEnvPart`, `worker_seed`,
+    `WorkerError`.
   - `baseline.py` — `BaselineSettings(cruise, lateral_accel, braking_accel,
     lookahead, approach, takeoff_height)` (one value or one per drone),
     `GatePath(points)` (`through(course, approach, takeoff_height)`, `point_at`,
@@ -2543,17 +2616,20 @@ Phase 6c (Kalman filter):
     (`commands(states)`, `speed_limit(s)`, `reset(drones)`), `BaselinePilot`,
     `baseline_flight`, `fly_baseline` (statuses, lap times, clearances, flight),
     `sweep(course, ...)` → `SweepResult(best, lap_time, tried, robust,
-    lap_times)`.
+    lap_times)`, `BaselineAgent(env, settings)` (the baseline through an
+    environment's interface, `act`).
   - `gymnasium_adapter.py` — `CourseGymEnv(course, **env)` (`gymnasium.Env`,
     one drone), `CourseVectorEnv(course, n, **env)` (`VectorEnv`, same-step
     autoreset), `to_box`, `EPISODE_KEYS`. Needs Gymnasium; nothing imports it.
-  - `training.py` — `fly(agent, env, rng=None, record=False)`,
-    `Evaluation`, `evaluate(agent, course, n, seed, **env)`,
+  - `training.py` — `fly(agent, env, rng=None, record=False, seed=0)`,
+    `Evaluation`, `evaluate(agent, course, n, seed, **env)`, `DrawnEvaluation`,
+    `evaluate_drawn(agent, course, n, seed, **env)`, `realism_label`,
     `CourseSetEvaluation`, `evaluate_courses(agent, courses, **env)`,
     `run_training(env, steps, out, judge, ...)`, `train(course, steps, out, n,
-    seed, settings, weights, evaluate_every, agent, nearest, margin, report)`,
+    seed, settings, weights, evaluate_every, agent, nearest, margin, report,
+    workers, realism, stop, judged_by)`,
     `random_courses(count, seed)`, `train_random(steps, out, k, n,
-    renew_every, nearest, ...)`; `TRAINING_WEIGHTS` (time 0.25),
+    renew_every, nearest, ..., workers)`; `TRAINING_WEIGHTS` (time 0.25),
     `TRAINING_MARGIN` (0.05), `LOG_COLUMNS`, `VALIDATION_SEED` (1000),
     `TEST_SEED` (2000).
   - `courses.py` — `CourseRanges` (what a random course may be),
@@ -2571,7 +2647,7 @@ Phase 6c (Kalman filter):
     `gaussian_log_prob_gradients`, `gaussian_entropy`, `GaussianPolicy(network,
     log_std)` (`create`, `parameters`, `mean`, `sample`, `entropy`),
     `Agent(normalizer, policy, value, info)` (`create`, `act`, `values`,
-    `save`, `load`).
+    `widened`, `save`, `load`).
   - `ppo.py` — `PPOSettings` (rollout_steps 64, epochs 5, minibatch 4096,
     gamma 0.99, gae_lambda 0.95, clip 0.2, learning rate 3e-4 annealed,
     max_grad_norm 0.5, entropy 0, hidden (64, 64), log_std -0.5), `gae`,
@@ -2579,7 +2655,7 @@ Phase 6c (Kalman filter):
     (`collect`, `update`, `learn(steps, callback)`, `steps`, `agent`).
 - `policies/first_course.npz` — the policy of phase 11 on the first course
   (3.235 s; trained on the author's computer).
-- Tests (836 passing with Gymnasium installed, 830 and one skipped module
+- Tests (911 passing with Gymnasium installed, 905 and one skipped module
   without it; ruff check + ruff format clean):
   - integrators (2): RK4 exact on free fall; Euler's error shrinks with dt.
   - rotation (5): 90° about z maps North to East; proper orthogonal matrix; steady
@@ -2902,6 +2978,44 @@ Phase 6c (Kalman filter):
     baseline finishes six random courses; many courses fly as their own
     environments until renewed, then truncated with their last observation;
     seeds repeat; bad input.
+  - parallel (6): worker seeds; two workers fly as one environment with all
+    the drones (bit for bit, restarts included); random courses in workers as
+    in one process; errors in a worker reach the main process; bad input; a
+    training is the same with one worker and with two.
+  - motors (13): the Iris's time constants; the derivative by hand; the exact
+    discrete and the continuous response, up and down; hover an equilibrium;
+    the forces from the state's speeds; without the lag as before; the batch
+    against the reference (300 drones) and an episode against the reference
+    engine; the rate loop stays stable; the phase 11 policy with the lag; bad
+    input.
+  - ground effect (10): the factor by hand; the height where fixed rotor speeds
+    hold the Iris; moving fast matters less; a tilted drone levelled; the batch
+    against the reference (with and without the lag); stopped rotors as
+    without it; an episode against the reference engine; the phase 11 policy;
+    bad input.
+  - estimator (11): the specific force by hand; rotation vectors to
+    quaternions; perfect sensors give the true state (and close with the
+    delay); frames exactly `delay` late; the lab's spreads against the filter's
+    theory (and the optimal gain); the lab along the policy's lap; biases;
+    restarts; seeds; bad input.
+  - latency and sensing (11): the latency against the reference engine with
+    delayed commands (30 ms, 20 ms with the lag); restarts clear the commands on
+    their way; perfect sensors see the true state; the observation from the
+    estimate; the phase 11 policy with each effect; the switches.
+  - randomisation (11): every drawn drone the reference with its numbers; the
+    profile's numbers one by one change nothing; alone or in a batch; draws in
+    their ranges and repeated; no randomisation is the environment of before; a
+    drawn drone's episode against the reference engine (two seeds); a restart
+    draws only that drone; each drone's latency; bad numbers; the phase 11
+    policy on drawn drones.
+  - stop after the finish (8): when a drone is stopped; a drone that stops
+    (lap time, rewards, flag); one that runs out of time; one that crashes
+    after the finish (against the reference engine); restarts beside another
+    drone; the observation's size; the phase 11 policy does not stop; the
+    overrun costs the length flown.
+  - training with realism (5): a widened agent acts as before; the realism's
+    label; the evaluation on drawn drones; a short training in the randomised
+    lab with the stop; the baseline through the interface.
 - Examples (all run, `python -m examples.<name>`):
   - `projectile_drag.py` — vacuum vs drag.
   - `density_comparison.py` — constant vs exponential vs ISA density (~1.7 km apogee:
@@ -2931,9 +3045,17 @@ Phase 6c (Kalman filter):
   - `train_course.py` — trains the Iris on the first course in two stages
     (without and with the 5 cm margin) and measures it against the baseline.
   - `policy_course.py` — flies a trained policy (by default
-    `policies/first_course.npz`) and draws its lap with the baseline's.
+    `policies/first_course.npz`; with its stop if it was trained with one;
+    `--lab` in the lab) and draws its lap with the baseline's.
   - `train_random.py` — trains on random courses and compares the policy with
-    the baseline swept on 20 test courses (`--compare` for an agent).
+    the baseline swept on 20 test courses (`--compare` for an agent;
+    `--workers`).
+  - `parallel_speed.py` — the environment's speed with 1, 2, 4, 8 workers.
+  - `realism_policy.py` — a policy (by default phase 11's) flown with each
+    effect of phase 12 and all of them.
+  - `train_realism.py` — trains in the randomised lab, with the stop after the
+    finish (or `--no-stop`), from scratch or from an agent (`--start`), and
+    measures it on drawn drones against the phase 11 policy and the baseline.
 - Physics note (intermediate-axis instability, torque-free): spin Ω about the
   intermediate axis grows any tiny perturbation at rate
   `λ = Ω·sqrt((I2−I1)(I3−I2)/(I1·I3))`. The example perturbation (0.01 rad/s on p
@@ -2957,15 +3079,14 @@ Phase 6c (Kalman filter):
      velocity step (one rotor at 0, another at the maximum). A smarter strategy
      (give up yaw before roll and pitch, as PX4 does) when it starts to matter —
      an aggressive racing policy will saturate often (phase 11).
-  5. Motor dynamics (first-order lag, 12.5 ms up / 25 ms down on the Iris) not
-     modelled. Needed before a policy can move to a real drone (phase 12); it adds
-     one state per rotor.
+  5. (Closed in phase 12, step 2: `Multirotor(..., motor_lag=True)`, the rotor
+     speeds in the state.)
   6. Body drag is the weakest number: generic PX4 ballistic coefficient, and a
      placeholder for the vertical axis. The resulting top speed (20.7 m/s at 45°)
      is plausible but not validated against any Iris measurement.
   7. Rotor effects left out: axial-inflow thrust loss, rolling moment, gyroscopic
-     moments; rotor inertia (1–3 %) left out of the Iris inertia. Ground and
-     ceiling effect (more thrust close to a surface) matter indoors (phase 12).
+     moments; rotor inertia (1–3 %) left out of the Iris inertia. (The ground
+     effect came in phase 12, step 3; the ceiling effect is loose end 44.)
   8. (Closed in phase 10: the policy acts at 50 Hz, `action_repeat` = 2 over the
      100 Hz rate loop.)
   9. An agile multirotor profile (thrust-to-weight around 5–10, as data with open
@@ -3074,10 +3195,10 @@ Phase 6c (Kalman filter):
       courses after 23 M steps): it needs more experience, and more courses per
       update, than Claude's workspace gives in a session; `python -m examples.train_random` on the
       author's computer (8 courses of 128 drones) is the next measurement.
-  41. The first course's policy flies hard (8.6 m/s, up to 84.6° of tilt) with
-      instantaneous motors (loose end 5), a perfect state and no delay: what it
-      does may not survive the realism of phase 12. Its margin (13 cm) and its
-      100 % of noisy laps are a start, not a proof.
+  41. (Measured in phase 12: the first course's policy does not survive the
+      realism. 20 ms of latency with the motor lag, or 40 ms alone, crash it;
+      10 % of the drawn drones of the randomised lab finish; it crashes after
+      the finish. It stays in the repository as phase 11's result.)
   42. A training repeats only on the same computer (the network's products
       round differently elsewhere, and a training amplifies it): a policy is
       kept as a file, and its regression tests allow for rounding. Measured: the
@@ -3104,15 +3225,14 @@ Phase 6c (Kalman filter):
       profile's 1.9), and the rotor drag (x 0.5-2) alone leaves the classical
       baseline 61 % of the drawn drones. Narrower ranges, or ranges measured on
       the real drone (phase 14), would make the task easier and more honest.
-- Next: phase 12 (realism: motor lag, ground effect, sensor noise and delay,
-  randomised parameters), whose step plan is drawn up with the author at its
-  start. Proposed as its first step, to be decided then: a training spread over
-  the author's 8 cores (one batch per process; estimated, not measured, x2-3 for
-  one course and x3-5 for random courses, since the network's update stays in
-  one process), because every step of phase 12 changes the physics and means
-  training again. The random-course training (loose end 40) is worth running
-  after that. New chat in the Project: "Seguimos con Jineta, fase 12:
-  realismo".
+- Next, before phase 13, on the author's computer: measure the speed of the
+  workers (`python -m examples.parallel_speed --drones 1024 --workers 1 2 4 8`)
+  and run the trainings of loose end 45 (the randomised lab without the stop,
+  then the stop); decide whether to narrow the randomisation ranges first (loose
+  end 46). The policy that comes out of them, if it flies the drawn drones, is
+  kept in `policies/` like phase 11's. Then phase 13 (3D viewer of recorded
+  flights), whose step plan is drawn up with the author at its start. New chat
+  in the Project: "Seguimos con Jineta, fase 13: visor 3D".
 
 ## 8. Working with Claude
 
