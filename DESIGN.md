@@ -424,6 +424,23 @@ What each phase is meant to deliver:
   battery sag, sensor noise and delay, and the vehicle's parameters randomised
   during training so the policy does not depend on numbers that are only
   approximately right.
+- **13 — 3D viewer.** A separate program (outside `jineta/`, it never runs the
+  physics) that shows recorded flights in 3D: the room, the gates, the
+  obstacles and the drone with its attitude. Proposed by the author at the end
+  of phase 12, to be planned with him at the start of the phase: **see a policy
+  learn, live and afterwards.** The training only writes data: every so many
+  updates it records a few whole laps of the agent of that moment (the laps its
+  evaluation already flies in the main process: the mean action, and some with
+  the policy's noise) to a file in its run folder. The viewer watches that file
+  and draws each new lap as it arrives (live, while training goes on; if the
+  viewer is slow or closed, the training does not notice), or replays the whole
+  file afterwards; the last laps stay drawn as fading trails, so the change from
+  crashing to finishing shows; beside them, the numbers that can be averaged
+  (share of laps finished, lap time, crashes). Trajectories are not averaged: the
+  average of two paths, one into the pillar and one past it, is a path nobody
+  flew. Together with agents saved every so often (loose end 43), any agent of a
+  training can be flown again and shown. A training started before this exists
+  records nothing of it.
 - **14 — Towards the real drone.** The 3DR Iris is long discontinued and too big
   and slow for a racing course (1.5 kg, thrust-to-weight 1.9), so the real vehicle
   will be a current PX4 quadrotor (or a smaller research platform), added as a
@@ -3206,7 +3223,9 @@ Phase 6c (Kalman filter):
       computer; one training is one sample.
   43. Training saves only the best and the last agent. To show how a policy
       learns (the 3D viewer of phase 13: from crashing to a clean lap), a
-      training should keep an agent every so often (e.g. every 1 M steps).
+      training should keep an agent every so often (e.g. every 1 M steps). With
+      the laps recorded during training (section 5, phase 13) it is how the
+      viewer shows learning.
   44. The ceiling effect is not modelled (phase 12, step 3: no open model with
       coefficients for a rotor of the Iris's size could be checked), nor the
       ground effect over the top of an obstacle, nor the multirotor terms of the
@@ -3231,7 +3250,10 @@ Phase 6c (Kalman filter):
   then the stop); decide whether to narrow the randomisation ranges first (loose
   end 46). The policy that comes out of them, if it flies the drawn drones, is
   kept in `policies/` like phase 11's. Then phase 13 (3D viewer of recorded
-  flights), whose step plan is drawn up with the author at its start. New chat
+  flights, live during a training and afterwards: section 5), whose step plan is
+  drawn up with the author at its start. The Project's copy of this document was
+  not updated at the end of phase 12 (the tool could not read the whole file in
+  one go): the new chat replaces it with the repository's first. New chat
   in the Project: "Seguimos con Jineta, fase 13: visor 3D".
 
 ## 8. Working with Claude
