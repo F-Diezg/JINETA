@@ -49,6 +49,7 @@ from jineta.escuadron.referee import CRASHED, batch_referee
 from jineta.escuadron.simulation import BatchFlight
 from jineta.jinete.contact import resting_height
 from jineta.jinete.profiles import MULTIROTOR_PROFILES, MultirotorProfile
+from jineta.jinete.proximity import GroundEffect
 from jineta.picadero.realism import Realism
 from jineta.picadero.reward import Reward, RewardWeights, episode_end
 from jineta.picadero.spaces import (
@@ -123,6 +124,7 @@ class CourseEnv:
             self.n,
             contact=BatchGroundContact(gear),
             motor_lag=self.realism.motor_lag,
+            ground_effect=GroundEffect() if self.realism.ground_effect else None,
         )
         referee = batch_referee(
             self.course, hitbox.centers, hitbox.radii + self.margin, gear.points, self.n

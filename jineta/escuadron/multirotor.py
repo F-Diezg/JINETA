@@ -13,7 +13,8 @@ those of the reference vehicle, term by term and in the same order:
 
 With `motor_lag` the rotor speeds are part of the states, after the bodies' 13
 columns (states (N, 13 + rotors)), and follow their commands with the profile's
-first-order lag, as in the reference.
+first-order lag, as in the reference. With a `ground_effect` each rotor's
+thrust is multiplied by its factor (`jinete.proximity`), as in the reference.
 
 The sums over the rotors are written as a loop over the rotors (four for the Iris)
 in which each operation acts on all the drones: the rotors are added one after the
@@ -36,6 +37,7 @@ from jineta.core.vector import cross, matvec
 from jineta.escuadron import quaternion
 from jineta.escuadron.rigid_body import BatchForceMomentModel, BatchRigidBody
 from jineta.jinete.multirotor import MultirotorParams, motor_derivative
+from jineta.jinete.proximity import GroundEffect, ground_effect_factor
 
 
 @dataclass
@@ -52,12 +54,15 @@ class BatchMultirotor:
     wind: WindModel = no_wind
     contact: BatchForceMomentModel | None = None
     motor_lag: bool = False
+    ground_effect: GroundEffect | None = None
     rotor_speed_command: np.ndarray = field(init=False)
     body: BatchRigidBody = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.n < 1:
             raise ValueError("n (number of drones) must be >= 1")
+        if self.ground_effect is not None and not self.params.propeller_radius > 0.0:
+            raise ValueError("a ground effect needs the propeller radius")
         if self.motor_lag and not (
             self.params.motor_time_constant_up > 0.0
             and self.params.motor_time_constant_down > 0.0
@@ -114,19 +119,31 @@ class BatchMultirotor:
         # Rotor thrust and reaction torque, through the mixer: the wrench
         # [T, Mx, My, Mz] = A @ thrusts, adding the rotors one after the other.
         thrusts = density_ratio[:, None] * params.thrust_coefficient * speeds**2
+        rotation = quaternion.to_matrix(states[:, 6:10])
+        air_ned = states[:, 3:6] - self.wind(t, states[:, 0:3])
+        airspeed = matvec(rotation.swapaxes(-1, -2), air_ned)
+        omega = states[:, 10:13]
         allocation = params.allocation
-        wrench = thrusts[:, 0:1] * allocation[:, 0]
+        if self.ground_effect is None:
+            lifts = thrusts
+        else:
+            lifts = thrusts * self._ground_factors(
+                states, rotation, thrusts, airspeed, rho
+            )
+        wrench = lifts[:, 0:1] * allocation[:, 0]
         for i in range(1, len(params.rotors)):
-            wrench = wrench + thrusts[:, i : i + 1] * allocation[:, i]
+            wrench = wrench + lifts[:, i : i + 1] * allocation[:, i]
+        if self.ground_effect is not None:
+            # The reaction torques are those free of the floor.
+            torque = thrusts[:, 0] * allocation[3, 0]
+            for i in range(1, len(params.rotors)):
+                torque = torque + thrusts[:, i] * allocation[3, i]
+            wrench[:, 3] = torque
         force = np.zeros((n, 3))
         force[:, 2] = -wrench[:, 0]
         moment = wrench[:, 1:4].copy()
 
         # Rotor drag at each hub, opposing the in-plane airspeed of the hub.
-        rotation = quaternion.to_matrix(states[:, 6:10])
-        air_ned = states[:, 3:6] - self.wind(t, states[:, 0:3])
-        airspeed = matvec(rotation.swapaxes(-1, -2), air_ned)
-        omega = states[:, 10:13]
         drag_factor = -density_ratio * params.rotor_drag_coefficient
         for i, rotor in enumerate(params.rotors):
             hub_airspeed = airspeed + cross(omega, rotor.position)
@@ -157,3 +174,34 @@ class BatchMultirotor:
             moment = moment + contact_moment
 
         return force, moment
+
+    def _ground_factors(
+        self,
+        states: np.ndarray,
+        rotation: np.ndarray,
+        thrusts: np.ndarray,
+        airspeed: np.ndarray,
+        rho: np.ndarray,
+    ) -> np.ndarray:
+        """Each rotor's ground-effect factor (n, rotors), as the reference's."""
+        omega = states[:, 10:13]
+        heights = np.zeros_like(thrusts)
+        speeds = np.zeros_like(thrusts)
+        for i, rotor in enumerate(self.params.rotors):
+            r = rotor.position
+            hub_z = states[:, 2] + (
+                rotation[:, 2, 0] * r[0]
+                + rotation[:, 2, 1] * r[1]
+                + rotation[:, 2, 2] * r[2]
+            )
+            heights[:, i] = self.ground_effect.floor_z - hub_z
+            hub_airspeed = airspeed + cross(omega, r)
+            speeds[:, i] = np.hypot(hub_airspeed[:, 0], hub_airspeed[:, 1])
+        return ground_effect_factor(
+            self.params.propeller_radius,
+            heights,
+            thrusts,
+            speeds,
+            rho[:, None],
+            self.ground_effect.min_height,
+        )

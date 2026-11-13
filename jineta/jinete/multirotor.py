@@ -26,11 +26,13 @@ from dataclasses import dataclass, field
 import numpy as np
 import numpy.typing as npt
 
+from jineta.core import quaternion
 from jineta.core.environment import DensityModel, WindModel, no_wind, sea_level_density
 from jineta.core.inertia import inertia_tensor
 from jineta.core.rigid_body import ForceMomentModel, RigidBody
 from jineta.core.vector import cross
 from jineta.jinete.aero import body_airspeed
+from jineta.jinete.proximity import GroundEffect, ground_effect_factor
 
 
 @dataclass(frozen=True)
@@ -82,6 +84,8 @@ class MultirotorParams:
     motor_time_constant_up, motor_time_constant_down: the first-order lag of a
         rotor's speed behind its command, speeding up and slowing down [s] (0:
         not known; a vehicle with `motor_lag` needs both > 0).
+    propeller_radius: [m] (0: not known; a vehicle with a ground effect needs
+        it).
     """
 
     mass: float  # [kg]
@@ -95,6 +99,7 @@ class MultirotorParams:
     reference_density: float = 1.225  # ISA sea level
     motor_time_constant_up: float = 0.0
     motor_time_constant_down: float = 0.0
+    propeller_radius: float = 0.0
     allocation: np.ndarray = field(init=False, repr=False)
     allocation_inv: np.ndarray = field(init=False, repr=False)
 
@@ -115,6 +120,8 @@ class MultirotorParams:
             self.motor_time_constant_up >= 0.0 and self.motor_time_constant_down >= 0.0
         ):
             raise ValueError("motor time constants must be >= 0")
+        if not self.propeller_radius >= 0.0:
+            raise ValueError("propeller_radius must be >= 0")
         body_drag_area = np.array(self.body_drag_area, dtype=float)
         if body_drag_area.shape != (3,) or np.any(body_drag_area < 0.0):
             raise ValueError(
@@ -198,6 +205,11 @@ class Multirotor:
     (`state_size` = 13 + rotors), integrated with the rest, and the forces use
     them instead of the command. `initial_state` adds them to a body state.
 
+    Ground effect. With a `ground_effect` (`jinete.proximity.GroundEffect`) each
+    rotor's thrust is multiplied by its Cheeseman-Bennett factor, from the
+    height of its hub above the floor (see `jinete.proximity`); the reaction
+    torques are left as they are free of the floor.
+
     Forces and moments in body axes (gravity is added by the RigidBody):
     - thrust and reaction torque of each rotor, through the mixer, scaled with
       rho / reference_density (T = C_T * rho * n^2 * D^4 from propeller theory);
@@ -217,10 +229,13 @@ class Multirotor:
     wind: WindModel = no_wind
     contact: ForceMomentModel | None = None
     motor_lag: bool = False
+    ground_effect: GroundEffect | None = None
     rotor_speed_command: np.ndarray = field(init=False)
     body: RigidBody = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        if self.ground_effect is not None and not self.params.propeller_radius > 0.0:
+            raise ValueError("a ground effect needs the propeller radius")
         if self.motor_lag and not (
             self.params.motor_time_constant_up > 0.0
             and self.params.motor_time_constant_down > 0.0
@@ -279,13 +294,18 @@ class Multirotor:
 
         # Rotor thrust and reaction torque, through the mixer.
         thrusts = density_ratio * params.thrust_coefficient * speeds**2
-        total_thrust, mx, my, mz = params.wrench(thrusts)
+        airspeed = body_airspeed(t, state, self.wind)
+        omega = state[10:13]
+        if self.ground_effect is None:
+            total_thrust, mx, my, mz = params.wrench(thrusts)
+        else:
+            lifts = thrusts * self._ground_factors(state, thrusts, airspeed, rho)
+            total_thrust, mx, my, _ = params.wrench(lifts)
+            mz = params.wrench(thrusts)[3]
         force = np.array([0.0, 0.0, -total_thrust])
         moment = np.array([mx, my, mz])
 
         # Rotor drag at each hub, opposing the in-plane airspeed of the hub.
-        airspeed = body_airspeed(t, state, self.wind)
-        omega = state[10:13]
         for rotor, speed in zip(params.rotors, speeds, strict=True):
             hub_airspeed = airspeed + cross(omega, rotor.position)
             in_plane = np.array([hub_airspeed[0], hub_airspeed[1], 0.0])
@@ -303,3 +323,32 @@ class Multirotor:
             moment = moment + contact_moment
 
         return force, moment
+
+    def _ground_factors(
+        self,
+        state: np.ndarray,
+        thrusts: np.ndarray,
+        airspeed: np.ndarray,
+        rho: float,
+    ) -> np.ndarray:
+        """Each rotor's ground-effect factor (see `jinete.proximity`)."""
+        rotation = quaternion.to_matrix(state[6:10])
+        omega = state[10:13]
+        heights, speeds = [], []
+        for rotor in self.params.rotors:
+            hub_z = state[2] + (
+                rotation[2, 0] * rotor.position[0]
+                + rotation[2, 1] * rotor.position[1]
+                + rotation[2, 2] * rotor.position[2]
+            )
+            heights.append(self.ground_effect.floor_z - hub_z)
+            hub_airspeed = airspeed + cross(omega, rotor.position)
+            speeds.append(np.hypot(hub_airspeed[0], hub_airspeed[1]))
+        return ground_effect_factor(
+            self.params.propeller_radius,
+            np.array(heights),
+            thrusts,
+            np.array(speeds),
+            rho,
+            self.ground_effect.min_height,
+        )

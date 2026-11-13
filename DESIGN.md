@@ -1012,11 +1012,31 @@ it commands alone (3.45 s), but crashes at the first gate with both, and with
    switch); each made a test fail. **The phase 11 policy with the lag**:
    finishes in 3.276 s (3.235 s without), 8.7 cm from everything at the closest
    (13.0 cm), every one of 64 noisy laps finished.
-3. **Ground and ceiling effect** (loose end 7): each rotor's thrust multiplied
-   by a factor that grows close to the floor and the ceiling (from published
-   models and measurements, capped close to the surface). Tests: the factor by
-   hand, 1 far from both, the height of equilibrium with fixed rotor speeds, the
-   batch equal to the reference.
+3. ✅ **Ground effect** (loose end 7; `jinete/proximity.py`: `GroundEffect`,
+   `ground_effect_factor`; `Multirotor(..., ground_effect=...)` and the batch;
+   `MultirotorParams.propeller_radius`, the Iris's 0.128 m; `Realism(
+   ground_effect)`). Changed from the plan with the author's knowledge: the
+   ceiling effect is left out (loose end 44). Each rotor's thrust multiplied by
+   Cheeseman and Bennett's factor 1 / (1 - (R / 4z)^2 / (1 + (V / v_i)^2)),
+   z the height of its hub above the floor (not below R / 2: at most 4/3), V the
+   airspeed of the hub along the disc, v_i the induced velocity of its thrust
+   free of the floor; the reaction torques left as they are free of the floor.
+   Tests: the factor by hand (16/15 at z = R, 64/63 at 2R, 256/255 at 4R, 4/3
+   at and below R / 2, 32/31 at V = v_i, 1 without thrust, within 1.1e-5 of 1 at
+   10 m); rotors lifting 90 % of the weight hold the Iris where their factor is
+   1 / 0.9 (hubs 10.1 cm up; 1e-12), it sinks above and rises below; flying at
+   6 m/s 10 cm up it feels less than standing still; rolled or pitched 10° at
+   15 cm up, the low rotors' extra thrust levels it (no such moment free of the
+   floor) and the yaw moment is unchanged; 300 drones' derivatives against the
+   reference with and without the motor lag (1e-12; over 50 of them feel it);
+   with the rotors stopped every force as without it, bit for bit; an episode
+   with the ground effect and the lag against the reference engine (1e-9).
+   Checked by breaking the code (7 mistakes: 2z for 4z, the reaction torque
+   scaled in either engine, the hub height from the wrong column of R or from
+   the centre of mass, the forward speed ignored, the height's sign); each made
+   a test fail. **The phase 11 policy with it**: 3.26 s, 21.8 cm from everything
+   at the closest; with the motor lag too, 3.33 s and 20.0 cm; every noisy lap
+   finished.
 4. **Sensors and estimator** (`atalaya`): motion capture (position and attitude
    with noise, at its rate, with its delay), gyroscope (noise and bias, values of
    PX4 SITL's Iris IMU), and a Kalman filter for position and velocity from the
@@ -1074,6 +1094,22 @@ Phase 12 (realism for the real drone):
 - **The controllers do not know the lag** (step 2): the rate loop still asks
   for rotor speeds as if they were reached at once, as PX4's does. With the lag
   a roll-rate step overshoots 10 % instead of 5 % (measured), still stable.
+- **The ground effect is Cheeseman and Bennett's, rotor by rotor** (step 3): a
+  formula with no fitted number (the rotor's radius, its hub's height, its
+  airspeed and its thrust), applied to each rotor at its own hub, so a tilted
+  drone is levelled near the floor. Multirotor corrections (the neighbouring
+  rotors' and the body's images, Sanchez-Cuevas, Heredia and Ollero 2017) add
+  to it, but their coefficients could not be read from an open copy in this
+  session; left for when the real drone's thrust is measured near the floor
+  (phase 14). For the Iris standing on the floor (hubs 7.7 cm up, z/R = 0.6)
+  the factor is 1.21: the take-off is the moment it matters.
+- **The ceiling effect is left out** (step 3, changed from the plan): the open
+  models found are fitted to small propellers flown millimetres from the
+  ceiling (Hsiao and Chirarattananon 2019: 23 and 50 mm propellers), and the
+  usual multirotor model (Sanchez-Cuevas et al. 2017) could not be read from an
+  open copy. With the training's 5 cm margin the Iris's hubs stay at least
+  0.18 m (1.4 R) below the ceiling, where the effect is small, and the courses
+  do not fly close to it. Loose end 44.
 
 Phase 11 (the Iris learns the course):
 - **Gymnasium 1.4.0** (the newest, for Python 3.10-3.14) is an optional
@@ -2821,6 +2857,11 @@ Phase 6c (Kalman filter):
   43. Training saves only the best and the last agent. To show how a policy
       learns (the 3D viewer of phase 13: from crashing to a clean lap), a
       training should keep an agent every so often (e.g. every 1 M steps).
+  44. The ceiling effect is not modelled (phase 12, step 3: no open model with
+      coefficients for a rotor of the Iris's size could be checked), nor the
+      ground effect over the top of an obstacle, nor the multirotor terms of the
+      ground effect (neighbouring rotors, the body). A drone flying close to a
+      ceiling, or one with small propellers, would need them.
 - Next: phase 12 (realism: motor lag, ground effect, sensor noise and delay,
   randomised parameters), whose step plan is drawn up with the author at its
   start. Proposed as its first step, to be decided then: a training spread over

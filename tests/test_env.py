@@ -41,13 +41,16 @@ def script(drone: int, steps: int) -> np.ndarray:
     return actions
 
 
-def reference_episode(actions: np.ndarray, motor_lag: bool = False):
+def reference_episode(actions: np.ndarray, motor_lag: bool = False, ground_effect=None):
     """The same actions flown by the reference engine (Multirotor, RatePilot, the
     course's referee), each held for two steps, until the lap ends. Returns the
     states of every physics step, the referee, and the reward of every
     environment step."""
     vehicle = Multirotor(
-        IRIS, contact=GroundContact(IRIS_LANDING_GEAR), motor_lag=motor_lag
+        IRIS,
+        contact=GroundContact(IRIS_LANDING_GEAR),
+        motor_lag=motor_lag,
+        ground_effect=ground_effect,
     )
     pilot = RatePilot(vehicle, IRIS_RATE_GAINS, DT, landed=True)
     referee = COURSE.referee(

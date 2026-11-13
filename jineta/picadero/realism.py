@@ -7,6 +7,9 @@ flies exactly as before phase 12, and each effect can be measured on its own.
 - motor_lag: each rotor follows its speed command with the profile's first-order
   lag (12.5 ms speeding up, 25 ms slowing down for the Iris) instead of at once;
   the rotor speeds become part of the drones' states.
+- ground_effect: each rotor pushes harder close to the room's floor
+  (Cheeseman and Bennett's factor from the height of its hub; see
+  `jinete.proximity`).
 """
 
 from dataclasses import dataclass
@@ -18,6 +21,7 @@ class Realism:
     default; see the module)."""
 
     motor_lag: bool = False
+    ground_effect: bool = False
 
 
 IDEAL = Realism()  # nothing on: the simulator of phase 11

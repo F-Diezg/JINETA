@@ -53,6 +53,8 @@ def flu_to_frd(vector: npt.ArrayLike) -> np.ndarray:
 # - Motor lag: timeConstantUp = 0.0125 s and timeConstantDown = 0.025 s of the
 #   motor model plugins of the same file (a first-order filter on the rotor
 #   speed, gazebo_motor_model.cpp), used when a vehicle has motor_lag.
+# - Propeller radius: 0.128 m, the rotor_N_collision cylinders of the same file
+#   (for the ground effect, and the hitbox below).
 IRIS = MultirotorParams(
     mass=1.52,
     inertia=np.diag([0.029125, 0.029125, 0.055225]),
@@ -69,6 +71,7 @@ IRIS = MultirotorParams(
     body_drag_area=np.full(3, 1.52 / 100.0),
     motor_time_constant_up=0.0125,
     motor_time_constant_down=0.025,
+    propeller_radius=0.128,
 )
 
 # Landing gear of the Iris: the four bottom corners of its collision box in the same
@@ -102,7 +105,7 @@ IRIS_LANDING_GEAR = LandingGear.from_damping_ratio(
 # down) and 0.280 m from the CoM towards the nose, where one sphere around
 # everything (IRIS_BOUNDING_SPHERE) is 0.384 m every way. 4 x 4 cells would gain
 # 2 cm at the bottom only, for 7 more spheres.
-IRIS_PROPELLER_RADIUS = 0.128
+IRIS_PROPELLER_RADIUS = IRIS.propeller_radius
 IRIS_PROPELLER_THICKNESS = 0.005
 IRIS_COLLISION_BOX = (0.47, 0.47, 0.11)
 IRIS_HITBOX = union(
