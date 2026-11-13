@@ -984,12 +984,34 @@ it commands alone (3.45 s), but crashes at the first gate with both, and with
    drone than one of 512). On the author's computer, 8 workers of 128 drones are
    estimated at ~3x one process of 1 024 (not measured: `python -m
    examples.parallel_speed`).
-2. **Motor lag** (loose end 5): each rotor reaches its commanded speed with a
-   first-order lag (time constants 12.5 ms up, 25 ms down, PX4 SITL's Iris);
-   the rotor speeds become part of the state (13 + one per rotor), integrated
-   with the rest by RK4. Reference and batch. Tests: the exact exponential
-   response, up and down; hover an equilibrium; the batch equal to the
-   reference; without the lag, the engine of before bit for bit.
+2. ✅ **Motor lag** (loose end 5; `jinete.multirotor.motor_derivative`,
+   `Multirotor(..., motor_lag=True)`, `state_size`, `initial_state`,
+   `rotor_speeds`; the same in `BatchMultirotor`; `MultirotorParams.
+   motor_time_constant_up` / `_down`, the Iris's 12.5 / 25 ms from
+   `iris.sdf.jinja`; `picadero/realism.py`: `Realism(motor_lag)`,
+   `CourseEnv(realism=...)`; `examples/realism_policy.py`): each rotor's speed
+   follows its command (clipped) as a first order, (command - speed) / tau, tau
+   up while the command is above the speed and down otherwise (PX4's Gazebo
+   motor model); with the lag the rotor speeds are part of the state, after the
+   body's 13 elements (17 for the Iris), integrated by RK4 with the rest, and
+   the forces use them. Without it, the state and every number are as before.
+   Tests: the derivative by hand (up, down, both clips); a step of the command
+   is the exact discrete solution of RK4 for every rotor (1e-9 rad/s) and within
+   0.3 % of the continuous exponential speeding up (dt / tau = 0.8) and 0.02 %
+   slowing down; after 0.1 s what is left is R(-0.8)^10 up and R(-0.4)^10 down;
+   hover with the rotors at hover speed is an equilibrium (1e-12, 10 s within
+   1e-9); the forces are those of instant motors at the state's speeds, bit for
+   bit, whatever the command; without the lag the state is 13 and the command is
+   used, clipped; 300 drones' derivatives (17 each) against the reference
+   (1e-12); an episode of the environment with the lag against the reference
+   engine with it (every state within 1e-9, rewards, end); the rate loop stays
+   stable (a 2 rad/s roll-rate step overshoots 10 % with the lag, 5 % without,
+   and both settle); a lag without time constants rejected. Checked by breaking
+   the code (5 mistakes: the time constants swapped, the forces from the command
+   in either engine, the command not clipped, the environment ignoring the
+   switch); each made a test fail. **The phase 11 policy with the lag**:
+   finishes in 3.276 s (3.235 s without), 8.7 cm from everything at the closest
+   (13.0 cm), every one of 64 noisy laps finished.
 3. **Ground and ceiling effect** (loose end 7): each rotor's thrust multiplied
    by a factor that grows close to the floor and the ceiling (from published
    models and measurements, capped close to the surface). Tests: the factor by
@@ -1041,6 +1063,17 @@ Phase 12 (realism for the real drone):
   drones makes each batch smaller, and NumPy's cost per call is paid per batch
   (measured in phase 9: the batch engine gains up to ~1 000 drones). With 8
   cores a training can fly more drones at once for the same time per step.
+- **The rotor speeds are states, not a filter in the controller's step**
+  (step 2): PX4's Gazebo model filters the commanded speed once per physics
+  step; here the lag is an equation integrated by RK4 with the rest, so the
+  thrust changes inside a step as the rotors speed up. At 100 Hz with tau_up =
+  12.5 ms (dt / tau = 0.8) RK4 follows the exponential within 0.3 % of a step
+  of the command (measured; exact for its own discrete solution). The state
+  grows only with the lag (13 + rotors), so nothing else changed: every module
+  reads the body's elements by position and passes the rest on.
+- **The controllers do not know the lag** (step 2): the rate loop still asks
+  for rotor speeds as if they were reached at once, as PX4's does. With the lag
+  a roll-rate step overshoots 10 % instead of 5 % (measured), still stable.
 
 Phase 11 (the Iris learns the course):
 - **Gymnasium 1.4.0** (the newest, for Python 3.10-3.14) is an optional

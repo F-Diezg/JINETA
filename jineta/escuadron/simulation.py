@@ -3,7 +3,7 @@
 The reference loop (`core.simulation.run`) flies one vehicle to the end of one
 run. Training needs something else: many drones stepping together, each lap ending
 on its own (a crash, the last gate, the time limit), and each drone starting its
-next lap while the others fly on. `BatchFlight` keeps the states (n, 13), each
+next lap while the others fly on. `BatchFlight` keeps the states (n, 13 or more), each
 drone's lap clock (n,) and the referee, and moves everything one step at a time:
 
     controller(clock, states)   sets the vehicles' commands (an autopilot, or a
@@ -40,7 +40,8 @@ class BatchFlight:
     vehicles: the drones (their forces and commands).
     referee: judges their laps (its monitor has the same n).
     dt: the step [s].
-    start: the drones' states at the start of their first lap, (n, 13).
+    start: the drones' states at the start of their first lap, (n, state size:
+        13, or more with the vehicles' own states, e.g. rotor speeds).
     """
 
     vehicles: BatchMultirotor
@@ -56,8 +57,9 @@ class BatchFlight:
         if self.referee.n != self.vehicles.n:
             raise ValueError("the referee and the vehicles must have the same n")
         start = np.array(self.start, dtype=float)
-        if start.shape != (self.vehicles.n, 13):
-            raise ValueError("start must have shape (n, 13)")
+        size = self.vehicles.state_size
+        if start.shape != (self.vehicles.n, size):
+            raise ValueError(f"start must have shape (n, {size})")
         self.states = start
         self.clock = np.zeros(self.vehicles.n)
 

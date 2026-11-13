@@ -11,6 +11,10 @@ those of the reference vehicle, term by term and in the same order:
 - body drag, -1/2 rho CdA_i u_i |u| on each body axis;
 - contact, if a batch `contact` model is given (e.g. `BatchGroundContact`).
 
+With `motor_lag` the rotor speeds are part of the states, after the bodies' 13
+columns (states (N, 13 + rotors)), and follow their commands with the profile's
+first-order lag, as in the reference.
+
 The sums over the rotors are written as a loop over the rotors (four for the Iris)
 in which each operation acts on all the drones: the rotors are added one after the
 other as in the reference, and no operation mixes the drones.
@@ -31,7 +35,7 @@ from jineta.core.environment import DensityModel, WindModel, no_wind, sea_level_
 from jineta.core.vector import cross, matvec
 from jineta.escuadron import quaternion
 from jineta.escuadron.rigid_body import BatchForceMomentModel, BatchRigidBody
-from jineta.jinete.multirotor import MultirotorParams
+from jineta.jinete.multirotor import MultirotorParams, motor_derivative
 
 
 @dataclass
@@ -47,12 +51,18 @@ class BatchMultirotor:
     density: DensityModel = sea_level_density
     wind: WindModel = no_wind
     contact: BatchForceMomentModel | None = None
+    motor_lag: bool = False
     rotor_speed_command: np.ndarray = field(init=False)
     body: BatchRigidBody = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.n < 1:
             raise ValueError("n (number of drones) must be >= 1")
+        if self.motor_lag and not (
+            self.params.motor_time_constant_up > 0.0
+            and self.params.motor_time_constant_down > 0.0
+        ):
+            raise ValueError("motor_lag needs motor time constants > 0")
         self.rotor_speed_command = np.zeros((self.n, len(self.params.rotors)))
         self.body = BatchRigidBody(
             mass=self.params.mass,
@@ -60,9 +70,35 @@ class BatchMultirotor:
             force_moment=self.force_moment,
         )
 
+    @property
+    def state_size(self) -> int:
+        """13 (the rigid body), + one rotor speed per rotor with `motor_lag`."""
+        return 13 + (len(self.params.rotors) if self.motor_lag else 0)
+
+    def initial_state(
+        self, body_state: np.ndarray, rotor_speeds: float = 0.0
+    ) -> np.ndarray:
+        """One drone's state (state_size,) from a rigid-body state (13,): the
+        rotor speeds added after it with `motor_lag` (stopped by default)."""
+        body_state = np.asarray(body_state, dtype=float)[:13]
+        if not self.motor_lag:
+            return body_state.copy()
+        speeds = np.full(len(self.params.rotors), float(rotor_speeds))
+        return np.concatenate([body_state, speeds])
+
+    def rotor_speeds(self, states: np.ndarray) -> np.ndarray:
+        """The speeds the rotors spin at (n, rotors) [rad/s]: the states' with
+        `motor_lag`, the commands' without (clipped to [0, max_rotor_speed])."""
+        speeds = states[:, 13:] if self.motor_lag else self.rotor_speed_command
+        return np.clip(speeds, 0.0, self.params.max_rotor_speed)
+
     def derivative(self, t: float | np.ndarray, states: np.ndarray) -> np.ndarray:
-        """d(states)/dt for the states (n, 13)."""
-        return self.body.derivative(t, states)
+        """d(states)/dt for the states (n, state_size)."""
+        body = self.body.derivative(t, states)
+        if not self.motor_lag:
+            return body
+        motors = motor_derivative(self.params, self.rotor_speed_command, states[:, 13:])
+        return np.concatenate([body, motors], axis=1)
 
     def force_moment(
         self, t: float | np.ndarray, states: np.ndarray
@@ -71,7 +107,7 @@ class BatchMultirotor:
         and contact (no gravity: the BatchRigidBody adds it)."""
         params = self.params
         n = len(states)
-        speeds = np.clip(self.rotor_speed_command, 0.0, params.max_rotor_speed)
+        speeds = self.rotor_speeds(states)
         rho = np.broadcast_to(np.asarray(self.density(-states[:, 2]), float), (n,))
         density_ratio = rho / params.reference_density
 

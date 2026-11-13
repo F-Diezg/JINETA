@@ -79,6 +79,9 @@ class MultirotorParams:
     body_drag_area: [CdA_x, CdA_y, CdA_z] of the airframe in body axes [m^2].
     reference_density: air density at which the rotor constants were measured
         [kg/m^3]; thrust, reaction torque and rotor drag scale with rho / this.
+    motor_time_constant_up, motor_time_constant_down: the first-order lag of a
+        rotor's speed behind its command, speeding up and slowing down [s] (0:
+        not known; a vehicle with `motor_lag` needs both > 0).
     """
 
     mass: float  # [kg]
@@ -90,6 +93,8 @@ class MultirotorParams:
     rotor_drag_coefficient: float
     body_drag_area: np.ndarray
     reference_density: float = 1.225  # ISA sea level
+    motor_time_constant_up: float = 0.0
+    motor_time_constant_down: float = 0.0
     allocation: np.ndarray = field(init=False, repr=False)
     allocation_inv: np.ndarray = field(init=False, repr=False)
 
@@ -106,6 +111,10 @@ class MultirotorParams:
                 raise ValueError(f"{name} must be > 0")
         if self.rotor_drag_coefficient < 0.0:
             raise ValueError("rotor_drag_coefficient must be >= 0")
+        if not (
+            self.motor_time_constant_up >= 0.0 and self.motor_time_constant_down >= 0.0
+        ):
+            raise ValueError("motor time constants must be >= 0")
         body_drag_area = np.array(self.body_drag_area, dtype=float)
         if body_drag_area.shape != (3,) or np.any(body_drag_area < 0.0):
             raise ValueError(
@@ -157,13 +166,37 @@ class MultirotorParams:
         return np.sqrt(thrusts / self.thrust_coefficient)
 
 
+def motor_derivative(
+    params: MultirotorParams, command: np.ndarray, speeds: np.ndarray
+) -> np.ndarray:
+    """d(rotor speeds)/dt [rad/s^2] of rotors lagging behind their command: each
+    speed approaches its command (clipped to [0, max_rotor_speed]) as a first
+    order, (command - speed) / tau, with tau the time constant up while the
+    command is above the speed and down otherwise (the motor model of PX4's
+    Gazebo simulator). Works on one vehicle (rotors,) or many (n, rotors)."""
+    command = np.clip(command, 0.0, params.max_rotor_speed)
+    tau = np.where(
+        command > speeds,
+        params.motor_time_constant_up,
+        params.motor_time_constant_down,
+    )
+    return (command - speeds) / tau
+
+
 @dataclass
 class Multirotor:
     """A multirotor in the environment: provides the force/moment model of a RigidBody.
 
     Input: `rotor_speed_command` [rad/s], one value per rotor, held between updates
-    and clipped to [0, max_rotor_speed]. Motors respond instantly: their 12-25 ms
-    time constant is not modelled.
+    and clipped to [0, max_rotor_speed].
+
+    Motors. Without `motor_lag` (the default) the rotors spin at their command at
+    once, and the state is the rigid body's 13 elements. With it, each rotor's
+    speed follows its command with a first-order lag (the profile's
+    `motor_time_constant_up` / `_down`; 12.5 / 25 ms for the Iris): the rotor
+    speeds are part of the state, after the body's 13 elements
+    (`state_size` = 13 + rotors), integrated with the rest, and the forces use
+    them instead of the command. `initial_state` adds them to a body state.
 
     Forces and moments in body axes (gravity is added by the RigidBody):
     - thrust and reaction torque of each rotor, through the mixer, scaled with
@@ -183,10 +216,16 @@ class Multirotor:
     density: DensityModel = sea_level_density
     wind: WindModel = no_wind
     contact: ForceMomentModel | None = None
+    motor_lag: bool = False
     rotor_speed_command: np.ndarray = field(init=False)
     body: RigidBody = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        if self.motor_lag and not (
+            self.params.motor_time_constant_up > 0.0
+            and self.params.motor_time_constant_down > 0.0
+        ):
+            raise ValueError("motor_lag needs motor time constants > 0")
         self.rotor_speed_command = np.zeros(len(self.params.rotors))
         self.body = RigidBody(
             mass=self.params.mass,
@@ -194,9 +233,39 @@ class Multirotor:
             force_moment=self.force_moment,
         )
 
+    @property
+    def state_size(self) -> int:
+        """13 (the rigid body), + one rotor speed per rotor with `motor_lag`."""
+        return 13 + (len(self.params.rotors) if self.motor_lag else 0)
+
+    def initial_state(
+        self, body_state: np.ndarray, rotor_speeds: npt.ArrayLike = 0.0
+    ) -> np.ndarray:
+        """The vehicle's state from a rigid-body state (13,): with `motor_lag` the
+        rotor speeds (one for all or one per rotor; stopped by default) are
+        added after it; without, it is the body state."""
+        body_state = np.asarray(body_state, dtype=float)[:13]
+        if not self.motor_lag:
+            return body_state.copy()
+        speeds = np.broadcast_to(
+            np.asarray(rotor_speeds, dtype=float), (len(self.params.rotors),)
+        )
+        return np.concatenate([body_state, speeds])
+
+    def rotor_speeds(self, state: np.ndarray) -> np.ndarray:
+        """The speeds the rotors spin at [rad/s]: the state's with `motor_lag`,
+        the command's without (both clipped to [0, max_rotor_speed])."""
+        speeds = state[13:] if self.motor_lag else self.rotor_speed_command
+        return np.clip(speeds, 0.0, self.params.max_rotor_speed)
+
     def derivative(self, t: float, state: np.ndarray) -> np.ndarray:
-        """Return d(state)/dt for the 13-element rigid-body state."""
-        return self.body.derivative(t, state)
+        """Return d(state)/dt: the rigid body's 13 elements, then the rotor
+        speeds' with `motor_lag`."""
+        body = self.body.derivative(t, state)
+        if not self.motor_lag:
+            return body
+        motors = motor_derivative(self.params, self.rotor_speed_command, state[13:])
+        return np.concatenate([body, motors])
 
     def force_moment(
         self, t: float, state: np.ndarray
@@ -204,7 +273,7 @@ class Multirotor:
         """Force and moment in body axes [N], [N·m]: rotors, drag and contact (no
         gravity: the RigidBody adds it)."""
         params = self.params
-        speeds = np.clip(self.rotor_speed_command, 0.0, params.max_rotor_speed)
+        speeds = self.rotor_speeds(state)
         rho = self.density(-state[2])
         density_ratio = rho / params.reference_density
 

@@ -50,6 +50,9 @@ def flu_to_frd(vector: npt.ArrayLike) -> np.ndarray:
 #   default ballistic coefficient of the PX4 EKF2 drag model (EKF2_BCOEF_X/Y): a
 #   generic multirotor value, not measured on the Iris. There is no open value for
 #   the vertical axis; the same CdA is used as a placeholder.
+# - Motor lag: timeConstantUp = 0.0125 s and timeConstantDown = 0.025 s of the
+#   motor model plugins of the same file (a first-order filter on the rotor
+#   speed, gazebo_motor_model.cpp), used when a vehicle has motor_lag.
 IRIS = MultirotorParams(
     mass=1.52,
     inertia=np.diag([0.029125, 0.029125, 0.055225]),
@@ -64,6 +67,8 @@ IRIS = MultirotorParams(
     max_rotor_speed=1100.0,
     rotor_drag_coefficient=0.000175,
     body_drag_area=np.full(3, 1.52 / 100.0),
+    motor_time_constant_up=0.0125,
+    motor_time_constant_down=0.025,
 )
 
 # Landing gear of the Iris: the four bottom corners of its collision box in the same

@@ -41,8 +41,8 @@ def zero_force_moment(
 
 
 def normalize_attitudes(states: np.ndarray) -> np.ndarray:
-    """A copy of the states (N, 13) with every quaternion renormalised to unit
-    norm (the batch version of `core.rigid_body.normalize_attitude`)."""
+    """A copy of the states (N, 13 or more) with every quaternion renormalised to
+    unit norm (the batch version of `core.rigid_body.normalize_attitude`)."""
     states = states.copy()
     states[:, 6:10] = quaternion.normalize(states[:, 6:10])
     return states
@@ -67,7 +67,9 @@ class BatchRigidBody:
         self.inertia_inv = inertia_inv
 
     def derivative(self, t: float | np.ndarray, states: np.ndarray) -> np.ndarray:
-        """d(states)/dt, shape (N, 13), for the states (N, 13)."""
+        """d(states)/dt, shape (N, 13), for the states (N, 13) (or longer: the
+        first 13 columns are the bodies', the whole rows go to `force_moment`,
+        as in `core.rigid_body.RigidBody.derivative`)."""
         velocity = states[:, 3:6]
         q = states[:, 6:10]
         omega = states[:, 10:13]

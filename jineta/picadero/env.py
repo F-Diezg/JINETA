@@ -27,7 +27,7 @@ reward of an environment step is the sum of the rewards of its physics steps.
 `info` (arrays, one entry per drone; meaningful where `done = terminated |
 truncated`):
     final_observation (n, size)   the last observation of an episode that ended
-    final_state (n, 13)           the drones' states at the end of the step (where
+    final_state (n, size)         the drones' states at the end of the step (where
                                   an episode ended, before its drone restarted)
     status (n,)                   how it ended (codes of escuadron.referee)
     lap_time (n,)                 [s], nan unless it finished
@@ -49,6 +49,7 @@ from jineta.escuadron.referee import CRASHED, batch_referee
 from jineta.escuadron.simulation import BatchFlight
 from jineta.jinete.contact import resting_height
 from jineta.jinete.profiles import MULTIROTOR_PROFILES, MultirotorProfile
+from jineta.picadero.realism import Realism
 from jineta.picadero.reward import Reward, RewardWeights, episode_end
 from jineta.picadero.spaces import (
     ACTION_SIZE,
@@ -79,6 +80,8 @@ class CourseEnv:
         close to a wall, the ceiling, an obstacle or a frame is a crash (a safety
         margin the policy learns to keep; the floor is still judged by the
         landing gear).
+    realism: the effects of a real flight that are simulated (`Realism`; none
+        by default).
     """
 
     course: Course
@@ -91,6 +94,7 @@ class CourseEnv:
     lookahead: int = 2
     nearest: int = 0
     margin: float = 0.0
+    realism: Realism = field(default_factory=Realism)
     np_random: np.random.Generator = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -115,12 +119,17 @@ class CourseEnv:
         self.observer = Observer(self.course.gates, self.lookahead, surroundings)
         self.reward = Reward(self.course.gates, self.weights, self.dt)
         self.vehicles = BatchMultirotor(
-            params, self.n, contact=BatchGroundContact(gear)
+            params,
+            self.n,
+            contact=BatchGroundContact(gear),
+            motor_lag=self.realism.motor_lag,
         )
         referee = batch_referee(
             self.course, hitbox.centers, hitbox.radii + self.margin, gear.points, self.n
         )
-        self.start = self.course.start_state(resting_height(gear, params.mass))
+        self.start = self.vehicles.initial_state(
+            self.course.start_state(resting_height(gear, params.mass))
+        )
         self.start.flags.writeable = False
         self.flight = BatchFlight(
             self.vehicles, referee, self.dt, np.tile(self.start, (self.n, 1))

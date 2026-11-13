@@ -53,7 +53,12 @@ class RigidBody:
         self.inertia_inv = np.linalg.inv(self.inertia)
 
     def derivative(self, t: float, state: np.ndarray) -> np.ndarray:
-        """Return d(state)/dt for the 13-element state."""
+        """Return d(state)/dt for the 13-element state.
+
+        A longer state is accepted: its first 13 elements are the body's, and the
+        whole state goes to `force_moment` (a vehicle may keep states of its own
+        after them, e.g. the rotor speeds); only the body's 13 derivatives are
+        returned, and the vehicle adds its own."""
         velocity = state[3:6]
         q = state[6:10]
         omega = state[10:13]
