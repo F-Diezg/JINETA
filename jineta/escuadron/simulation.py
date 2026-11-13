@@ -67,10 +67,16 @@ class BatchFlight:
     def n(self) -> int:
         return self.vehicles.n
 
-    def step(self, controller: BatchController) -> np.ndarray:
-        """One step of every drone still flying; returns which laps ended in this
-        step (n,) (`referee.ended` says which have ended at all)."""
+    def step(
+        self, controller: BatchController, also: np.ndarray | None = None
+    ) -> np.ndarray:
+        """One step of every drone still flying (and of the drones `also`, a
+        mask (n,), whose lap has ended but that fly on: phase 12's stop after
+        the finish); returns which laps ended in this step (n,) (`referee.ended`
+        says which have ended at all)."""
         flying = ~self.referee.ended
+        if also is not None:
+            flying = flying | also
         controller(self.clock, self.states)
         new_states = normalize_attitudes(
             rk4_step(self.vehicles.derivative, self.clock, self.states, self.dt)

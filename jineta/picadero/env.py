@@ -55,11 +55,12 @@ from jineta.campo.course import Course
 from jineta.escuadron.contact import BatchGroundContact
 from jineta.escuadron.control import BatchRatePilot
 from jineta.escuadron.multirotor import BatchMultirotor
-from jineta.escuadron.referee import CRASHED, batch_referee
+from jineta.escuadron.referee import CRASHED, FINISHED, FLYING, TIMEOUT, batch_referee
 from jineta.escuadron.simulation import BatchFlight
 from jineta.jinete.contact import resting_height
 from jineta.jinete.profiles import MULTIROTOR_PROFILES, MultirotorProfile
 from jineta.jinete.proximity import GroundEffect
+from jineta.picadero.finish import StopAfterFinish
 from jineta.picadero.realism import Realism
 from jineta.picadero.reward import Reward, RewardWeights, episode_end
 from jineta.picadero.spaces import (
@@ -93,6 +94,9 @@ class CourseEnv:
         landing gear).
     realism: the effects of a real flight that are simulated (`Realism`; none
         by default).
+    stop: with a `StopAfterFinish`, the episode goes on past the last gate
+        until the drone is stopped and level (`picadero.finish`); the
+        observation gets one more number, 1 after the last gate.
     """
 
     course: Course
@@ -106,6 +110,7 @@ class CourseEnv:
     nearest: int = 0
     margin: float = 0.0
     realism: Realism = field(default_factory=Realism)
+    stop: StopAfterFinish | None = None
     np_random: np.random.Generator = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -127,7 +132,12 @@ class CourseEnv:
                 (*self.course.obstacles, *self.course.gates),
                 self.nearest,
             )
-        self.observer = Observer(self.course.gates, self.lookahead, surroundings)
+        self.observer = Observer(
+            self.course.gates,
+            self.lookahead,
+            surroundings,
+            finish_flag=self.stop is not None,
+        )
         self.reward = Reward(self.course.gates, self.weights, self.dt)
         self.vehicles = BatchMultirotor(
             params,
@@ -159,6 +169,10 @@ class CourseEnv:
         self.pending_thrust = np.zeros((self.ring, self.n))
         self.pending_rates = np.zeros((self.ring, self.n, 3))
         self.physics_steps = 0
+        # After the finish (with `stop`): which drones are stopping, and how
+        # that ended (FLYING while it goes on; FINISHED, CRASHED or TIMEOUT).
+        self.stopping = np.zeros(self.n, dtype=bool)
+        self.outcome = np.full(self.n, FLYING)
         self.previous_action = np.zeros((self.n, ACTION_SIZE))
         self.episode_return = np.zeros(self.n)
         self.episode_steps = np.zeros(self.n, dtype=int)
@@ -200,9 +214,11 @@ class CourseEnv:
         thrust, rates = self.limits.commands(action)
         referee = self.flight.referee
         reward = np.zeros(self.n)
+        weights = self.reward.weights
         for _ in range(self.action_repeat):
             active = ~referee.ended
-            if not np.any(active):
+            coasting = self.stopping & (self.outcome == FLYING)
+            if not np.any(active | coasting):
                 break
             if self.ring == 0:
                 self.pilot.thrust_command, self.pilot.rate_command = thrust, rates
@@ -217,7 +233,10 @@ class CourseEnv:
             self.physics_steps += 1
             target, passed = referee.next_gate.copy(), referee.passed.copy()
             previous = self.flight.states.copy()
-            self.flight.step(self.pilot)
+            if self.stop is None:
+                self.flight.step(self.pilot)
+            else:  # the drones stopping after the finish fly on
+                self.flight.step(self.pilot, coasting)
             if self.estimator is not None:
                 self.estimator.step(previous, self.flight.states, self.np_random)
             crashed = active & (referee.status == CRASHED)
@@ -229,23 +248,60 @@ class CourseEnv:
                 crashed,
                 active,
             )
+            if self.stop is not None:
+                reward += self._after_finish(active, coasting, weights)
         self.previous_action = action
         self.episode_return += reward
         self.episode_steps += 1
 
-        terminated, truncated = episode_end(referee.status)
+        status = referee.status.copy()
+        lap_time = referee.lap_time
+        if self.stop is not None:  # a finish counts once the drone has stopped
+            status = np.where(status == FINISHED, self.outcome, status)
+            lap_time = np.where(status == FINISHED, referee.end_time, np.nan)
+        terminated, truncated = episode_end(status)
         done = terminated | truncated
         info: dict[str, Any] = {
             "final_observation": self._observe(),
             "final_state": self.flight.states.copy(),
-            "status": referee.status.copy(),
-            "lap_time": referee.lap_time,
+            "status": status,
+            "lap_time": lap_time,
             "episode_return": self.episode_return.copy(),
             "episode_steps": self.episode_steps.copy(),
         }
         if np.any(done):
             self._restart(done)
         return self._observe(), reward, terminated, truncated, info
+
+    def _after_finish(
+        self, active: np.ndarray, coasting: np.ndarray, weights: RewardWeights
+    ) -> np.ndarray:
+        """One physics step after the finish: the drones that have just crossed
+        the last gate start stopping; the ones that were stopping are checked
+        for a collision (a crash), for being stopped (a finish) and against the
+        window (a time-out). Returns their reward of the step (n,)."""
+        referee, stop = self.flight.referee, self.stop
+        self.stopping |= active & (referee.status == FINISHED)
+        reward = np.zeros(self.n)
+        if not np.any(coasting):
+            return reward
+        states, clock = self.flight.states, self.flight.clock
+        hit = referee.monitor(clock, states, coasting) & coasting
+        stopped = coasting & ~hit & stop.stopped(states)
+        late = (
+            coasting
+            & ~hit
+            & ~stopped
+            & (clock - referee.end_time >= stop.window - 1e-9)
+        )
+        self.outcome[hit] = CRASHED
+        self.outcome[stopped] = FINISHED
+        self.outcome[late] = TIMEOUT
+        return (
+            np.where(coasting, -weights.time * self.dt, 0.0)
+            - weights.crash * hit
+            + weights.stop * stopped
+        )
 
     def close(self) -> None:
         """Nothing to release (Gymnasium's interface has it; `ParallelEnv`
@@ -257,6 +313,8 @@ class CourseEnv:
         self.flight.reset(drones, self.start)
         self.pilot.reset(drones)
         self.pilot.landed[drones] = True
+        self.stopping[drones] = False
+        self.outcome[drones] = FLYING
         randomization = self.realism.randomization
         if randomization is not None:
             values, latency = randomization.draw(

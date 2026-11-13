@@ -26,6 +26,7 @@ or which way it faces (only on where things are from the drone's point of view):
     the nearest `nearest` surfaces (optional, phase 11): the
       vector to the closest point of each, in body axes, the
       closest first                                              3 per surface
+    1 once every gate is crossed, 0 before (optional, phase 12) 1
 
 The surroundings. On a course the policy has flown many times it can learn where
 the walls and obstacles are; on a course it has never seen it has to see them.
@@ -268,11 +269,13 @@ class Surroundings:
 class Observer:
     """Builds the observation of n drones flying through `gates` (in order),
     looking `lookahead` gates ahead, and seeing the nearest surfaces if given
-    `surroundings`."""
+    `surroundings`; with `finish_flag` one more number, 1 once every gate is
+    crossed (phase 12: the drone must then stop) and 0 before."""
 
     gates: Sequence[Gate]
     lookahead: int = 2
     surroundings: Surroundings | None = None
+    finish_flag: bool = False
 
     def __post_init__(self) -> None:
         gates = tuple(self.gates)
@@ -288,7 +291,11 @@ class Observer:
     @property
     def size(self) -> int:
         around = 0 if self.surroundings is None else self.surroundings.size
-        return 3 + 9 + 3 + 3 * OPENING_POINTS * self.lookahead + ACTION_SIZE + around
+        flag = 1 if self.finish_flag else 0
+        return (
+            3 + 9 + 3 + 3 * OPENING_POINTS * self.lookahead + ACTION_SIZE + around
+            + flag
+        )  # fmt: skip
 
     @property
     def space(self) -> BoxSpace:
@@ -327,4 +334,6 @@ class Observer:
         ]
         if self.surroundings is not None:
             parts.append(self.surroundings(states[:, 0:3], to_body))
+        if self.finish_flag:
+            parts.append((np.asarray(next_gate) < 0).astype(float))
         return np.column_stack(parts)

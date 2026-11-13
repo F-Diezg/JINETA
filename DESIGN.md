@@ -1157,9 +1157,34 @@ it commands alone (3.45 s), but crashes at the first gate with both, and with
    delay) and got its own. **The phase 11 policy on drawn drones** (256 drones,
    mean action): 9 % finish with drawn numbers and latency, 6 % in the
    randomised lab (with the motor lag, the ground effect and the sensors).
-7. **Under control after the last gate** (loose end 39): the episode goes on
-   past the finish until the drone is stopped and level (or crashes). Tests to
-   be planned with the step.
+7. ✅ **Under control after the last gate** (loose end 39;
+   `picadero/finish.py`: `StopAfterFinish`; `CourseEnv(stop=...)`,
+   `stopping`, `outcome`; `RewardWeights.stop`; `Observer(finish_flag)`;
+   `BatchFlight.step(controller, also)`): with a stop rule the episode goes on
+   past the last gate until the drone is stopped and level (speed below
+   0.5 m/s, tilt below 15°, body rates below 0.5 rad/s, at one sample; a hover
+   that could be handed over to a position hold), within a window (3 s);
+   touching anything on the way is a crash (the monitor keeps checking the
+   drones that fly on), not stopping in time a time-out. Only a stop makes a
+   finish; the lap time is still the crossing. Every second after the finish
+   costs the time weight, the stop pays a bonus (1, like a gate); the
+   observation gets one more number, 1 once every gate is crossed. Without the
+   rule nothing changes. Tests: when a drone counts as stopped (each limit on
+   its own); in a long hall the baseline's path follower braking after the last
+   gate stops a second later, with the same lap time and rewards up to the
+   finish as without the rule, and the return differs by the bonus minus the
+   seconds spent (to 1e-9); a 0.2 s window is a time-out; on the first course
+   the baseline flies on into the wall 1.5 m behind the last gate: a crash, no
+   lap time, and the flight after the finish is the reference engine's that
+   stops only at the collision (every state within 1e-9); a stopped drone
+   restarts clean beside one held on the floor; the observation has 44 numbers
+   with the rule. Checked by breaking the code (7 mistakes: no collision after
+   the finish, no time penalty, the outcome or the stopping not cleared on a
+   restart, the flag inverted, the lap time counted at the crossing, the drones
+   after the finish not flown); each made a test fail. **The phase 11 policy**
+   crosses the last gate of the first course at 7.6 m/s, 2 m from the wall, and
+   crashes about 0.3 s later: on this course a policy that must stop has to
+   cross the last gate slower.
 8. **Training with realism and measuring it**: a recipe, and the policy
    measured over many drawn conditions (success rate, lap time, closest
    approach) against the phase 11 policy and the baseline in the same
@@ -1250,6 +1275,17 @@ Phase 12 (realism for the real drone):
   truth; the difference is what a policy has to cope with.
 - **The sensors are not randomised** (step 6): with motion capture their
   errors are small next to the latency (step 5), which is randomised.
+- **The stop after the finish lives in the environment, not in the referee**
+  (step 7): the referee still ends the lap at the last gate (its lap time and
+  its tests unchanged); the environment flies on the drones that are stopping
+  (`BatchFlight.step(..., also)`), asks the monitor about their collisions
+  itself, and decides the episode's end. Stopped means hovering (speed, tilt
+  and rates small), not landed: touching the floor after the take-off is still
+  a crash.
+- **The first course becomes harder with the stop** (step 7): its last gate is
+  1.5 m from the north wall, so a lap that ends stopped must cross it slower
+  than phase 11's policy (7.6 m/s) does. The rule is kept as it is: a real room
+  has walls behind its finish line.
 
 Phase 11 (the Iris learns the course):
 - **Gymnasium 1.4.0** (the newest, for Python 3.10-3.14) is an optional
@@ -2975,12 +3011,14 @@ Phase 6c (Kalman filter):
       at 2 %, 5 cm) is a choice, and the best lap is sensitive to it.
   38. (Closed in phase 11, step 5: a time penalty of 0.25 per second, found by
       measurement; the decision log has the experiments.)
-  39. A lap ends at the last gate, so a policy does not care what comes after
-      it: Claude's first policy crossed the last gate rolled 144° at 1.25 m, and
-      a real drone would crash right after (the author's, now the repository's,
-      crosses it tilted 18° but still turning fast). A real finish needs the drone
-      under control after the last gate (an episode that goes on to a hover, or
-      a penalty on the attitude at the finish).
+  39. (Closed in phase 12, step 7: `StopAfterFinish`, the episode goes on until
+      the drone is stopped and level.) A lap ends at the last gate, so a policy
+      does not care what comes after it: Claude's first policy crossed the last
+      gate rolled 144° at 1.25 m, and a real drone would crash right after (the
+      author's, now the repository's, crosses it tilted 18° but still turning
+      fast). A real finish needs the drone under control after the last gate (an
+      episode that goes on to a hover, or a penalty on the attitude at the
+      finish).
   40. The policy on random courses is undertrained (step 6: 1 of 20 test
       courses after 23 M steps): it needs more experience, and more courses per
       update, than Claude's workspace gives in a session; `python -m examples.train_random` on the

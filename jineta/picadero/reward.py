@@ -23,6 +23,10 @@ action lasts):
     reward = progress_weight * progress + gate_weight * gates
              - crash_weight * crash - time_weight * seconds
 
+With a stop after the finish (`picadero.finish`, phase 12) the episode goes
+on past the last gate: every second until the drone stops costs the time
+weight, stopping pays the `stop` bonus once, and a crash the crash penalty.
+
 The weights were tuned in training (phase 11); the defaults are the starting
 point of phase 10 (no time penalty), which the tests of the terms use.
 
@@ -62,9 +66,10 @@ class RewardWeights:
     gate: float = 1.0
     crash: float = 5.0
     time: float = 0.0
+    stop: float = 1.0  # a bonus for stopping after the finish (phase 12)
 
     def __post_init__(self) -> None:
-        for name in ("progress", "gate", "crash", "time"):
+        for name in ("progress", "gate", "crash", "time", "stop"):
             value = getattr(self, name)
             if not (np.isfinite(value) and value >= 0.0):
                 raise ValueError(f"the {name} weight must be finite and >= 0")
