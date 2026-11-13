@@ -1121,13 +1121,42 @@ it commands alone (3.45 s), but crashes at the first gate with both, and with
    parts (the ground effect's extra thrust at the take-off happens to save the
    lap that the lag and the latency together crash): a policy trained without
    them flies on a knife's edge.
-6. **Parameters per drone and domain randomisation** (half of loose end 30):
-   every drone of a batch with its own parameters (mass, inertia, thrust and
-   moment constants, drag, motor lag, ...), equal to the reference engine with
-   those parameters; ranges drawn at every restart (and the sensors' noise and
-   the latency), the controller keeping the nominal values. Tests: each drone
-   equal to the reference with its parameters; draws inside their ranges,
-   repeated by the seed; no ranges, the nominal drone bit for bit.
+6. ✅ **Parameters per drone and domain randomisation** (half of loose end
+   30; `BatchMultirotor.set_parameters`, `drone_params`, `per_drone`,
+   `PER_DRONE`; `BatchRigidBody.set_bodies`; `jinete.multirotor.
+   lag_derivative`; `picadero/randomization.py`: `Randomization`, `NONE`;
+   `Realism(randomization)`, `RANDOMISED_LAB`; `CourseEnv.delays`, `ring`):
+   every drone of a batch can have its own mass, inertia, thrust and moment
+   constants, maximum rotor speed, rotor and body drag and motor time constants
+   (arrays with one value per drone from the first `set_parameters`; the
+   rotors' places, the gear and the propeller radius stay the profile's), and
+   drone i flies as `Multirotor(drone_params(i))`; the controller keeps the
+   profile's numbers. `Randomization` draws them at every restart as factors on
+   the profile's (mass 0.9-1.1, inertia 0.8-1.2 with one factor for the whole
+   tensor, thrust coefficient 0.9-1.1, maximum rotor speed 0.85-1.0 (the
+   battery), moment constant 0.8-1.2, rotor and body drag and motor time
+   constants 0.5-2 drawn in their logarithm) and each drone's latency (0-40 ms;
+   the ring of commands is as long as the longest). Tests: 300 drawn drones'
+   derivatives (lag, ground effect, contact) against the reference with each
+   one's numbers (1e-12); the profile's numbers given one by one change no
+   force, bit for bit; a drone with its own numbers alone or in a batch bit
+   for bit; draws inside their ranges (the inertia still physical, the log
+   ranges with as many halvings as doublings, one factor for both time
+   constants), repeated by the seed, and no randomisation gives the profile
+   exactly; an environment with single-point ranges is the environment of
+   before bit for bit, restarts included; a drawn drone's episode (lag, ground
+   effect, drawn numbers and latency) against the reference engine flying that
+   drone with a controller that keeps the profile's numbers (1e-9, two seeds);
+   a restart draws only the restarted drone anew; 200 drones draw every latency
+   from 0 to 4 steps; bad numbers rejected (including an inertia that breaks the
+   triangle inequality). Checked by breaking the code (7 mistakes: the yaw from
+   the profile's moment constant, the profile's rotor drag, the mean mass for
+   every drone, the inverse inertia not updated, the latency not drawn, the log
+   ranges drawn uniformly, the profile's maximum rotor speed in the lag); the
+   latency survived the first tests (the reference read the environment's own
+   delay) and got its own. **The phase 11 policy on drawn drones** (256 drones,
+   mean action): 9 % finish with drawn numbers and latency, 6 % in the
+   randomised lab (with the motor lag, the ground effect and the sensors).
 7. **Under control after the last gate** (loose end 39): the episode goes on
    past the finish until the drone is stopped and level (or crashes). Tests to
    be planned with the step.
@@ -1204,6 +1233,23 @@ Phase 12 (realism for the real drone):
   policy (it acts on information that old); one ring of commands is simpler,
   and the observation stays the estimator's latest. The motion-capture delay is
   separate: the estimator carries it forward (step 4).
+- **The randomisation ranges are chosen, not measured** (step 6): they say
+  how wrong the profile may be, which only the real drone can tell (phase 14).
+  Each range is argued in `picadero/randomization.py`; the widest (drag and
+  motor lag, a factor of 2 either way) are on the numbers with the weakest
+  sources. The battery is covered by the maximum rotor speed (down to 85 %), as
+  decided at the start of the phase.
+- **A drone's numbers are arrays only once they differ** (step 6): until
+  `set_parameters` is called the batch keeps one value for all, and the
+  formulas are the same, so every earlier result is unchanged bit for bit; a
+  test gives every drone the profile's numbers one by one and finds the same
+  forces bit for bit.
+- **The controller flies with the profile's numbers** (step 6): the rate loop
+  converts its moments with the profile's inertia and its thrusts with the
+  profile's constants, as PX4 flies with its parameters, not the drone's
+  truth; the difference is what a policy has to cope with.
+- **The sensors are not randomised** (step 6): with motion capture their
+  errors are small next to the latency (step 5), which is randomised.
 
 Phase 11 (the Iris learns the course):
 - **Gymnasium 1.4.0** (the newest, for Python 3.10-3.14) is an optional
@@ -2904,11 +2950,11 @@ Phase 6c (Kalman filter):
       along its path; the straight-at-each-centre guidance stays as an example.)
   29. (Closed in phase 10, step 1: the overhang formula written out, the same
       numbers bit for bit, the batch a third faster on the author's computer.)
-  30. A batch has one vehicle profile and one course. Phase 11 trains on random
-      courses with a batch per course (`CourseSetEnv`), which costs speed with
-      small batches (decision log); a course per drone in the batch engine, and
-      the vehicle's parameters per drone (phase 12), need per-drone arrays
-      (gate positions, obstacles, mass, inertia).
+  30. (Half closed in phase 12, step 6: each drone of a batch can have its own
+      numbers.) A batch has one course. Phase 11 trains on random courses with
+      a batch per course (`CourseSetEnv`), which costs speed with small batches
+      (decision log); a course per drone in the batch engine needs per-drone
+      arrays of gates and obstacles.
   31. The batch rounds of the swept check end with the slowest drone, so a rare
       near miss of a few micrometres (a few thousand rounds, loose end 26) holds up
       its whole batch for that step.

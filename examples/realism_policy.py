@@ -6,9 +6,10 @@
 Flies a trained policy (by default the phase 11 policy,
 `policies/first_course.npz`, trained in the ideal simulator) on the first course
 with each effect of `picadero.realism.Realism` on its own, and with all of them
-(`LAB`: a motion-capture lab), and prints its deterministic lap (status, lap
-time, closest approach) and how many of 64 laps flown with its own noise
-finish.
+(`LAB`: a motion-capture lab; `RANDOMISED_LAB`: the lab with every drone drawn
+anew), and prints its deterministic lap (status, lap time, closest approach)
+and how many of 64 laps flown with its own noise finish (with a randomisation,
+each of the 64 is also a different drone).
 """
 
 import argparse
@@ -21,7 +22,7 @@ from jineta.campo.course import load_course
 from jineta.doma.policy import Agent
 from jineta.escuadron.referee import STATUS_NAMES
 from jineta.picadero.env import CourseEnv
-from jineta.picadero.realism import LAB, Realism
+from jineta.picadero.realism import LAB, RANDOMISED_LAB, Realism
 from jineta.picadero.training import fly
 
 
@@ -36,6 +37,7 @@ def conditions() -> dict[str, Realism]:
         "latency 40 ms": Realism(latency=0.04),
         "lag + 20 ms": Realism(motor_lag=True, latency=0.02),
         "lab (all)": LAB,
+        "lab, drawn": RANDOMISED_LAB,
     }
 
 

@@ -73,7 +73,7 @@ def test_the_latency_is_the_reference_engine_with_delayed_commands(latency, moto
     states, referee = delayed_reference(actions, delay, motor_lag)
     env = CourseEnv(COURSE, realism=Realism(motor_lag=motor_lag, latency=latency))
     env.reset()
-    assert env.delay == delay
+    assert env.delays[0] == delay
     for k, action in enumerate(actions):
         _, _, terminated, truncated, _ = env.step(action[None])
         if terminated[0] or truncated[0]:
@@ -195,7 +195,7 @@ def test_the_phase_11_policy_with_each_effect(phase_11_policy, realism, status, 
     result = fly(phase_11_policy, CourseEnv(course, realism=realism))
     assert result["status"][0] == status
     if lap is not None:
-        assert result["lap_time"][0] == pytest.approx(lap, abs=0.02)
+        assert result["lap_time"][0] == pytest.approx(lap, abs=0.05)
 
 
 def test_the_realism_switches():

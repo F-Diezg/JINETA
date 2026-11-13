@@ -181,12 +181,26 @@ def motor_derivative(
     order, (command - speed) / tau, with tau the time constant up while the
     command is above the speed and down otherwise (the motor model of PX4's
     Gazebo simulator). Works on one vehicle (rotors,) or many (n, rotors)."""
-    command = np.clip(command, 0.0, params.max_rotor_speed)
-    tau = np.where(
-        command > speeds,
+    return lag_derivative(
+        command,
+        speeds,
+        params.max_rotor_speed,
         params.motor_time_constant_up,
         params.motor_time_constant_down,
     )
+
+
+def lag_derivative(
+    command: np.ndarray,
+    speeds: np.ndarray,
+    max_speed: npt.ArrayLike,
+    tau_up: npt.ArrayLike,
+    tau_down: npt.ArrayLike,
+) -> np.ndarray:
+    """`motor_derivative` with its constants given (each one value, or one per
+    vehicle (n, 1) for a batch whose drones differ)."""
+    command = np.clip(command, 0.0, max_speed)
+    tau = np.where(command > speeds, tau_up, tau_down)
     return (command - speeds) / tau
 
 

@@ -25,7 +25,9 @@ every `action_repeat` steps (2: 50 Hz), and its action is held in between. The
 reward of an environment step is the sum of the rewards of its physics steps.
 
 Realism (`picadero.realism.Realism`, phase 12; all off by default): the motor
-lag and the ground effect change the vehicles; with `sensors` the observation
+lag and the ground effect change the vehicles; with a `randomization` every
+drone gets its own numbers each episode (its controller keeps the profile's);
+with `sensors` the observation
 is built from each drone's onboard estimate (`atalaya.estimator`) instead of
 its true state; with a `latency` every command reaches the rate loop that many
 physics steps late (a ring of commands on their way, cleared when a drone
@@ -148,11 +150,14 @@ class CourseEnv:
         self.estimator = None
         if self.realism.sensors is not None:
             self.estimator = BatchEstimator(self.realism.sensors, self.n, self.dt)
-        # Commands on their way to the rate loop (latency): a ring of slots,
-        # one per physics step of delay.
-        self.delay = self.realism.latency_steps(self.dt)
-        self.pending_thrust = np.zeros((self.delay, self.n))
-        self.pending_rates = np.zeros((self.delay, self.n, 3))
+        # Commands on their way to the rate loop (latency): a ring with a slot
+        # for each of the last `ring` physics steps; drone i's command arrives
+        # delays[i] steps after it was sent.
+        longest = self.realism.max_latency_steps(self.dt)
+        self.ring = longest + 1 if longest > 0 else 0
+        self.delays = np.full(self.n, self.realism.latency_steps(self.dt))
+        self.pending_thrust = np.zeros((self.ring, self.n))
+        self.pending_rates = np.zeros((self.ring, self.n, 3))
         self.physics_steps = 0
         self.previous_action = np.zeros((self.n, ACTION_SIZE))
         self.episode_return = np.zeros(self.n)
@@ -199,14 +204,16 @@ class CourseEnv:
             active = ~referee.ended
             if not np.any(active):
                 break
-            if self.delay == 0:
+            if self.ring == 0:
                 self.pilot.thrust_command, self.pilot.rate_command = thrust, rates
-            else:  # the command sent `delay` physics steps ago arrives now
-                slot = self.physics_steps % self.delay
-                self.pilot.thrust_command = self.pending_thrust[slot].copy()
-                self.pilot.rate_command = self.pending_rates[slot].copy()
+            else:  # the command sent `delays` physics steps ago arrives now
+                slot = self.physics_steps % self.ring
                 self.pending_thrust[slot] = thrust
                 self.pending_rates[slot] = rates
+                arriving = (self.physics_steps - self.delays) % self.ring
+                drones = np.arange(self.n)
+                self.pilot.thrust_command = self.pending_thrust[arriving, drones]
+                self.pilot.rate_command = self.pending_rates[arriving, drones]
             self.physics_steps += 1
             target, passed = referee.next_gate.copy(), referee.passed.copy()
             previous = self.flight.states.copy()
@@ -250,6 +257,13 @@ class CourseEnv:
         self.flight.reset(drones, self.start)
         self.pilot.reset(drones)
         self.pilot.landed[drones] = True
+        randomization = self.realism.randomization
+        if randomization is not None:
+            values, latency = randomization.draw(
+                self.vehicles.params, self.np_random, int(np.sum(drones))
+            )
+            self.vehicles.set_parameters(drones, **values)
+            self.delays[drones] = np.round(latency / self.dt).astype(int)
         self.pending_thrust[:, drones] = 0.0
         self.pending_rates[:, drones] = 0.0
         if self.estimator is not None:
