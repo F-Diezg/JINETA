@@ -27,6 +27,7 @@ from jineta.doma.policy import Agent
 from jineta.doma.ppo import PPO, PPOSettings
 from jineta.escuadron.referee import CRASHED, FINISHED, STATUS_NAMES, TIMEOUT
 from jineta.picadero.env import CourseEnv
+from jineta.picadero.parallel import CourseEnvPart, CourseSetEnvPart, make_parallel
 from jineta.picadero.reward import RewardWeights
 
 # The reward the policies of phase 11 are trained with (found by measurement;
@@ -289,7 +290,10 @@ def run_training(
             if report is not None:
                 report(row)
 
-        ppo.learn(total_steps, callback)
+        try:
+            ppo.learn(total_steps, callback)
+        finally:
+            env.close()
     ppo.agent.info = {**info, "steps": trained + ppo.steps}
     ppo.agent.save(out / "last.npz")
     return best_agent, best_result
@@ -308,13 +312,15 @@ def train(
     nearest: int = 0,
     margin: float = TRAINING_MARGIN,
     report: Callable[[dict[str, Any]], None] | None = None,
+    workers: int = 1,
 ) -> tuple[Agent, Evaluation | None]:
-    """Train an agent on one course for `total_steps` environment steps with n
-    drones, seeing the `nearest` surfaces around them (0: none), every sphere
-    of their hitbox `margin` larger; the best agent is the one whose mean action
-    flies the fastest lap, preferring laps that keep the margin (judged on the
-    course as it is; see `run_training`). Returns the best agent and its
-    evaluation.
+    """Train an agent on one course for `total_steps` environment steps with n drones
+    (split over `workers` processes, n / workers each; the same training with
+    any number of workers), seeing the `nearest` surfaces around them (0: none),
+    every sphere of their hitbox `margin` larger; the best agent is the one
+    whose mean action flies the fastest lap, preferring laps that keep the
+    margin (judged on the course as it is; see `run_training`). Returns the best
+    agent and its evaluation.
 
     The policies of phase 11 are trained in two stages (`examples.train_course`):
     without the margin first (with it from the start, crashes are so frequent
@@ -330,7 +336,14 @@ def train(
         }
         return _rank(result, margin), fields, result
 
-    env = CourseEnv(course, n=n, weights=weights, nearest=nearest, margin=margin)
+    if workers < 1 or n % workers != 0:
+        raise ValueError("workers must be >= 1 and divide n")
+    env = make_parallel(
+        CourseEnvPart(
+            course, n // workers, weights=weights, nearest=nearest, margin=margin
+        ),
+        workers,
+    )
     info = {"course": course.name, "drones": n, "nearest": nearest}
     return run_training(
         env, total_steps, out, judge, seed, settings, evaluate_every, agent, info,
@@ -369,14 +382,21 @@ def train_random(
     agent: Agent | None = None,
     margin: float = TRAINING_MARGIN,
     report: Callable[[dict[str, Any]], None] | None = None,
+    workers: int = 1,
 ) -> tuple[Agent, CourseSetEvaluation | None]:
-    """Train an agent on random courses: k at once, n drones each, each course
+    """Train an agent on random courses: k at once (split over `workers`
+    processes, k / workers each, each process drawing its own courses), n
+    drones each, each course
     replaced by a new one every `renew_every` steps, the drones seeing the
     `nearest` surfaces around them. The best agent is the one whose mean action
     finishes the most of `validation` fixed courses (`VALIDATION_SEED`), and
     among those the fastest on average. Returns it and its evaluation."""
-    from jineta.picadero.courses import CourseSetEnv, random_course
+    from functools import partial
 
+    from jineta.picadero.courses import random_course
+
+    if workers < 1 or k % workers != 0:
+        raise ValueError("workers must be >= 1 and divide k")
     validation_courses = random_courses(validation, VALIDATION_SEED, ranges)
 
     def judge(candidate: Agent):
@@ -390,14 +410,17 @@ def train_random(
         rank = (float(result.finished), -lap if np.isfinite(lap) else 0.0)
         return rank, fields, result
 
-    env = CourseSetEnv(
-        lambda rng: random_course(rng, ranges),
-        k,
-        n,
-        renew_every,
-        weights=weights,
-        nearest=nearest,
-        margin=margin,
+    env = make_parallel(
+        CourseSetEnvPart(
+            partial(random_course, ranges=ranges),
+            k // workers,
+            n,
+            renew_every,
+            weights=weights,
+            nearest=nearest,
+            margin=margin,
+        ),
+        workers,
     )
     info = {"course": "random", "drones": k * n, "nearest": nearest}
     return run_training(

@@ -203,6 +203,10 @@ class CourseEnv:
             self._restart(done)
         return self._observe(), reward, terminated, truncated, info
 
+    def close(self) -> None:
+        """Nothing to release (Gymnasium's interface has it; `ParallelEnv`
+        stops its workers)."""
+
     def _restart(self, drones: np.ndarray) -> None:
         """These drones (a mask) start a new lap: standing on the floor at the
         start, pilot landed with a clean loop, no previous action."""

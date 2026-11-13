@@ -2,6 +2,7 @@
 
     python -m examples.train_course
     python -m examples.train_course --steps 20e6 --refine 10e6 --drones 256 --seed 1
+    python -m examples.train_course --workers 8      # the drones split over 8 cores
 
 Two stages: first the policy learns to fly the course (`--steps`), then it keeps
 learning with every sphere of its hitbox 5 cm larger (`--refine`), so that it
@@ -45,6 +46,9 @@ def main() -> None:
     parser.add_argument("--refine", type=float, default=10e6, help="with the margin")
     parser.add_argument("--drones", type=int, default=256, help="drones at once")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--workers", type=int, default=1, help="processes (must divide --drones)"
+    )
     parser.add_argument("--out", default="runs/first_course", help="output folder")
     args = parser.parse_args()
 
@@ -52,8 +56,8 @@ def main() -> None:
     settings = PPOSettings()
     begin = time.perf_counter()
     print(
-        f"{course.name}: {args.drones} drones, {args.steps:.3g} steps, seed "
-        f"{args.seed}, reward {TRAINING_WEIGHTS}"
+        f"{course.name}: {args.drones} drones ({args.workers} processes), "
+        f"{args.steps:.3g} steps, seed {args.seed}, reward {TRAINING_WEIGHTS}"
     )
 
     def report(row: dict) -> None:
@@ -83,6 +87,7 @@ def main() -> None:
         settings=settings,
         margin=0.0,
         report=report,
+        workers=args.workers,
     )
     print(f"Stage 2: keeping {100 * TRAINING_MARGIN:.0f} cm from everything")
     agent, _ = train(
@@ -95,6 +100,7 @@ def main() -> None:
         margin=TRAINING_MARGIN,
         agent=agent,
         report=report,
+        workers=args.workers,
     )
     minutes = (time.perf_counter() - begin) / 60.0
     result = evaluate(agent, course, n=256, seed=args.seed)

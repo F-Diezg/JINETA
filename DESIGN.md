@@ -348,7 +348,7 @@ imports `picadero`.
 | 9 | Fast batch engine (many drones at once), checked against the reference | ✅ Done |
 | 10 | Training environment (observation, action, reward) + classical baseline | ✅ Done |
 | 11 | **MVP:** the Iris learns the course (reinforcement learning) | ✅ Done |
-| 12 | Realism for the real drone: motor lag, ground effect, sensor noise, latency, randomised parameters | ⏳ |
+| 12 | Realism for the real drone: motor lag, ground effect, sensor noise, latency, randomised parameters | 🔄 In progress |
 | 13 | 3D viewer of recorded flights | ⏳ |
 | 14 | Towards the real drone: its profile, PX4 software-in-the-loop, offboard interface | ⏳ |
 | 15 | Builder: any user defines the environment and the drone profile | ⏳ |
@@ -937,7 +937,110 @@ risking the next gate (loose end 38).
    end 40.
 7. ✅ **Close the phase**: this document and the README.
 
+**Phase 12 — in progress.** Realism for the real drone.
+
+Plan agreed with the author at the start of the phase (each step: tests green,
+ruff clean, commit + push). Measured before planning (a throwaway prototype,
+Claude's workspace): the phase 11 policy still finishes the first course with
+the Iris's motor lag alone (3.27 s) or with 20 ms between what it sees and what
+it commands alone (3.45 s), but crashes at the first gate with both, and with
+40 ms of latency. Decided with the author:
+- every effect can be switched on and is off by default, so the engine and the
+  phase 11 policy give the same numbers bit for bit, and each step measures how
+  much worse the phase 11 policy flies with its effect;
+- sensors "B light": the policy sees what an onboard estimate would give, built
+  from simulated sensors (a motion-capture system for position and attitude, the
+  gyroscope for the body rates) and a Kalman filter for the velocity, with the
+  latency to the motors; not a full EKF (the real one, PX4's EKF2, comes with
+  PX4 software-in-the-loop in phase 14);
+- the real drone is assumed to be positioned by motion capture (the usual lab
+  setup; not decided yet, to be confirmed in phase 14: onboard vision would
+  have other errors);
+- no battery model in this phase: its effect (less thrust as the voltage falls)
+  is covered by randomising the thrust, and a battery is modelled in phase 14
+  from the real vehicle's data;
+- the drone must be under control after the last gate (loose end 39) in this
+  phase;
+- the long trainings are run on the author's computer (8 cores); Claude's
+  workspace runs short ones to check that everything works.
+
+1. ✅ **Training on several processes** (loose end 21; `picadero/parallel.py`:
+   `ParallelEnv`, `SerialEnv`, `make_parallel`, `CourseEnvPart`,
+   `CourseSetEnvPart`, `worker_seed`, `WorkerError`; `train(..., workers)`,
+   `train_random(..., workers)`; `--workers` in `examples.train_course` and
+   `examples.train_random`; `examples/parallel_speed.py`): the environment
+   split into parts, each in its own process (started with "spawn", the way
+   Windows has), stepped at the same time and joined as one environment with
+   all the drones; the learning stays in the main process. Tests: two workers of
+   three drones give the same observations, rewards, ends and infos as one
+   environment of six, bit for bit, restarts included; random courses in two
+   workers as the same parts in one process (each part its own seed); a failure
+   while building a part or in a step reaches the main process with its
+   traceback, and the workers stop; a short training gives the same log with one
+   worker and with two. Speed (Claude's workspace, 2 cores, 512 drones): one
+   process ~30 000 steps/s, two workers of 256 ~33 000-35 000; two separate
+   processes of 256 give 35 400 together, so the pipes cost nothing measurable
+   and the gain is limited by batch size (a batch of 256 is less efficient per
+   drone than one of 512). On the author's computer, 8 workers of 128 drones are
+   estimated at ~3x one process of 1 024 (not measured: `python -m
+   examples.parallel_speed`).
+2. **Motor lag** (loose end 5): each rotor reaches its commanded speed with a
+   first-order lag (time constants 12.5 ms up, 25 ms down, PX4 SITL's Iris);
+   the rotor speeds become part of the state (13 + one per rotor), integrated
+   with the rest by RK4. Reference and batch. Tests: the exact exponential
+   response, up and down; hover an equilibrium; the batch equal to the
+   reference; without the lag, the engine of before bit for bit.
+3. **Ground and ceiling effect** (loose end 7): each rotor's thrust multiplied
+   by a factor that grows close to the floor and the ceiling (from published
+   models and measurements, capped close to the surface). Tests: the factor by
+   hand, 1 far from both, the height of equilibrium with fixed rotor speeds, the
+   batch equal to the reference.
+4. **Sensors and estimator** (`atalaya`): motion capture (position and attitude
+   with noise, at its rate, with its delay), gyroscope (noise and bias, values of
+   PX4 SITL's Iris IMU), and a Kalman filter for position and velocity from the
+   motion-capture positions (`atalaya.kalman`); for many drones at once. Tests:
+   noise statistics in their intervals, delays exact, the filter's consistency
+   (NEES), seeds repeat.
+5. **The policy sees the estimate, with latency** (`CourseEnv`): the
+   observation built from the estimated state, the action applied after the
+   latency to the motors. Tests: with no noise and no delay, the environment of
+   before bit for bit; delays exact; restarts clear the memory of sensors and
+   filter.
+6. **Parameters per drone and domain randomisation** (half of loose end 30):
+   every drone of a batch with its own parameters (mass, inertia, thrust and
+   moment constants, drag, motor lag, ...), equal to the reference engine with
+   those parameters; ranges drawn at every restart (and the sensors' noise and
+   the latency), the controller keeping the nominal values. Tests: each drone
+   equal to the reference with its parameters; draws inside their ranges,
+   repeated by the seed; no ranges, the nominal drone bit for bit.
+7. **Under control after the last gate** (loose end 39): the episode goes on
+   past the finish until the drone is stopped and level (or crashes). Tests to
+   be planned with the step.
+8. **Training with realism and measuring it**: a recipe, and the policy
+   measured over many drawn conditions (success rate, lap time, closest
+   approach) against the phase 11 policy and the baseline in the same
+   conditions; a short training here, the long one on the author's computer.
+9. **Close the phase**: this document and the README.
+
 ## 6. Decision log
+
+Phase 12 (realism for the real drone):
+- **Training is split over processes, not threads**: Python runs one line at a
+  time per process (its global interpreter lock), so the parts of the
+  environment run in separate processes, each with its own copy of the code,
+  and send their arrays through pipes. The learning stays in one process, so
+  PPO did not change. Processes are started with "spawn" on every system,
+  because that is the only way on Windows and the tests should see what the
+  author runs.
+- **A training gives the same result with any number of workers**: a drone
+  flies the same alone or in any batch, and the parts are joined in a fixed
+  order, so the network sees the same batch; a test checks it. Each part has
+  its own seed (`worker_seed`), so random courses differ between parts; one
+  worker is the bare environment, reset with the seed as before.
+- **More workers pay through larger batches**: splitting a fixed number of
+  drones makes each batch smaller, and NumPy's cost per call is paid per batch
+  (measured in phase 9: the batch engine gains up to ~1 000 drones). With 8
+  cores a training can fly more drones at once for the same time per step.
 
 Phase 11 (the Iris learns the course):
 - **Gymnasium 1.4.0** (the newest, for Python 3.10-3.14) is an optional
@@ -2604,7 +2707,9 @@ Phase 6c (Kalman filter):
       and not rescheduled with speed. Tested from 18 to 30 m/s.
   20. The course loop uses the airspeed in its gains (Beard & McLain use the ground
       speed): equal in still air, different in a strong wind.
-  21. Speed (one core, the first course, author's computer, end of phase 10): the
+  21. (Phase 12, step 1: training can be split over processes,
+      `ParallelEnv`; its speed on the author's computer is to be measured.)
+      Speed (one core, the first course, author's computer, end of phase 10): the
       batch engine at 1 024 drones does 58 093 drone-steps/s (~580× real time),
       the environment 32 475 steps/s (~650×; table in the phase 10 decision log).
       Swift trained at over 700×. Training (phase 11, Claude's workspace, two

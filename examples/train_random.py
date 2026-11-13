@@ -3,6 +3,7 @@ courses it never saw against the classical baseline swept on each.
 
     python -m examples.train_random                     # train, then compare
     python -m examples.train_random --steps 100e6 --courses 8 --drones 128
+    python -m examples.train_random --workers 8        # one course per core
     python -m examples.train_random --compare policies/random_courses.npz
 
 Training: k courses at once, n drones each, every course replaced by a new one
@@ -85,6 +86,9 @@ def main() -> None:
     parser.add_argument("--courses", type=int, default=8, help="courses at once")
     parser.add_argument("--drones", type=int, default=128, help="drones per course")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--workers", type=int, default=1, help="processes (must divide --courses)"
+    )
     parser.add_argument("--out", default="runs/random_courses")
     parser.add_argument("--compare", help="only compare this agent (.npz)")
     args = parser.parse_args()
@@ -114,6 +118,7 @@ def main() -> None:
         n=args.drones,
         seed=args.seed,
         report=report,
+        workers=args.workers,
     )
     print(f"\nTrained in {(time.perf_counter() - begin) / 60:.1f} min.")
     compare(agent)

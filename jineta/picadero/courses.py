@@ -303,6 +303,9 @@ class CourseSetEnv:
         self.clock = 0
         return np.concatenate([env.reset()[0] for env in self.envs]), {}
 
+    def close(self) -> None:
+        """Nothing to release (the interface of `ParallelEnv`)."""
+
     def step(
         self, action: npt.ArrayLike
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
