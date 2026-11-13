@@ -93,14 +93,17 @@ def fly(
     env: CourseEnv,
     rng: np.random.Generator | None = None,
     record: bool = False,
+    seed: int = 0,
 ) -> dict[str, Any]:
     """One lap per drone of `env` with the agent (the mean action without `rng`,
-    drawn from the policy with it). Returns statuses (n,), lap times (n,; nan
-    unless finished), gates passed (n,), clearances (n,: the closest approach to
-    a wall, the ceiling, an obstacle or a frame before the lap's last step) and,
+    drawn from the policy with it), the environment reset with `seed` (its own
+    random draws: sensors' noise, randomised drones). Returns statuses (n,), lap
+    times (n,; nan unless finished), gates passed (n,), clearances (n,: the
+    closest approach to a wall, the ceiling, an obstacle or a frame before the
+    lap's last step) and,
     if `record`, the states of drone 0 after every environment step until its
     lap ended (steps + 1, 13)."""
-    observations, _ = env.reset()
+    observations, _ = env.reset(seed=seed)
     n = env.n
     status = np.full(n, -1)
     lap_time = np.full(n, np.nan)

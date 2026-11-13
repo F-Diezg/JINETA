@@ -1080,11 +1080,47 @@ it commands alone (3.45 s), but crashes at the first gate with both, and with
    says**: with motion capture the estimate is very good (sub-millimetre,
    ~1 cm/s, ~0.25°, ~0.01 rad/s): the latency to the motors, not the noise, is
    what the policy will feel (step 5).
-5. **The policy sees the estimate, with latency** (`CourseEnv`): the
-   observation built from the estimated state, the action applied after the
-   latency to the motors. Tests: with no noise and no delay, the environment of
-   before bit for bit; delays exact; restarts clear the memory of sensors and
-   filter.
+5. ✅ **The policy sees the estimate, with latency** (`Realism(sensors,
+   latency)`, `LAB`; `CourseEnv.estimator`, `delay`; `fly(..., seed)`): with
+   sensors the observation is built from each drone's onboard estimate (the
+   observer reads it as it reads a true state); with a latency every command
+   reaches the rate loop that many physics steps late (a ring of commands on
+   their way, zero thrust and rates at the start of an episode, cleared when a
+   drone restarts); the reward and the referee judge the true flight. `LAB`:
+   motor lag, ground effect, `MOCAP_LAB` sensors and 20 ms of latency (chosen:
+   no open measurement of a companion computer's latency to PX4's rate loop was
+   found). `fly` resets its environment with a seed (0), so a lap with sensors
+   repeats. Tests: 30 ms of latency (an action arriving in the middle of the
+   next one's two steps), and 20 ms with the motor lag, against the reference
+   engine whose commands arrive that late (every state within 1e-9, the same
+   end); a crashed drone restarts with nothing on its way (its next episode a
+   fresh environment's first, bit for bit; its neighbour as if alone); perfect
+   sensors give the same flight bit for bit and the same observations to
+   float32 rounding; with the lab's sensors the observation is the observer's
+   view of the estimate (not of the truth, within 0.1 of it), repeats with the
+   seed and changes with another, and a restarted drone's estimate starts at its
+   start. Checked by breaking the code (5 mistakes: the commands on their way
+   not cleared on a restart, the new command applied at once, the observation
+   from the true state, the estimator not reset, the ring advanced twice); each
+   made a test fail. **The phase 11 policy** (`python -m
+   examples.realism_policy`; mean action, and 64 laps with its noise):
+
+   | effect | lap | closest | noisy laps finished |
+   |---|---|---|---|
+   | none | 3.23 s | 13.0 cm | 100 % |
+   | motor lag | 3.28 s | 8.7 cm | 100 % |
+   | ground effect | 3.26 s | 21.8 cm | 100 % |
+   | sensors | 3.23 s | 13.4 cm | 100 % |
+   | latency 20 ms | 3.39 s | 5.8 cm | 100 % |
+   | latency 30 ms | 3.43 s | 1.2 cm | 69 % |
+   | latency 40 ms | crash | | 0 % |
+   | motor lag + 20 ms | crash | | 0 % |
+   | all of `LAB` | 3.44 s | 9.6 cm | 100 % |
+
+   The latency is what hurts; the result of a combination is not the sum of its
+   parts (the ground effect's extra thrust at the take-off happens to save the
+   lap that the lag and the latency together crash): a policy trained without
+   them flies on a knife's edge.
 6. **Parameters per drone and domain randomisation** (half of loose end 30):
    every drone of a batch with its own parameters (mass, inertia, thrust and
    moment constants, drag, motor lag, ...), equal to the reference engine with
@@ -1162,6 +1198,12 @@ Phase 12 (realism for the real drone):
 - **`atalaya` uses the batch quaternions** (step 4): the estimator works on
   stacks, so `atalaya` imports `escuadron.quaternion` (and `core`); nothing in
   the engine imports `atalaya`.
+- **The latency is one delay on the commands** (step 5): from the moment the
+  policy sees its observation to the moment its command reaches the rate loop.
+  A delay on the observation and one on the command are the same to the
+  policy (it acts on information that old); one ring of commands is simpler,
+  and the observation stays the estimator's latest. The motion-capture delay is
+  separate: the estimator carries it forward (step 4).
 
 Phase 11 (the Iris learns the course):
 - **Gymnasium 1.4.0** (the newest, for Python 3.10-3.14) is an optional

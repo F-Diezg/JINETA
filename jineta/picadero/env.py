@@ -24,6 +24,13 @@ Timing: the physics and the rate loop run at 1 / dt (100 Hz); the policy acts
 every `action_repeat` steps (2: 50 Hz), and its action is held in between. The
 reward of an environment step is the sum of the rewards of its physics steps.
 
+Realism (`picadero.realism.Realism`, phase 12; all off by default): the motor
+lag and the ground effect change the vehicles; with `sensors` the observation
+is built from each drone's onboard estimate (`atalaya.estimator`) instead of
+its true state; with a `latency` every command reaches the rate loop that many
+physics steps late (a ring of commands on their way, cleared when a drone
+restarts). The reward and the referee always judge the true flight.
+
 `info` (arrays, one entry per drone; meaningful where `done = terminated |
 truncated`):
     final_observation (n, size)   the last observation of an episode that ended
@@ -41,6 +48,7 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 
+from jineta.atalaya.estimator import BatchEstimator
 from jineta.campo.course import Course
 from jineta.escuadron.contact import BatchGroundContact
 from jineta.escuadron.control import BatchRatePilot
@@ -137,6 +145,15 @@ class CourseEnv:
             self.vehicles, referee, self.dt, np.tile(self.start, (self.n, 1))
         )
         self.pilot = BatchRatePilot(self.vehicles, gains.rate, self.dt, landed=True)
+        self.estimator = None
+        if self.realism.sensors is not None:
+            self.estimator = BatchEstimator(self.realism.sensors, self.n, self.dt)
+        # Commands on their way to the rate loop (latency): a ring of slots,
+        # one per physics step of delay.
+        self.delay = self.realism.latency_steps(self.dt)
+        self.pending_thrust = np.zeros((self.delay, self.n))
+        self.pending_rates = np.zeros((self.delay, self.n, 3))
+        self.physics_steps = 0
         self.previous_action = np.zeros((self.n, ACTION_SIZE))
         self.episode_return = np.zeros(self.n)
         self.episode_steps = np.zeros(self.n, dtype=int)
@@ -159,8 +176,8 @@ class CourseEnv:
         self, seed: int | None = None, options: dict | None = None
     ) -> tuple[np.ndarray, dict[str, Any]]:
         """Start a new episode for every drone; returns the observations (n, size)
-        and an empty info. `seed` seeds `np_random` (nothing is random yet: the
-        randomisation of phase 12 will draw from it)."""
+        and an empty info. `seed` seeds `np_random`, which draws the sensors'
+        noise (and the randomisation of phase 12)."""
         if seed is not None:
             self.np_random = np.random.default_rng(seed)
         self._restart(np.ones(self.n, dtype=bool))
@@ -175,21 +192,30 @@ class CourseEnv:
         if action.shape != (self.n, ACTION_SIZE):
             raise ValueError(f"action must have shape ({self.n}, {ACTION_SIZE})")
         action = np.clip(action, -1.0, 1.0)
-        self.pilot.thrust_command, self.pilot.rate_command = self.limits.commands(
-            action
-        )
+        thrust, rates = self.limits.commands(action)
         referee = self.flight.referee
         reward = np.zeros(self.n)
         for _ in range(self.action_repeat):
             active = ~referee.ended
             if not np.any(active):
                 break
+            if self.delay == 0:
+                self.pilot.thrust_command, self.pilot.rate_command = thrust, rates
+            else:  # the command sent `delay` physics steps ago arrives now
+                slot = self.physics_steps % self.delay
+                self.pilot.thrust_command = self.pending_thrust[slot].copy()
+                self.pilot.rate_command = self.pending_rates[slot].copy()
+                self.pending_thrust[slot] = thrust
+                self.pending_rates[slot] = rates
+            self.physics_steps += 1
             target, passed = referee.next_gate.copy(), referee.passed.copy()
-            before = self.flight.states[:, 0:3].copy()
+            previous = self.flight.states.copy()
             self.flight.step(self.pilot)
+            if self.estimator is not None:
+                self.estimator.step(previous, self.flight.states, self.np_random)
             crashed = active & (referee.status == CRASHED)
             reward += self.reward(
-                before,
+                previous[:, 0:3],
                 self.flight.states[:, 0:3],
                 target,
                 referee.passed - passed,
@@ -224,12 +250,21 @@ class CourseEnv:
         self.flight.reset(drones, self.start)
         self.pilot.reset(drones)
         self.pilot.landed[drones] = True
+        self.pending_thrust[:, drones] = 0.0
+        self.pending_rates[:, drones] = 0.0
+        if self.estimator is not None:
+            self.estimator.reset(drones, self.start, self.np_random)
         self.previous_action[drones] = 0.0
         self.episode_return[drones] = 0.0
         self.episode_steps[drones] = 0
 
     def _observe(self) -> np.ndarray:
+        """What the policy sees: built from the true states, or from the
+        estimated ones with sensors."""
+        states = (
+            self.flight.states if self.estimator is None else self.estimator.estimate
+        )
         observation = self.observer(
-            self.flight.states, self.flight.referee.next_gate, self.previous_action
+            states, self.flight.referee.next_gate, self.previous_action
         )
         return observation.astype(np.float32)

@@ -5,35 +5,38 @@
 
 Flies a trained policy (by default the phase 11 policy,
 `policies/first_course.npz`, trained in the ideal simulator) on the first course
-with each effect of `picadero.realism.Realism` on its own, and with all of them,
-and prints its deterministic lap (status, lap time, closest approach) and how
-many of 64 laps flown with its own noise finish.
+with each effect of `picadero.realism.Realism` on its own, and with all of them
+(`LAB`: a motion-capture lab), and prints its deterministic lap (status, lap
+time, closest approach) and how many of 64 laps flown with its own noise
+finish.
 """
 
 import argparse
-import dataclasses
 
 import numpy as np
 
 from examples.iris_course import COURSE_FILE
+from jineta.atalaya.estimator import MOCAP_LAB
 from jineta.campo.course import load_course
 from jineta.doma.policy import Agent
 from jineta.escuadron.referee import STATUS_NAMES
 from jineta.picadero.env import CourseEnv
-from jineta.picadero.realism import Realism
+from jineta.picadero.realism import LAB, Realism
 from jineta.picadero.training import fly
 
 
 def conditions() -> dict[str, Realism]:
     """Every effect on its own, then all of them."""
-    effects = {"ideal": Realism()}
-    every = {}
-    for field in dataclasses.fields(Realism):
-        if field.type in (bool, "bool"):
-            effects[field.name] = Realism(**{field.name: True})
-            every[field.name] = True
-    effects["all"] = Realism(**every)
-    return effects
+    return {
+        "ideal": Realism(),
+        "motor lag": Realism(motor_lag=True),
+        "ground effect": Realism(ground_effect=True),
+        "sensors": Realism(sensors=MOCAP_LAB),
+        "latency 20 ms": Realism(latency=0.02),
+        "latency 40 ms": Realism(latency=0.04),
+        "lag + 20 ms": Realism(motor_lag=True, latency=0.02),
+        "lab (all)": LAB,
+    }
 
 
 def main() -> None:
