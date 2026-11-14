@@ -334,3 +334,70 @@ def path_lines(points: npt.ArrayLike) -> Mesh:
     if len(points) < 2:
         return Mesh(points)
     return Mesh(points, lines=_cells([list(range(len(points)))]))
+
+
+def sphere(
+    center: npt.ArrayLike, radius: float, rings: int = 8, segments: int = 16
+) -> Mesh:
+    """A sphere of quadrilaterals (triangles at the poles): `rings` bands from
+    pole to pole, `segments` around."""
+    center = np.asarray(center, dtype=float)
+    theta = np.pi * np.arange(1, rings) / rings  # from the top pole, not the poles
+    phi = 2.0 * np.pi * np.arange(segments) / segments
+    t, p = np.meshgrid(theta, phi, indexing="ij")
+    ring_points = np.stack(
+        [np.sin(t) * np.cos(p), np.sin(t) * np.sin(p), np.cos(t)], axis=-1
+    ).reshape(-1, 3)
+    points = (
+        np.vstack([[0.0, 0.0, 1.0], ring_points, [0.0, 0.0, -1.0]]) * radius + center
+    )
+    top, bottom = 0, len(points) - 1
+
+    def at(ring: int, k: int) -> int:
+        return 1 + ring * segments + k % segments
+
+    # Counter-clockwise seen from outside (normals out).
+    faces = [[top, at(0, k), at(0, k + 1)] for k in range(segments)]
+    for ring in range(rings - 2):
+        faces += [
+            [at(ring, k), at(ring + 1, k), at(ring + 1, k + 1), at(ring, k + 1)]
+            for k in range(segments)
+        ]
+    faces += [[bottom, at(rings - 2, k + 1), at(rings - 2, k)] for k in range(segments)]
+    return Mesh(points, _cells(faces))
+
+
+def hitbox_mesh(shape: DroneShape) -> Mesh:
+    """The drone's collision spheres in its body axes."""
+    return merge(
+        [
+            sphere(c, r)
+            for c, r in zip(shape.hitbox_centers, shape.hitbox_radii, strict=True)
+        ]
+    )
+
+
+def overview_camera(
+    room: Room, view_angle: float = 30.0, direction: npt.ArrayLike = (-0.4, 0.8, -0.75)
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """A camera that sees the whole room: (position, focal point, up), NED.
+
+    It looks at the middle of the room (a third of the way up) from `direction`
+    (from the focal point towards the camera; by default from the south-east,
+    above), as far as needed for every corner of the room to be inside a cone
+    of `view_angle` [deg] (VTK's vertical view angle; a window wider than tall
+    sees more sideways, so the cone is the tighter limit)."""
+    length, width, height = room.size
+    focus = np.array([length / 2.0, width / 2.0, -height / 3.0])
+    back = np.asarray(direction, dtype=float)
+    back = back / np.linalg.norm(back)
+    up = np.array([0.0, 0.0, -1.0])
+    corners = (_CORNERS + 1.0) / 2.0 * np.array([length, width, -height])
+    half = np.radians(view_angle / 2.0) * 0.9  # a little room at the edges
+    # A corner at offset r from the focus, seen from distance d along `back`:
+    # its angle from the line of sight is atan(|r_perp| / (d - r . back)).
+    r = corners - focus
+    along = r @ back
+    across = np.linalg.norm(r - np.outer(along, back), axis=1)
+    distance = float(np.max(along + across / np.tan(half)))
+    return focus + distance * back, focus, up
