@@ -332,8 +332,10 @@ class Charts:
 class Viewer:
     """A window playing recordings: the player, the scene, the charts, the
     keys, the sliders and a timer. `source()` (optional) is asked for new
-    recordings every `poll_every` seconds (a training still writing them), and
-    `log()` (optional) for the training's log."""
+    recordings every `poll_every` seconds (a training still writing them),
+    `log()` (optional) for the training's log, and `positions()` (optional)
+    for where the recordings are on the log's axis of steps (by default their
+    steps; `tribuna.run`)."""
 
     def __init__(
         self,
@@ -344,12 +346,14 @@ class Viewer:
         poll_every: float = 1.0,
         drones: int = 9,
         log: Callable[[], LogSeries] | None = None,
+        positions: Callable[[], np.ndarray] | None = None,
     ) -> None:
         import pyvista as pv
 
         self.player = player
         self.source = source
         self.log = log
+        self.positions = positions
         self.poll_every = poll_every
         self.plotter = plotter if plotter is not None else pv.Plotter(
             window_size=[1400, 860], title="Jineta - tribuna"
@@ -365,11 +369,16 @@ class Viewer:
 
     def refresh(self) -> None:
         """The charts with the latest data."""
-        frame = self.player.frame()
-        steps = float(frame.recording.steps) if frame is not None else 0.0
+        recordings = self.player.recordings
+        x = np.array([r.steps for r in recordings], dtype=float)
+        if self.positions is not None:
+            given = np.asarray(self.positions(), dtype=float)
+            if len(given) == len(recordings):
+                x = given
+        now = float(x[self.player.index]) if len(recordings) else 0.0
         log = self.log() if self.log is not None else None
-        numbers = progress(self.player.recordings, self.player.course)
-        self.charts.update(log, numbers, steps)
+        numbers = progress(recordings, self.player.course, x)
+        self.charts.update(log, numbers, now)
 
     def tick(self, dt: float) -> None:
         """One frame: new recordings and the log (now and then), the player

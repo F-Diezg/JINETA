@@ -15,6 +15,10 @@ Comparison: on 20 test courses (never trained on, nor used to pick the agent),
 the policy's mean action flies one lap, and the baseline is swept on each course
 (a smaller grid than the first course's, ~10 s per course) for its fastest
 robust lap.
+
+Every evaluation's laps (one on each validation course) are recorded with the
+agent that flew them (phase 13; `--no-record` to keep none): `python -m tribuna
+<out>` shows them (c: the next course).
 """
 
 import argparse
@@ -91,12 +95,17 @@ def main() -> None:
     )
     parser.add_argument("--out", default="runs/random_courses")
     parser.add_argument("--compare", help="only compare this agent (.npz)")
+    parser.add_argument(
+        "--no-record", action="store_true", help="keep no laps for the viewer"
+    )
     args = parser.parse_args()
 
     if args.compare:
         compare(Agent.load(args.compare))
         return
     begin = time.perf_counter()
+    if not args.no_record:
+        print(f"Watch it learn (in another window): python -m tribuna {args.out}")
 
     def report(row: dict) -> None:
         line = (
@@ -119,6 +128,7 @@ def main() -> None:
         seed=args.seed,
         report=report,
         workers=args.workers,
+        record=not args.no_record,
     )
     print(f"\nTrained in {(time.perf_counter() - begin) / 60:.1f} min.")
     compare(agent)

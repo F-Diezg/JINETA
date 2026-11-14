@@ -36,8 +36,9 @@ def recording(steps, *laps, courses=(COURSE,)):
 
 
 def test_recordings_play_in_order_then_the_last_again():
-    player = Player([recording(300, flown(1.0)), recording(100, flown(0.5))])
-    assert [r.steps for r in player.recordings] == [100, 300]
+    # The order given (the run's) is kept: a later stage can bring fewer steps.
+    player = Player([recording(100, flown(0.5)), recording(90, flown(1.0))])
+    assert [r.steps for r in player.recordings] == [100, 90]
     assert player.duration() == pytest.approx(0.5)
     player.advance(0.2)
     assert player.t == pytest.approx(0.2)
@@ -74,10 +75,10 @@ def test_the_pause_between_recordings_is_wall_time_at_any_speed():
 def test_new_recordings_are_played_when_the_player_gets_there():
     player = Player([recording(100, flown(0.5))])
     player.advance(0.3)
-    player.add([recording(200, flown(0.4)), recording(50, flown(0.2))])
-    # The one being played stays the one being played (an earlier one arrived).
-    assert [r.steps for r in player.recordings] == [50, 100, 200]
-    assert player.index == 1 and player.t == pytest.approx(0.3)
+    player.add([recording(200, flown(0.4)), recording(150, flown(0.2))])
+    # After the others, in the order given; the one being played goes on.
+    assert [r.steps for r in player.recordings] == [100, 200, 150]
+    assert player.index == 0 and player.t == pytest.approx(0.3)
     player.advance(0.2)
     player.advance(PAUSE)
     assert player.current.steps == 200

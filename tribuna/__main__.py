@@ -5,7 +5,7 @@
     python -m tribuna runs/replays/first_course      # examples.record_agent
     python -m tribuna runs/x/laps/000000163840.json  # one recording
 
-The recordings are played in order of training steps, from the first, each
+The recordings are played in the training's order, from the first, each
 with the laps of the ones before as fading trails; while a training goes on,
 new ones are read every second and played when the player reaches them (End
 jumps to the newest). Beside them, the training's log: how its episodes ended
@@ -42,7 +42,7 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit("The viewer needs PyVista: pip install pyvista")
 
     path = Path(args.path)
-    log = None
+    log = positions = None
     if path.is_file():
         player, source = Player([read_recording(path)]), None
     else:
@@ -53,11 +53,13 @@ def main(argv: list[str] | None = None) -> None:
             time.sleep(2.0)
             recordings = run.poll()
         player, source, log = Player(recordings), run.poll, run.log
+        positions = run.positions
         for error in run.errors.values():
             print(f"Skipped: {error}")
     if args.newest:
         player.newest()
-    Viewer(player, player.recordings[0].shape, source, log=log).show()
+    shape = player.recordings[0].shape
+    Viewer(player, shape, source, log=log, positions=positions).show()
 
 
 if __name__ == "__main__":

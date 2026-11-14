@@ -355,6 +355,35 @@ def test_a_row_being_written_is_left_out(tmp_path):
     assert read_log(tmp_path / "nothing.csv") == []
 
 
+def test_a_second_stage_from_an_earlier_agent(tmp_path):
+    """A second stage starts from the first stage's best agent, which may be
+    older than its last: in the agents' steps the stages overlap, on the run's
+    axis (steps run, stage after stage) they do not."""
+    settings = PPOSettings(rollout_steps=16, minibatch_size=64, epochs=1)
+    train(
+        SHORT, 3 * 16 * 4, tmp_path / "warmup", n=4, settings=settings,
+        evaluate_every=1, margin=0.0,
+    )  # fmt: skip
+    early = Agent.load(tmp_path / "warmup" / "agents" / "000000000064.npz")
+    train(
+        SHORT, 2 * 16 * 4, tmp_path / "refine", n=4, settings=settings,
+        evaluate_every=1, agent=early,
+    )  # fmt: skip
+    run = Run(tmp_path)
+    run.poll()
+    # Stage after stage (warmup 64, 128, 192; refine 128, 192), then steps, in
+    # the order they were run (not by their names).
+    assert [r.steps for r in run.recordings] == [64, 128, 192, 128, 192]
+    assert [s.name for s in run.stages()] == ["warmup", "refine"]
+    # The axis: the first stage's own steps, then 192 + the second's own.
+    np.testing.assert_array_equal(run.positions(), [64, 128, 192, 256, 320])
+    log = run.log()
+    np.testing.assert_array_equal(log.steps, [64, 128, 192, 256, 320])
+    # Read while it grows: a recording of the second stage comes after the rest.
+    fresh = Run(tmp_path / "warmup")
+    assert [r.steps for r in fresh.poll()] == [64, 128, 192]
+
+
 def test_two_stages_on_one_axis_of_steps(tmp_path):
     settings = PPOSettings(rollout_steps=16, minibatch_size=64, epochs=1)
     train(
@@ -370,9 +399,10 @@ def test_two_stages_on_one_axis_of_steps(tmp_path):
     run.poll()
     assert [r.steps for r in run.recordings] == [64, 128, 192, 256]
     assert [run.stage(i).name for i in range(4)] == ["fly", "fly", "margin", "margin"]
-    # The second stage's log counted its own steps (64, 128): it is moved by the
-    # 128 its agent brought.
+    # The second stage's log counted its own steps (64, 128): it comes after the
+    # 128 steps of the first.
     np.testing.assert_array_equal(run.log().steps, [64, 128, 192, 256])
+    np.testing.assert_array_equal(run.positions(), [64, 128, 192, 256])
     # A replay folder holds only laps (and agents); a folder of recordings too.
     replay = tmp_path / "replay"
     shutil.copytree(tmp_path / "fly" / LAPS_FOLDER, replay / LAPS_FOLDER)

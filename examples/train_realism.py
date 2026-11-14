@@ -23,6 +23,10 @@ phase 11 policy and the classical baseline in the same conditions (the
 baseline through the same interface, reading the same estimate; it was not
 designed to stop, and on this course it cannot: it is measured without the
 stop).
+
+Every evaluation's laps (8 of its drawn drones) are recorded with the agent
+that flew them (phase 13; `--no-record` to keep none): `python -m tribuna
+<out>`, in another window, shows the policy learning, both stages.
 """
 
 import argparse
@@ -90,10 +94,15 @@ def main() -> None:
     parser.add_argument(
         "--overrun", type=float, default=1.0, help="penalty per metre after the finish"
     )
+    parser.add_argument(
+        "--no-record", action="store_true", help="keep no laps for the viewer"
+    )
     args = parser.parse_args()
 
     course = load_course(COURSE_FILE)
     begin = time.perf_counter()
+    if not args.no_record:
+        print(f"Watch it learn (in another window): python -m tribuna {args.out}")
 
     def report(row: dict) -> None:
         line = (
@@ -113,6 +122,7 @@ def main() -> None:
     common = {
         "n": args.drones, "realism": RANDOMISED_LAB, "stop": stop,
         "report": report, "workers": args.workers, "weights": weights,
+        "record": not args.no_record,
     }  # fmt: skip
     if args.start:
         agent = Agent.load(args.start)

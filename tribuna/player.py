@@ -1,7 +1,8 @@
 """What the viewer shows at each moment: the playback of recorded laps.
 
-The player holds the recordings in order of training steps and plays them one
-after the other, the way a film of the training would: every lap of the current
+The player holds the recordings in the run's order (`tribuna.run`: stage after
+stage, then steps) and plays them one after the other, the way a film of the
+training would: every lap of the current
 recording (on the course being shown) flies at once, on its own lap clock, and
 once the last of them has ended and a short pause has passed, the next
 recording starts. When there is no next one yet, the last recording is played
@@ -123,7 +124,7 @@ class Player:
     _waited: float = field(default=0.0, repr=False)
 
     def __post_init__(self) -> None:
-        self.recordings = sorted(self.recordings, key=lambda r: r.steps)
+        self.recordings = list(self.recordings)
 
     @property
     def current(self) -> Recording | None:
@@ -143,14 +144,9 @@ class Player:
         return max((lap.duration for lap in laps), default=0.0)
 
     def add(self, recordings: list[Recording]) -> None:
-        """New recordings (a training still running); kept in order of steps,
-        the one being played stays the one being played."""
-        if not recordings:
-            return
-        current = self.current
-        self.recordings = sorted([*self.recordings, *recordings], key=lambda r: r.steps)
-        if current is not None:
-            self.index = next(i for i, r in enumerate(self.recordings) if r is current)
+        """New recordings (a training still running), after the others: a
+        training writes them in the run's order."""
+        self.recordings.extend(recordings)
 
     def advance(self, dt: float) -> None:
         """Move the playback on by dt seconds of wall time."""

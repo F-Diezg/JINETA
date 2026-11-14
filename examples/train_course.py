@@ -16,6 +16,10 @@ lap times, the spread of the actions); every 10 updates the deterministic policy
 measured against the classical baseline (6.77 s); `python -m
 examples.policy_course <out>/margin/best.npz` draws its lap.
 
+Every evaluation's laps are recorded with the agent that flew them (phase 13;
+`--no-record` to keep none): `python -m tribuna <out>`, in another window,
+shows the policy learning, live while the training goes on and afterwards.
+
 Training is repeatable: the same seed on the same computer gives the same
 numbers. On another computer the numbers differ from the last digits on (the
 matrix products), and a training is a long chain of them, so its result
@@ -50,6 +54,9 @@ def main() -> None:
         "--workers", type=int, default=1, help="processes (must divide --drones)"
     )
     parser.add_argument("--out", default="runs/first_course", help="output folder")
+    parser.add_argument(
+        "--no-record", action="store_true", help="keep no laps for the viewer"
+    )
     args = parser.parse_args()
 
     course = load_course(COURSE_FILE)
@@ -59,6 +66,8 @@ def main() -> None:
         f"{course.name}: {args.drones} drones ({args.workers} processes), "
         f"{args.steps:.3g} steps, seed {args.seed}, reward {TRAINING_WEIGHTS}"
     )
+    if not args.no_record:
+        print(f"Watch it learn (in another window): python -m tribuna {args.out}")
 
     def report(row: dict) -> None:
         lap = row["mean_lap_time"]
@@ -88,6 +97,7 @@ def main() -> None:
         margin=0.0,
         report=report,
         workers=args.workers,
+        record=not args.no_record,
     )
     print(f"Stage 2: keeping {100 * TRAINING_MARGIN:.0f} cm from everything")
     agent, _ = train(
@@ -101,6 +111,7 @@ def main() -> None:
         agent=agent,
         report=report,
         workers=args.workers,
+        record=not args.no_record,
     )
     minutes = (time.perf_counter() - begin) / 60.0
     result = evaluate(agent, course, n=256, seed=args.seed)

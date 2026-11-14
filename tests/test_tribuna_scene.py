@@ -154,3 +154,14 @@ def test_the_trails_and_the_charts(plotter, recordings):
     np.testing.assert_array_equal(charts.ends_now.x, [2000.0, 2000.0])
     viewer.go_to(0.4)  # the recordings slider
     assert viewer.player.index == 0
+
+
+def test_the_charts_use_the_run_axis(plotter, recordings):
+    first, second = recordings
+    viewer = Viewer(
+        Player([first, second]), SHAPE, None, plotter,
+        positions=lambda: np.array([700.0, 1400.0]),
+    )  # fmt: skip
+    viewer.tick(0.1)
+    np.testing.assert_array_equal(viewer.charts.ends_now.x, [700.0, 700.0])
+    np.testing.assert_array_equal(viewer.charts.first_time.x, [700.0, 1400.0])
