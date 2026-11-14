@@ -1,23 +1,21 @@
-"""Tests for the viewer's parts that need no window (phase 13, `tribuna`): the
-course and the drone as meshes (every point on the surface the collision model
-uses, faces turned outwards), where a recorded drone is between samples, and a
-training's folder read as it grows."""
+"""Tests for the viewer's Python parts (phase 13, `tribuna`): the course and the
+drone as meshes (every point on the surface the collision model uses, faces
+turned outwards), the camera that sees the whole room, and a training's folder
+read as it grows. The server and the page: tests/test_tribuna_web.py."""
 
-import dataclasses
 import shutil
 
 import numpy as np
 import pytest
 
 from jineta.campo.gates import CircularGate, RectangularGate
-from jineta.campo.indoor import Box, Cylinder
-from jineta.core import quaternion
+from jineta.campo.indoor import Box, Cylinder, Room
 from jineta.doma.policy import Agent
 from jineta.doma.ppo import PPOSettings
 from jineta.jinete.profiles import IRIS, MULTIROTOR_PROFILES
-from jineta.picadero.recording import Lap, Recording, drone_shape, recording_files
+from jineta.picadero.recording import drone_shape, recording_files
 from jineta.picadero.training import LAPS_FOLDER, save_recording, train
-from tests.test_recording import COURSE, lap
+from tests.test_recording import COURSE
 from tests.test_training import SHORT
 from tests.test_training_record import short_training
 from tribuna.geometry import (
@@ -30,13 +28,12 @@ from tribuna.geometry import (
     drone_meshes,
     floor_grid,
     merge,
-    path_lines,
-    pose_matrix,
+    overview_camera,
     rectangular_frame,
     room_edges,
+    sphere,
 )
-from tribuna.motion import path_until, pose_at, slerp
-from tribuna.run import Run, lap_numbers, read_log
+from tribuna.run import Run, read_log
 
 SHAPE = drone_shape(MULTIROTOR_PROFILES["iris"])
 
@@ -174,13 +171,12 @@ def test_every_part_of_the_first_course():
 
 
 def test_merge_moves_the_indices_and_bad_cells_are_rejected():
-    a = path_lines([[0, 0, 0], [1, 0, 0]])
+    a = Mesh(np.array([[0.0, 0, 0], [1, 0, 0]]), lines=[2, 0, 1])
     b = block([0, 0, 0], [1, 1, 1])
     both = merge([a, b])
     assert len(both.points) == 10
     assert cell_lists(both.lines) == [[0, 1]]
     assert min(min(c) for c in cell_lists(both.faces)) == 2
-    assert len(path_lines([[0, 0, 0]]).lines) == 0
     assert len(merge([]).points) == 0
     with pytest.raises(ValueError, match="not there"):
         Mesh(np.zeros((3, 3)), faces=[3, 0, 1, 3])
@@ -218,98 +214,33 @@ def test_the_drone_has_its_rotors_where_the_profile_has_them():
 IRIS_ROTORS_XY = np.array([rotor.position[0:2] for rotor in IRIS.rotors]).T
 
 
-def test_a_pose_places_the_body_in_ned():
-    q = quaternion.from_euler(0.2, -0.3, np.radians(90.0))
-    p = np.array([5.0, 4.0, -1.5])
-    matrix = pose_matrix(p, q)
-    body = np.vstack([SHAPE.rotors, [[1.0, 0.0, 0.0]]])
-    placed = (matrix[0:3, 0:3] @ body.T).T + matrix[0:3, 3]
-    expected = (quaternion.to_matrix(q) @ body.T).T + p
-    np.testing.assert_allclose(placed, expected, atol=1e-15)
-    np.testing.assert_array_equal(matrix[3], [0.0, 0.0, 0.0, 1.0])
-    # Nose East at a heading of 90 degrees, level.
-    level = pose_matrix(p, quaternion.from_euler(0.0, 0.0, np.radians(90.0)))
-    np.testing.assert_allclose(
-        level[0:3, 0:3] @ [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], atol=1e-15
-    )
-    # A rounded quaternion (as in a recording) still gives a rotation.
-    rounded = pose_matrix(p, np.round(q, 3))
-    np.testing.assert_allclose(
-        rounded[0:3, 0:3] @ rounded[0:3, 0:3].T, np.eye(3), atol=1e-12
-    )
+def test_a_sphere_is_round_with_faces_outwards():
+    center = np.array([1.0, -2.0, 0.5])
+    mesh = sphere(center, 0.3, rings=6, segments=10)
+    np.testing.assert_allclose(np.linalg.norm(mesh.points - center, axis=1), 0.3)
+    for centroid, normal in face_normals(mesh):
+        assert np.dot(normal, centroid - center) > 0.0
 
 
-# ---- where a recorded drone is -----------------------------------------------------
-
-
-def turned(yaw_deg):
-    return quaternion.from_euler(0.0, 0.0, np.radians(yaw_deg))
-
-
-def heading(q):
-    return np.degrees(quaternion.to_euler(q)[2])
-
-
-def test_slerp_turns_steadily_about_one_axis():
-    q0, q1 = turned(0.0), turned(90.0)
-    for fraction in (0.0, 0.25, 0.5, 0.9, 1.0):
-        q = slerp(q0, q1, fraction)
-        assert np.linalg.norm(q) == pytest.approx(1.0, abs=1e-15)
-        assert heading(q) == pytest.approx(90.0 * fraction, abs=1e-9)
-    # -q1 is the same attitude: the same way round, not 270 degrees back.
-    np.testing.assert_allclose(slerp(q0, -q1, 0.5), slerp(q0, q1, 0.5), atol=1e-15)
-    # A tilt and a turn together: half-way is half the rotation between them.
-    a = quaternion.from_euler(0.3, 0.1, 0.0)
-    b = quaternion.from_euler(-0.2, 0.4, 1.0)
-    half = slerp(a, b, 0.5)
-    step = quaternion.multiply(quaternion.conjugate(a), half)
-    whole = quaternion.multiply(quaternion.conjugate(a), b)
-    np.testing.assert_allclose(
-        2.0 * quaternion.to_rotation_vector(step),
-        quaternion.to_rotation_vector(whole),
-        atol=1e-12,
-    )
-    near = slerp(q0, turned(1e-3), 0.5)  # almost equal: still a unit quaternion
-    assert np.linalg.norm(near) == pytest.approx(1.0, abs=1e-15)
-    assert heading(near) == pytest.approx(5e-4, abs=1e-9)
-
-
-def three_samples():
-    return lap(
-        times=[0.0, 0.02, 0.04],
-        positions=[[0.0, 0.0, -1.0], [0.2, 0.0, -1.0], [0.2, 0.4, -1.2]],
-        attitudes=[turned(0.0), turned(10.0), turned(30.0)],
-    )
-
-
-def test_a_pose_between_samples():
-    flight = three_samples()
-    for k in range(3):  # at a sample, the sample
-        position, attitude = pose_at(flight, flight.times[k])
-        np.testing.assert_allclose(position, flight.positions[k], atol=1e-15)
-        assert heading(attitude) == pytest.approx([0.0, 10.0, 30.0][k], abs=1e-9)
-    position, attitude = pose_at(flight, 0.03)
-    np.testing.assert_allclose(position, [0.2, 0.2, -1.1], atol=1e-12)
-    assert heading(attitude) == pytest.approx(20.0, abs=1e-9)
-    position, attitude = pose_at(flight, 0.005)
-    np.testing.assert_allclose(position, [0.05, 0.0, -1.0], atol=1e-12)
-    assert heading(attitude) == pytest.approx(2.5, abs=1e-9)
-    # Before the start and after the end: where it stood and where it ended.
-    np.testing.assert_allclose(pose_at(flight, -1.0)[0], flight.positions[0])
-    np.testing.assert_allclose(pose_at(flight, 9.0)[0], flight.positions[-1])
-    # Rounded attitudes come back as unit quaternions.
-    rough = dataclasses.replace(flight, attitudes=np.round(flight.attitudes, 2))
-    assert np.linalg.norm(pose_at(rough, 0.01)[1]) == pytest.approx(1.0, abs=1e-15)
-
-
-def test_the_path_flown_so_far():
-    flight = three_samples()
-    np.testing.assert_allclose(path_until(flight, 0.0), [[0.0, 0.0, -1.0]])
-    np.testing.assert_allclose(
-        path_until(flight, 0.03), [[0.0, 0.0, -1.0], [0.2, 0.0, -1.0], [0.2, 0.2, -1.1]]
-    )
-    np.testing.assert_allclose(path_until(flight, 0.04), flight.positions)
-    np.testing.assert_allclose(path_until(flight, 5.0), flight.positions)
+def test_the_overview_camera_sees_the_whole_room():
+    for size in ([18.0, 10.0, 4.0], [6.0, 6.0, 3.0], [40.0, 8.0, 12.0]):
+        room = Room(np.array(size))
+        position, focus, up = overview_camera(room)
+        np.testing.assert_allclose(focus, [size[0] / 2, size[1] / 2, -size[2] / 3])
+        np.testing.assert_array_equal(up, [0.0, 0.0, -1.0])
+        assert position[2] < -size[2]  # above the ceiling
+        sight = (focus - position) / np.linalg.norm(focus - position)
+        corners = np.array(
+            [
+                [x, y, z]
+                for x in (0, size[0])
+                for y in (0, size[1])
+                for z in (0, -size[2])
+            ]
+        )
+        rays = corners - position
+        angles = np.degrees(np.arccos(rays @ sight / np.linalg.norm(rays, axis=1)))
+        assert np.max(angles) == pytest.approx(0.9 * 15.0, abs=1e-9)  # the farthest
 
 
 # ---- a training's folder read as it grows ------------------------------------------
@@ -408,51 +339,3 @@ def test_two_stages_on_one_axis_of_steps(tmp_path):
     shutil.copytree(tmp_path / "fly" / LAPS_FOLDER, replay / LAPS_FOLDER)
     assert len(Run(replay).poll()) == 2 and len(Run(replay).log()) == 0
     assert len(Run(replay / LAPS_FOLDER).poll()) == 2
-
-
-def test_what_can_be_averaged_over_a_recording():
-    laps = (
-        lap(status="finished", lap_time=3.0, label="a"),
-        lap(status="finished", lap_time=4.0, label="b"),
-        lap(status="crashed", label="c"),
-        lap(status="timeout", label="d", course=1),
-    )
-    second = dataclasses.replace(COURSE, name="Second")
-    recording = Recording(0, (COURSE, second), SHAPE, laps)
-    assert lap_numbers(recording) == {
-        "laps": 4, "finished": 0.5, "crashed": 0.25, "lap_time": 3.5,
-    }  # fmt: skip
-    one = lap_numbers(recording, course=1)
-    assert one["laps"] == 1 and one["finished"] == 0.0 and np.isnan(one["lap_time"])
-    assert lap_numbers(recording, course=5)["laps"] == 0
-    assert isinstance(laps[0], Lap)
-
-
-def test_what_the_recordings_say_about_learning():
-    from tribuna.run import progress
-
-    def rec(steps, *laps):
-        return Recording(steps, (COURSE,), SHAPE, laps)
-
-    recordings = [
-        rec(100, lap(status="crashed", label="a"), lap(label="b")),
-        rec(200, lap(status="finished", lap_time=5.0, label="a"), lap(label="b")),
-        rec(300, lap(status="finished", lap_time=4.0, label="a"),
-            lap(status="finished", lap_time=4.5, label="b")),
-    ]  # fmt: skip
-    numbers = progress(recordings)
-    np.testing.assert_array_equal(numbers.steps, [100, 200, 300])
-    np.testing.assert_array_equal(numbers.finished, [0.0, 0.5, 1.0])
-    np.testing.assert_array_equal(numbers.lap_time[1:], [5.0, 4.25])
-    assert np.isnan(numbers.lap_time[0]) and np.isnan(numbers.first_lap_time[0])
-    np.testing.assert_array_equal(numbers.first_lap_time[1:], [5.0, 4.0])
-    assert len(progress(recordings, course=1).steps) == 0
-    # On a set of courses, each course's own first lap.
-    second = dataclasses.replace(COURSE, name="Second")
-    both = Recording(
-        400, (COURSE, second), SHAPE,
-        (lap(status="finished", lap_time=7.0, label="x", course=1),
-         lap(status="finished", lap_time=6.0, label="y", course=0)),
-    )  # fmt: skip
-    np.testing.assert_array_equal(progress([both], course=0).first_lap_time, [6.0])
-    np.testing.assert_array_equal(progress([both], course=1).first_lap_time, [7.0])

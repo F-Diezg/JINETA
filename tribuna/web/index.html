@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Jineta · tribuna</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="style.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "./vendor/three.module.js",
+          "three/addons/": "./vendor/addons/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <canvas id="scene"></canvas>
+
+    <header id="top" class="glass">
+      <div class="brand">JINETA <span>tribuna</span></div>
+      <div class="transport">
+        <button id="first" title="the first recording (Home)">&#x23EE;</button>
+        <button id="previous" title="the previous recording (&larr;)">&#x23F4;</button>
+        <button id="play" title="pause / play (space)">&#x23F8;</button>
+        <button id="next" title="the next recording (&rarr;)">&#x23F5;</button>
+        <button id="newest" title="the newest recording (End)">&#x23ED;</button>
+        <button id="slower" title="slower (k)">&minus;</button>
+        <span id="speed" class="chip">x1</span>
+        <button id="faster" title="faster (l)">+</button>
+      </div>
+      <label class="slider">
+        <span class="caption">recording <b id="recording-label">&ndash;</b></span>
+        <input id="recording" type="range" min="0" max="0" step="1" value="0" />
+      </label>
+      <label class="slider">
+        <span class="caption">lap clock <b id="clock-label">&ndash;</b></span>
+        <input id="clock" type="range" min="0" max="1" step="0.01" value="0" />
+      </label>
+    </header>
+
+    <aside id="hud" class="glass">
+      <div id="lines"></div>
+      <ul id="laps"></ul>
+      <div id="errors"></div>
+    </aside>
+
+    <aside id="charts" class="glass">
+      <figure>
+        <figcaption>
+          how the episodes of each update ended
+          <span class="key"><i class="finished"></i>finished <i class="crashed"></i>crashed <i class="timeout"></i>out of time <i class="dot"></i>recorded laps</span>
+        </figcaption>
+        <canvas id="ends"></canvas>
+      </figure>
+      <figure>
+        <figcaption>
+          lap time [s]
+          <span class="key"><i class="flying"></i>training (mean) <i class="dot"></i>recorded (first lap)</span>
+        </figcaption>
+        <canvas id="times"></canvas>
+      </figure>
+      <p class="hint">steps run &middot; click a chart to play the recording there</p>
+    </aside>
+
+    <footer id="help">
+      <span><kbd>space</kbd> pause</span>
+      <span><kbd>&larr;</kbd><kbd>&rarr;</kbd> recording</span>
+      <span><kbd>Home</kbd><kbd>End</kbd> first / newest</span>
+      <span><kbd>k</kbd><kbd>l</kbd> slower / faster</span>
+      <span><kbd>c</kbd> next course</span>
+      <span><kbd>g</kbd> follow the drone</span>
+      <span><kbd>h</kbd> collision spheres</span>
+      <span><kbd>r</kbd> whole room</span>
+      <span><kbd>p</kbd> panels</span>
+      <span>mouse: turn, right: move, wheel: zoom</span>
+    </footer>
+
+    <div id="waiting" class="glass">Waiting for the first recording&hellip;</div>
+
+    <script type="module" src="viewer.js"></script>
+  </body>
+</html>

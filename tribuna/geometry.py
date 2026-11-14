@@ -1,15 +1,14 @@
 """The course and the drone as meshes for the viewer, in NED axes [m].
 
-A mesh is points (p, 3) and its cells in the flat layout VTK (and so PyVista)
-uses: for each cell, the number of its points and then their indices, one after
-the other. A square and a triangle sharing an edge are
-`faces = [4, 0, 1, 2, 3,  3, 2, 1, 4]`; polylines (`lines`) are written the
-same way. With that layout a mesh goes to PyVista as it is
-(`pyvista.PolyData(points, faces=..., lines=...)`), and everything here is
-plain NumPy that the tests check without PyVista.
+A mesh is points (p, 3) and its cells in a flat layout (VTK's): for each cell,
+the number of its points and then their indices, one after the other. A square
+and a triangle sharing an edge are `faces = [4, 0, 1, 2, 3,  3, 2, 1, 4]`;
+polylines (`lines`) are written the same way. The web page (three.js) takes
+triangles and line segments: `surface_json` cuts the faces into triangles and
+`lines_json` the polylines into segments, for `tribuna.server` to send.
 
-The viewer draws in NED as the simulator computes (x North, y East, z down):
-the camera is told that "up" is -z. Nothing is converted, so a point drawn is
+The page draws in NED as the simulator computes (x North, y East, z down):
+its camera is told that "up" is -z. Nothing is converted, so a point drawn is
 a point of the simulation.
 
 Shapes follow `jineta.campo` exactly: a box turned by its yaw, a column rising
@@ -29,7 +28,6 @@ import numpy.typing as npt
 from jineta.campo.course import Course
 from jineta.campo.gates import CircularGate, Gate, RectangularGate
 from jineta.campo.indoor import Box, Cylinder, Room
-from jineta.core import quaternion
 from jineta.picadero.recording import DroneShape
 
 
@@ -281,7 +279,7 @@ def course_meshes(course: Course, spacing: float = 1.0) -> CourseMeshes:
 class DroneMeshes:
     """A drone in its body axes (FRD [m]): the body and arms, and the rotor
     discs turning one way (spin +1, counter-clockwise from above) and the
-    other; the viewer places them with `pose_matrix`."""
+    other; the page turns and places them with the recorded attitude."""
 
     frame: Mesh
     discs_ccw: Mesh
@@ -314,26 +312,6 @@ def drone_meshes(shape: DroneShape, arm: float = 0.02) -> DroneMeshes:
     ccw = [disc(r, radius) for r, s in zip(rotors, shape.spins, strict=True) if s > 0]
     cw = [disc(r, radius) for r, s in zip(rotors, shape.spins, strict=True) if s < 0]
     return DroneMeshes(merge([body, *arms]), merge(ccw), merge(cw))
-
-
-def pose_matrix(position: npt.ArrayLike, attitude: npt.ArrayLike) -> np.ndarray:
-    """The 4 x 4 matrix that places a body-axes mesh in NED: [[R, p], [0, 1]],
-    R the rotation BODY -> NED of the attitude quaternion (normalised first: a
-    recording rounds it), p the position. A point b of the body goes to
-    R b + p (what VTK's `user_matrix` does with it)."""
-    matrix = np.eye(4)
-    matrix[0:3, 0:3] = quaternion.to_matrix(quaternion.normalize(np.asarray(attitude)))
-    matrix[0:3, 3] = np.asarray(position, dtype=float)
-    return matrix
-
-
-def path_lines(points: npt.ArrayLike) -> Mesh:
-    """A path through points (k, 3), as one polyline (empty for fewer than two
-    points)."""
-    points = np.asarray(points, dtype=float).reshape(-1, 3)
-    if len(points) < 2:
-        return Mesh(points)
-    return Mesh(points, lines=_cells([list(range(len(points)))]))
 
 
 def sphere(
@@ -401,3 +379,40 @@ def overview_camera(
     across = np.linalg.norm(r - np.outer(along, back), axis=1)
     distance = float(np.max(along + across / np.tan(half)))
     return focus + distance * back, focus, up
+
+
+# ---- for the web page (three.js) -----------------------------------------------
+
+
+def triangles(mesh: Mesh) -> np.ndarray:
+    """The faces cut into triangles (each polygon as a fan from its first
+    point; every face here is convex), as point indices (t, 3): what a
+    three.js geometry takes."""
+    result = []
+    for cell in cell_lists(mesh.faces):
+        result.extend([cell[0], cell[k], cell[k + 1]] for k in range(1, len(cell) - 1))
+    return np.array(result, dtype=np.int64).reshape(-1, 3)
+
+
+def segments(mesh: Mesh) -> np.ndarray:
+    """The polylines cut into segments, as pairs of points (s, 2, 3)."""
+    pairs = []
+    for cell in cell_lists(mesh.lines):
+        pairs.extend([[cell[k], cell[k + 1]] for k in range(len(cell) - 1)])
+    if not pairs:
+        return np.zeros((0, 2, 3))
+    return mesh.points[np.array(pairs)]
+
+
+def surface_json(mesh: Mesh, decimals: int = 5) -> dict:
+    """A mesh's faces for the page: positions (flat x, y, z, ...) and triangle
+    indices (flat)."""
+    return {
+        "positions": [round(float(v), decimals) for v in mesh.points.ravel()],
+        "index": [int(i) for i in triangles(mesh).ravel()],
+    }
+
+
+def lines_json(mesh: Mesh, decimals: int = 5) -> list[float]:
+    """A mesh's lines for the page: the segments' ends, flat (x, y, z, ...)."""
+    return [round(float(v), decimals) for v in segments(mesh).ravel()]
