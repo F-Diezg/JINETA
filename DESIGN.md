@@ -1507,6 +1507,15 @@ Phase 13 (3D viewer of recorded flights):
   which may be older than its last, so in the agents' steps the stages
   overlap and the log's curves would go back and forth. The text of a
   recording still gives its agent's steps.
+- **The viewer runs its own loop, not a VTK timer** (after the phase, on the
+  author's computer): the window opened and drew its first frame, then nothing
+  moved. On Windows PyVista 0.49.2's `show()` does not start VTK's event loop:
+  it runs its own (process the events, draw, wait), and a VTK timer created
+  before the window exists is bound to no window, so its events never arrive.
+  The viewer now opens the window with `show(interactive_update=True)` and runs
+  PyVista's Windows loop itself with the step added (`scene.play`: events,
+  done?, step by the time that passed, draw, wait the rest of the frame), the
+  same on every system; `play` is tested without a window.
 - **The drone is drawn at its real size**: on the overview of an 18 m room it
   is small; the key g follows it from 2.5 m behind. Drawing it larger would
   misstate how close it passes to things.
@@ -2927,7 +2936,8 @@ Phase 6c (Kalman filter):
   - `player.py` — `Player(recordings)` (`advance(dt)`, `frame()`, `trails()`,
     the keys' methods, `add`), `Frame`, `DroneFrame`, `Trail`,
     `trail_opacity`, `course_key`, `describe`; `SPEEDS`, `PAUSE`, `TRAILS`.
-  - `scene.py` — the PyVista layer: `polydata`, `Scene`, `Charts`,
+  - `scene.py` — the PyVista layer: `polydata`, `Scene`, `Charts`, `play`
+    (the loop: events, step, draw),
     `Viewer(player, shape, source, plotter, poll_every, drones, log,
     positions)` (`tick(dt)`, `keys()`, `show()`).
   - `__main__.py` — `python -m tribuna <run | replay | recording> [--newest]`.
@@ -3536,11 +3546,13 @@ Phase 6c (Kalman filter):
       profile's 1.9), and the rotor drag (x 0.5-2) alone leaves the classical
       baseline 61 % of the drawn drones. Narrower ranges, or ranges measured on
       the real drone (phase 14), would make the task easier and more honest.
-  47. The viewer's window (`tribuna/scene.py`) was never run in Claude's
+  47. The viewer's window (`tribuna/scene.py`) cannot be run in Claude's
       workspace (PyVista cannot be installed there): it is written against
-      PyVista 0.49.2's source and run against a stand-in. Its tests (5) and the
-      look of the window (colours, sizes, the charts' place, the sliders) are
-      the author's to check; whatever differs is fixed then.
+      PyVista 0.49.2's source and run against a stand-in. On the author's
+      computer its 5 tests pass and the window opens; the first version did
+      not move (a VTK timer, decision log), fixed by the viewer's own loop.
+      Its look (sizes of the text and sliders, the charts over the right of
+      the room) is the author's to judge.
   48. The viewer's speed is not measured: every frame moves up to 9 drones,
       replaces up to 9 paths and, when the recording changes, 10 trails. If a
       computer cannot keep ~30 frames a second, the paths can be updated less

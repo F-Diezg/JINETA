@@ -6,8 +6,13 @@ meshes are added to it as *actors* (a mesh with its colour, its opacity and its
 place). Moving a drone does not rebuild its mesh: its actor gets a new
 `user_matrix`, the 4 x 4 matrix that puts its body axes where the recording
 says (`geometry.pose_matrix`). A path that grows gets its points replaced
-(`copy_from`). A timer calls `Viewer.tick` about 30 times a second: the player
-moves on by the time that passed, and the actors follow.
+(`copy_from`). The viewer runs its own loop (`play`), about 30 times a second:
+it lets the window handle the keys and the mouse, moves the player on by the
+time that passed (`Viewer.tick`), and draws. Not a VTK timer: on Windows
+PyVista runs its own loop instead of VTK's, and a timer made before the window
+exists never reaches it (found on the author's computer: the first frame drawn,
+then nothing moved). The loop is PyVista's own for Windows, with the tick
+added.
 
 Seeing a policy learn: the earlier recordings' laps stay as fading trails
 (`Player.trails`), and two charts beside the scene show what can be averaged:
@@ -329,6 +334,35 @@ class Charts:
         self.times.y_range = [0.0, top]
 
 
+def play(
+    process_events: Callable[[], None],
+    done: Callable[[], bool],
+    step: Callable[[float], None],
+    render: Callable[[], None],
+    frame: float = 1.0 / 30.0,
+    clock: Callable[[], float] = time.perf_counter,
+    sleep: Callable[[float], None] = time.sleep,
+) -> int:
+    """The viewer's loop: handle the window's events (keys, mouse, closing),
+    stop once it is done, move on by the time since the last frame (at most
+    0.2 s: a stall, such as a window dragged, is not a jump) and draw, then
+    wait for the rest of the frame. Returns the frames drawn."""
+    frames = 0
+    last = clock()
+    while True:
+        start = clock()
+        process_events()
+        if done():
+            return frames
+        step(min(start - last, 0.2))
+        last = start
+        render()
+        frames += 1
+        rest = frame - (clock() - start)
+        if rest > 0.0:
+            sleep(rest)
+
+
 class Viewer:
     """A window playing recordings: the player, the scene, the charts, the
     keys, the sliders and a timer. `source()` (optional) is asked for new
@@ -360,7 +394,6 @@ class Viewer:
         )  # fmt: skip
         self.scene = Scene(self.plotter, shape, drones)
         self.charts = Charts(self.plotter)
-        self._last = time.perf_counter()
         self._polled = 0.0
         self._shown: tuple | None = None  # what the trails and charts are of
         self.slider: Any = None
@@ -414,11 +447,6 @@ class Viewer:
             representation.SetMaximumValue(max(len(self.player.recordings) - 1, 1))
             representation.SetValue(self.player.index)
 
-    def _on_timer(self, _step: int) -> None:
-        now = time.perf_counter()
-        dt, self._last = now - self._last, now
-        self.tick(min(dt, 0.2))  # a stall (a window dragged) is not a jump
-
     def keys(self) -> dict[str, Callable[[], None]]:
         """What each key does."""
         player, scene = self.player, self.scene
@@ -453,7 +481,7 @@ class Viewer:
         """Open the window and play until it is closed."""
         for key, action in self.keys().items():
             self.plotter.add_key_event(key, action)
-        style = {"style": "modern", "color": "black"}
+        style = {"style": "modern", "color": "black", "title_height": 0.02}
         self.timeline = self.plotter.add_slider_widget(
             self.go_to, [0.0, max(len(self.player.recordings) - 1, 1)],
             value=float(self.player.index), title="recording",
@@ -466,8 +494,19 @@ class Viewer:
             fmt="%.2f", **style,
         )  # fmt: skip
         self.tick(0.0)
-        self._last = time.perf_counter()
-        self.plotter.add_timer_event(
-            max_steps=10**9, duration=frame_ms, callback=self._on_timer
+        # The window opens and show() returns at once (interactive_update):
+        # from then on the loop below handles its events and draws it.
+        self.plotter.show(interactive_update=True, auto_close=False)
+        interactor = self.plotter.iren.interactor
+
+        def done() -> bool:
+            return bool(interactor.GetDone()) or self.plotter.render_window is None
+
+        play(
+            interactor.ProcessEvents,
+            done,
+            self.tick,
+            self.plotter.render,
+            frame_ms / 1000,
         )
-        self.plotter.show()
+        self.plotter.close()

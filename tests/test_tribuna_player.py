@@ -276,3 +276,46 @@ def test_trails_only_of_the_same_course():
     trails = player.trails()
     assert [t.steps for t in trails] == [100]  # not the moved course's lap
     np.testing.assert_array_equal(trails[0].points, first.laps[1].positions)
+
+
+def test_the_viewer_loop_steps_by_the_time_that_passed():
+    from tribuna.scene import play
+
+    now = [0.0]
+    calls = []
+
+    def clock():
+        return now[0]
+
+    def sleep(seconds):
+        calls.append(("sleep", round(seconds, 6)))
+        now[0] += seconds
+
+    def process():
+        calls.append("events")
+        now[0] += 0.001
+
+    def step(dt):
+        calls.append(("step", round(dt, 6)))
+        now[0] += 0.004
+
+    def render():
+        calls.append("render")
+        now[0] += 0.005
+
+    frames = play(process, lambda: now[0] > 0.1, step, render, 0.03, clock, sleep)
+    # Events first, then the step (by the time since the last frame), the
+    # drawing and the rest of the frame: 0.03 s a frame, until done.
+    assert frames == 4
+    assert calls[:5] == ["events", ("step", 0.0), "render", ("sleep", 0.02), "events"]
+    assert calls[5] == ("step", 0.03)
+    assert calls[-1] == "events"
+    # A stall is not a jump: at most 0.2 s.
+    now[0] = 0.0
+    stalls = []
+
+    def slow_render():
+        now[0] += 5.0
+
+    play(lambda: None, lambda: now[0] > 6.0, stalls.append, slow_render, 0.03, clock)
+    assert stalls == [0.0, 0.2]
