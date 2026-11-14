@@ -51,11 +51,12 @@ drones finish), and the policies that cope with all of it still have to be
 trained on the author's computer (loose end 45). **A policy can be watched
 learning (phase 13):** every training keeps its evaluations' laps with the
 agent that flew them, and `tribuna`, a viewer outside the engine, plays them in
-3D with PyVista, live while the training goes on or afterwards: the course, the
-drones with their attitude, the earlier laps as fading trails coloured by how
-they ended, and the training's numbers beside them. Next: the author's run of
-the viewer and of the trainings of loose end 45 (now recorded), then phase 14,
-towards the real drone.
+3D (a web page drawn with three.js, in a window of its own), live while the
+training goes on or afterwards: the course, the drones with their attitude and
+their shadows, the earlier laps as fading trails coloured by how they ended,
+and the training's numbers beside them. Next: the author's run of the viewer
+and of the trainings of loose end 45 (now recorded), then phase 14, towards the
+real drone.
 
 Name: *Jineta* is a working name until the project has its own.
 
@@ -73,9 +74,14 @@ code should be clear and every concept explained before it is used.
 - Editor: VS Code (extensions: Python, Pylance, Ruff, GitLens)
 - Dependencies: `numpy`, `scipy`, `pyyaml`, `matplotlib`, `pytest`, `pytest-xdist`,
   `ruff`, `gymnasium` (1.4.0, phase 11; only the adapter and its tests use
-  it, and those tests are skipped without it) and `pyvista` (phase 13, written
-  against 0.49.2; only `tribuna/scene.py` and its tests use it, and those tests
-  are skipped without it), pinned in `requirements.txt`.
+  it, and those tests are skipped without it) and `pywebview` (the viewer's
+  window, phase 13; it uses the system's web engine, WebView2 on Windows;
+  without it the viewer opens in the web browser), pinned in
+  `requirements.txt`. The viewer's page uses three.js r187, copied into
+  `tribuna/web/vendor/` (MIT licence, `LICENSE-three.txt`): it needs no
+  internet. Optional: Node.js (nodejs.org), only to run the page's
+  playback tests (`tests/web/`, run by `tests/test_tribuna_web.py`, skipped
+  without it).
   After pulling on the other computer, run `pip install -r requirements.txt`
   when `requirements.txt` changed: `git pull` brings the list, not the packages.
   The learning algorithm is the project's own (`jineta/doma`, NumPy): no PyTorch.
@@ -90,15 +96,15 @@ code should be clear and every concept explained before it is used.
   same warnings as `ruff check .`
 - Run examples from repo root: `python -m examples.<name>`; the viewer:
   `python -m tribuna <run folder>` (phase 13), in another window while a
-  training runs.
+  training runs (`--browser`: in the web browser instead of a window).
 - Save all open files (Ctrl+S) before running tests: pytest runs what is on disk.
 - Before every commit run `ruff format .` (not only `--check`): it adds the final
   newline and fixes blank lines that are easy to lose when pasting code. In VS
   Code, "Files: Insert Final Newline" and format-on-save with the Ruff formatter
   do the same automatically.
-- The full test run, in one process, takes ~5.5 min (957 tests, in Claude's
-  workspace at the end of phase 13, without Gymnasium and PyVista, whose tests
-  are skipped there; 968 with them; its speed changes from session to session);
+- The full test run, in one process, takes ~5.5 min (956 tests, in Claude's
+  workspace at the end of phase 13, without Gymnasium, whose tests are skipped
+  there; 962 with it and Node.js; its speed changes from session to session);
   the slowest are PPO's regulator test (~14 s), the training tests (~5-15 s) and
   the batch tests that fly the first course against the reference (~5-11 s).
   `pytest -n auto` divides that by the number of cores.
@@ -333,8 +339,10 @@ code should be clear and every concept explained before it is used.
   visualisation is a separate layer that reads that data: `tribuna` (phase
   13), outside `jineta/`. It draws in NED as the simulator computes (the
   camera's up is -z), its meshes follow `campo`'s shapes exactly (tested on
-  the collision surfaces), and everything but the PyVista window
-  (`tribuna/scene.py`) is plain NumPy. Its axis of steps is the training's own
+  the collision surfaces). Python reads the files and makes the shapes
+  (`tribuna/server.py` serves them on this computer only); the page
+  (`tribuna/web/`, JavaScript) plays and draws them, its playback in a module
+  without three.js (`playback.js`) tested with node. Its axis of steps is the training's own
   clock (steps run, stage after stage), not the agents' steps: a second stage
   starts from an earlier best agent. Trajectories are never averaged; what can
   be averaged (how episodes ended, lap times) goes in charts beside them.
@@ -379,9 +387,9 @@ jineta/
 │                   #   the last gate), recording (recorded laps)
 ├── tribuna/        # the viewer of recorded flights (phase 13): run (a run
 │                   #   folder read as it grows), geometry (course and drone as
-│                   #   meshes), motion (poses between samples), player
-│                   #   (playback, trails), scene (the PyVista window),
-│                   #   __main__ (python -m tribuna)
+│                   #   meshes), server (what the page asks for), __main__
+│                   #   (python -m tribuna: the server and the window), web/
+│                   #   (the page: viewer.js, playback.js, three.js in vendor/)
 ├── tests/
 ├── courses/        # course files (YAML)
 ├── policies/       # trained policies kept in the repository (.npz)
@@ -398,7 +406,8 @@ are never imported by the engine: `escuadron` imports `core`, `campo` and
 works on stacks); `doma` imports only NumPy; `picadero` imports all of them and
 nothing in `jineta` imports `picadero`. `tribuna` sits outside `jineta/`: it
 imports `jineta` (to read recordings and courses, and for quaternions), never
-runs the physics, and nothing imports it; only its `scene.py` imports PyVista.
+runs the physics, and nothing imports it; only its `__main__.py` imports
+pywebview (and only to open the window).
 
 ## 5. Roadmap
 
@@ -1329,16 +1338,18 @@ it commands alone (3.45 s), but crashes at the first gate with both, and with
 **Phase 13 — done.** A 3D viewer of recorded flights, to see a policy learn:
 trainings keep their evaluations' laps (recordings) with the agents that flew
 them, any saved agent can be flown again and recorded, and `tribuna`, a
-package outside the engine, plays the recordings in 3D with PyVista, live
-while a training goes on or afterwards, with the earlier laps as fading trails
-and the training's numbers in charts beside them. Changed on the way: the
-viewer's axis is the steps run, stage after stage (step 6). The PyVista window
-could not be run in Claude's workspace (loose end 47). Tests: 957 here (968
-with Gymnasium and PyVista, the author's run), ruff clean.
+package outside the engine, plays the recordings in 3D, live while a training
+goes on or afterwards, with the earlier laps as fading trails and the
+training's numbers in charts beside them. Changed on the way: the viewer's
+axis is the steps run, stage after stage (step 6), and after the phase the
+author found the PyVista window plain and slow to answer, so the viewer became
+a web page drawn with three.js in a pywebview window (step 8). Tests: 956 here
+(962 with Gymnasium and Node.js), ruff clean.
 
 Plan agreed with the author at the start of the phase (each step: tests green,
 ruff clean, commit + push). Decided with the author:
-- the viewer draws with **PyVista** (VTK; chosen by the author over three.js in
+- the viewer draws with **PyVista** (replaced by a web page in step 8, after
+  the author used it; VTK; chosen by the author over three.js in
   a desktop window, which Claude recommended because it could be rendered
   and looked at in its workspace, and over matplotlib's 3D). PyVista cannot be
   installed in Claude's workspace, so the viewer is split: everything but the
@@ -1456,11 +1467,65 @@ ruff clean, commit + push). Decided with the author:
    their names; the charts on that axis. Checked by breaking the code (5
    mistakes); each made a test fail.
 7. ✅ **Close the phase**: this document and the README.
+8. ✅ **The viewer as a web page** (after the phase, asked by the author: the
+   PyVista window looked plain and was slow to answer the keys and the mouse;
+   `tribuna/server.py`, `tribuna/web/` with `index.html`, `style.css`,
+   `viewer.js`, `playback.js` and three.js r187 in `vendor/`,
+   `tribuna/__main__.py`; `geometry.triangles`, `segments`, `surface_json`,
+   `lines_json`; removed: `scene.py`, `player.py`, `motion.py`,
+   `geometry.pose_matrix`, `path_lines`, `run.lap_numbers`, `progress` and
+   PyVista with the 17 packages it brought). A server from Python's standard
+   library on 127.0.0.1 answers the page: summaries of the recordings every
+   second (how each lap ended, and each course's first lap for the trails),
+   a whole recording when it is played, the course and the drone as triangles
+   and segments, the log. The page: the room as a doll's house (the far walls
+   seen from inside), shadows from a light above (the drone's shows its
+   height), the gates numbered, paths that grow behind the drones, trails,
+   both charts (a click plays the recording there), buttons and sliders, the
+   keys of before plus r (whole room) and p (panels); the whole room fitted in
+   the space the panels leave. Tests: the page's playback in JavaScript (17,
+   with node: everything the Python player's tests checked, the pose given to
+   three.js turning the body into NED as the simulator's matrix does, nothing
+   moving until a recording's samples arrive, the run's order changing); the
+   server (13: the page's files with their kinds, nothing outside its folder,
+   only the kinds of file it uses,
+   every import of the page there; a run sent as it grows, also when a
+   recording comes between two others; what a summary holds; a course and a
+   drone as triangles; bad requests; one file and a folder not there yet; the
+   window or the browser, and the server stopped). Checked by breaking the
+   code (33 mistakes in the playback, 27 in the server and the start): 6
+   survived the first tests; 5 got their own (an earlier recording's trail
+   with the ending of another course's lap, a way out of the page's folder to
+   a kind of file it serves, a kind of file it does not, each course's trail
+   in a summary, `--browser`) and 1 was equivalent (a length check that the
+   comparison already made: its line was removed). The page
+   itself was run in headless Chrome here (screenshots; the clock moving, the
+   keys, buttons, sliders and a click on a chart; a run growing while
+   watched, with its second stage appearing; a recording of two courses; no
+   message in the console). Not run here: pywebview's window (loose end 47).
 
 ## 6. Decision log
 
 Phase 13 (3D viewer of recorded flights):
-- **PyVista draws the viewer** (decided by the author): a native 3D window
+- **The viewer is a web page in a window of its own** (step 8, decided by
+  the author after using the PyVista window, which looked plain and answered
+  the keys and the mouse late): three.js draws it (WebGL: the graphics card
+  draws, the browser's engine handles the events), pywebview shows it in a
+  desktop window with the system's web engine (WebView2 on Windows; with
+  `--browser`, or without pywebview, the web browser). A page cannot read
+  the disk, so a small server from Python's standard library answers it, on
+  127.0.0.1 only and only reading. Python keeps what it did well (reading the
+  folders, the shapes tested on the collision surfaces); the playback moved to
+  JavaScript (`playback.js`, no three.js, tested with node) so that a frame
+  needs no trip to Python. three.js is copied into the repository (r187, MIT)
+  so the page works without internet. The server says each file's kind itself:
+  on Windows Python's guess comes from the registry, which can say text/plain
+  for .js, and a browser refuses to run a module sent so. The page asks for a
+  summary of every recording and only the one being played whole: a long
+  training's recordings are tens of MB, a summary ~6 kB. Claude can run the
+  page in headless Chrome, so what it shows was looked at before delivery.
+- **PyVista drew the first viewer** (decided by the author; replaced in step
+  8): a native 3D window
   (VTK) with the mouse to turn the view, a timer for live updates and its own
   2D charts, so no browser or server is needed: the viewer reads the run
   folder itself. Claude's workspace cannot install it, so the window is a thin
@@ -2925,27 +2990,32 @@ Phase 6c (Kalman filter):
 - `tribuna/` — the viewer of recorded flights (phase 13; outside `jineta/`):
   - `run.py` — `Run(folder)` (`poll()`: new recordings in the run's order;
     `log()`: a `LogSeries` on the run's axis; `positions()`; `stages()`;
-    `errors`), `read_log`, `lap_numbers`, `Progress`, `progress(recordings,
-    course, positions)`.
+    `errors`), `read_log`.
   - `geometry.py` — `Mesh(points, faces, lines)` (VTK's flat layout),
     `cell_lists`, `merge`, `block`, `column`, `rectangular_frame`,
     `circular_frame`, `gate_frame`, `obstacle`, `room_edges`, `floor_grid`,
     `CourseMeshes`, `course_meshes`, `disc`, `DroneMeshes`, `drone_meshes`,
-    `pose_matrix`, `path_lines`, `sphere`, `hitbox_mesh`, `overview_camera`.
-  - `motion.py` — `slerp`, `pose_at(lap, t)`, `path_until(lap, t)`.
-  - `player.py` — `Player(recordings)` (`advance(dt)`, `frame()`, `trails()`,
-    the keys' methods, `add`), `Frame`, `DroneFrame`, `Trail`,
-    `trail_opacity`, `course_key`, `describe`; `SPEEDS`, `PAUSE`, `TRAILS`.
-  - `scene.py` — the PyVista layer: `polydata`, `Scene`, `Charts`, `play`
-    (the loop: events, step, draw),
-    `Viewer(player, shape, source, plotter, poll_every, drones, log,
-    positions)` (`tick(dt)`, `keys()`, `show()`).
-  - `__main__.py` — `python -m tribuna <run | replay | recording> [--newest]`.
+    `sphere`, `hitbox_mesh`, `overview_camera`; for the page `triangles`,
+    `segments`, `surface_json`, `lines_json`.
+  - `server.py` — `Feed(path)` (`poll(known)`, `recording(i)`, `course(i, c)`,
+    `drone(i)`, `log()`), `summary`, `course_json`, `drone_json`, `course_id`,
+    `shape_id`, `plain`, `handler_for(feed, web)`, `start(path, port)`;
+    `CONTENT_TYPES`, `WEB`. Endpoints: `/api/poll?known=k`,
+    `/api/recording?index=i`, `/api/course?index=i&course=c`,
+    `/api/drone?index=i`, `/api/log`, and the page's files.
+  - `__main__.py` — `python -m tribuna <run | replay | recording> [--browser]
+    [--port N]`; `window(url)` (pywebview; False when it cannot open one).
+  - `web/` — `index.html`, `style.css`, `viewer.js` (the three.js scene, the
+    panels, the charts, the keys), `playback.js` (`Player`, `slerp`, `poseAt`,
+    `countUpTo`, `threeQuaternion`, `trailOpacity`, `stepSpeed`, `describe`,
+    `result`, `progress`, `samePrefix`; `SPEEDS`, `PAUSE`, `TRAILS`),
+    `vendor/` (three.js r187: the module, OrbitControls, the Line2 lines;
+    `LICENSE-three.txt`).
 - `policies/first_course.npz` — the policy of phase 11 on the first course
   (3.235 s; trained on the author's computer).
-- Tests (957 passing in Claude's workspace, without Gymnasium and PyVista,
-  whose modules are skipped there; 968 with both, on the author's computer;
-  ruff check + ruff format clean):
+- Tests (956 passing in Claude's workspace, without Gymnasium, whose module is
+  skipped there; 962 with it, and with Node.js for the page's playback, on the
+  author's computer; ruff check + ruff format clean):
   - integrators (2): RK4 exact on free fall; Euler's error shrinks with dt.
   - rotation (5): 90° about z maps North to East; proper orthogonal matrix; steady
     spin about a principal axis; constant torque spins up linearly; torque-free
@@ -3317,20 +3387,27 @@ Phase 6c (Kalman filter):
     recording; drawn drones as evaluated; one lap per course; random courses'
     validation laps; plain JSON info; an agent flown again and recorded; the
     realism from an agent's label.
-  - viewer without a window (22): boxes, columns, rectangular frames and tori
+  - viewer's shapes and run (18): boxes, columns, rectangular frames and tori
     on the collision surfaces with faces outwards (frames reaching their
     corners, the opening clear); the room's edges and grid; the first course;
-    merging meshes; the drone's rotors; a pose matrix; slerp; poses and paths
-    between samples; a run read as it grows; a broken file; a row being
-    written; a second stage from an earlier agent; two stages; what can be
-    averaged; what the recordings say about learning.
-  - playback (11): order and the pause; the pause in wall time; new
-    recordings; the keys; one course at a time; where every drone is; a
-    sphere; the overview camera; trails fading; trails of the earlier first
-    laps; trails of the same course only.
-  - viewer window (5, skipped without PyVista): a frame drawn where the player
-    says (and a screenshot); the course drawn once; new recordings read and a
-    drone followed; trails and charts; the charts on the run's axis.
+    merging meshes; the drone's rotors; a sphere; the overview camera; a run
+    read as it grows; a broken file; a row being written; a second stage from
+    an earlier agent; two stages.
+  - viewer's server and start (13): faces into triangles and lines into
+    segments; course and drone ids; the page's files and their kinds, nothing
+    outside its folder; only the kinds of file the page uses; every import of
+    the page there; a run sent as it grows; what a summary holds; a course and
+    a drone for the page; bad requests; one file and a folder not there yet;
+    the browser or the window, and the server stopped; a window that cannot
+    open; the playback in JavaScript (with node, skipped without it).
+  - the page's playback (17, `tests/web/playback.test.mjs`, node): slerp; a
+    pose between samples; the samples behind the drone; three.js places the
+    body in NED as the simulator does; order and the pause; the pause in wall
+    time; nothing moves before the samples arrive; new recordings; the run's
+    order changing; the keys; one course at a time; where every drone is;
+    trails fading; trails of the earlier first laps; trails of the same course
+    only; what the recordings say about learning; the page reads every summary
+    again when the order changed.
 - Examples (all run, `python -m examples.<name>`):
   - `projectile_drag.py` — vacuum vs drag.
   - `density_comparison.py` — constant vs exponential vs ISA density (~1.7 km apogee:
@@ -3546,17 +3623,16 @@ Phase 6c (Kalman filter):
       profile's 1.9), and the rotor drag (x 0.5-2) alone leaves the classical
       baseline 61 % of the drawn drones. Narrower ranges, or ranges measured on
       the real drone (phase 14), would make the task easier and more honest.
-  47. The viewer's window (`tribuna/scene.py`) cannot be run in Claude's
-      workspace (PyVista cannot be installed there): it is written against
-      PyVista 0.49.2's source and run against a stand-in. On the author's
-      computer its 5 tests pass and the window opens; the first version did
-      not move (a VTK timer, decision log), fixed by the viewer's own loop.
-      Its look (sizes of the text and sliders, the charts over the right of
-      the room) is the author's to judge.
-  48. The viewer's speed is not measured: every frame moves up to 9 drones,
-      replaces up to 9 paths and, when the recording changes, 10 trails. If a
-      computer cannot keep ~30 frames a second, the paths can be updated less
-      often or as fixed polylines whose drawn part grows.
+  47. The viewer's window (pywebview) cannot be opened in Claude's workspace
+      (no desktop there): the page was run in headless Chrome (Chromium, the
+      engine WebView2 is built on) and the start is tested with pywebview
+      replaced; the window itself is the author's to open. Its look is the
+      author's to judge.
+  48. The viewer's speed is not measured on the author's computer (headless
+      Chrome here draws in software, so its frame rate says nothing). Each
+      frame moves up to 9 drones and their paths (a path's drawn part grows;
+      nothing is rebuilt) and, when the recording changes, 10 trails; charts
+      and text are redrawn only when they change.
   49. Recordings grow with the time limit: a lap ended by the time limit (30 s)
       is ~10 times a 3 s lap, so an early training whose laps wait (phase 11's
       "waiting habit") writes ~1 MB per evaluation. Not a problem at the sizes
@@ -3564,10 +3640,10 @@ Phase 6c (Kalman filter):
   50. The viewer shows one course at a time (c for the next): on random
       courses each recording has one lap on each validation course, and their
       trails are those of the same course in earlier recordings.
-- Next, on the author's computer: install PyVista, run the tests (the 5 of the
-  window, loose end 47) and open the viewer on a recording (`python -m
-  examples.record_agent`, then `python -m tribuna runs/replays/first_course`);
-  report what looks wrong. Then the training of loose end 45 with its new
+- Next, on the author's computer: open the viewer on a recording (`python -m
+  examples.record_agent`, then `python -m tribuna runs/replays/first_course`)
+  and on the run of phase 13's step 6 if it is still there; report what looks
+  wrong or slow (loose ends 47 and 48). Then the training of loose end 45 with its new
   recipe (phase 11's policy continued in the randomised lab, without the stop;
   the first recipe failed, the judge is fixed; the workers' speed is measured:
   2.26x with 8): it is recorded, so `python -m tribuna runs/realism_course2`
