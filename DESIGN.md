@@ -25,7 +25,7 @@ their purpose (a course, a warehouse, an inspection route; a racing quadrotor, a
 heavier camera drone) and trains a drone for it, with the confidence that the
 simulated vehicle behaves like the real one.
 
-**Where it stands (end of phase 12):** the physics engine is built and validated
+**Where it stands (end of phase 13):** the physics engine is built and validated
 (phases 1–6c): integrators, rigid body, atmosphere and wind, a quadrotor with its
 cascaded autopilot, a fixed-wing aircraft with its own autopilot, and a Kalman
 filter. The indoor world is built (phase 8): rooms with obstacles and gates read
@@ -48,8 +48,14 @@ inertia, thrust, drag, motor lag, latency); a lap counts only if the drone
 stops under control after it. Training uses every core. Measured: the phase 11
 policy is fragile (20 ms of latency with the motor lag crash it; 10 % of drawn
 drones finish), and the policies that cope with all of it still have to be
-trained on the author's computer (loose end 45). Next: phase 13, a 3D viewer of
-recorded flights.
+trained on the author's computer (loose end 45). **A policy can be watched
+learning (phase 13):** every training keeps its evaluations' laps with the
+agent that flew them, and `tribuna`, a viewer outside the engine, plays them in
+3D with PyVista, live while the training goes on or afterwards: the course, the
+drones with their attitude, the earlier laps as fading trails coloured by how
+they ended, and the training's numbers beside them. Next: the author's run of
+the viewer and of the trainings of loose end 45 (now recorded), then phase 14,
+towards the real drone.
 
 Name: *Jineta* is a working name until the project has its own.
 
@@ -66,8 +72,10 @@ code should be clear and every concept explained before it is used.
   cores). Several trainings can also run at once, one per PowerShell window.
 - Editor: VS Code (extensions: Python, Pylance, Ruff, GitLens)
 - Dependencies: `numpy`, `scipy`, `pyyaml`, `matplotlib`, `pytest`, `pytest-xdist`,
-  `ruff`, and `gymnasium` (1.4.0, phase 11; only the adapter and its tests use
-  it, and those tests are skipped without it), pinned in `requirements.txt`.
+  `ruff`, `gymnasium` (1.4.0, phase 11; only the adapter and its tests use
+  it, and those tests are skipped without it) and `pyvista` (phase 13, written
+  against 0.49.2; only `tribuna/scene.py` and its tests use it, and those tests
+  are skipped without it), pinned in `requirements.txt`.
   After pulling on the other computer, run `pip install -r requirements.txt`
   when `requirements.txt` changed: `git pull` brings the list, not the packages.
   The learning algorithm is the project's own (`jineta/doma`, NumPy): no PyTorch.
@@ -80,14 +88,17 @@ code should be clear and every concept explained before it is used.
 - `pyproject.toml` configures pytest (`testpaths`) and ruff (line length 88, rules
   E, F, I, UP, B, RUF). VS Code's Ruff extension reads it, so the editor shows the
   same warnings as `ruff check .`
-- Run examples from repo root: `python -m examples.<name>`
+- Run examples from repo root: `python -m examples.<name>`; the viewer:
+  `python -m tribuna <run folder>` (phase 13), in another window while a
+  training runs.
 - Save all open files (Ctrl+S) before running tests: pytest runs what is on disk.
 - Before every commit run `ruff format .` (not only `--check`): it adds the final
   newline and fixes blank lines that are easy to lose when pasting code. In VS
   Code, "Files: Insert Final Newline" and format-on-save with the Ruff formatter
   do the same automatically.
-- The full test run, in one process, takes ~5 min (911 tests, in Claude's
-  workspace at the end of phase 12, whose speed changes from session to session);
+- The full test run, in one process, takes ~5.5 min (957 tests, in Claude's
+  workspace at the end of phase 13, without Gymnasium and PyVista, whose tests
+  are skipped there; 968 with them; its speed changes from session to session);
   the slowest are PPO's regulator test (~14 s), the training tests (~5-15 s) and
   the batch tests that fly the first course against the reference (~5-11 s).
   `pytest -n auto` divides that by the number of cores.
@@ -304,8 +315,29 @@ code should be clear and every concept explained before it is used.
   picklable `make_env(index)` (`CourseEnvPart`, `CourseSetEnvPart`), and a
   script that starts workers keeps its work under `if __name__ ==
   "__main__":`.
+- **Recordings (`picadero.recording`, phase 13):** a recording is one JSON
+  file: the courses (`campo.course.course_to_dict`, the course file's
+  contents), the drone's shape (`DroneShape`: rotors, spins, propeller radius,
+  hitbox) and the laps (`Lap`: lap clock, positions, attitudes every
+  environment step from the start to where the lap ended; status, lap time,
+  gate passes, closest approach, where and when it touched something).
+  Rounded for the eye (0.1 mm, 1e-5, 0.1 ms), nan written as null; written
+  whole or not at all (a temporary name, then renamed). A training records
+  the laps its evaluation already flies (the mean action's and 8 noisy ones,
+  or 8 drawn drones, or one per validation course) as `out/laps/<steps>.json`
+  with the agent that flew them as `out/agents/<steps>.npz` (`<steps>` the
+  agent's own, 12 digits); `train(..., record=True)` by default, and the
+  examples' `--no-record`. A recording is for looking at; its agent flies it
+  again exactly (`examples.record_agent`).
 - **The simulator never draws.** It produces data (states and events over time);
-  visualisation is a separate layer that reads that data.
+  visualisation is a separate layer that reads that data: `tribuna` (phase
+  13), outside `jineta/`. It draws in NED as the simulator computes (the
+  camera's up is -z), its meshes follow `campo`'s shapes exactly (tested on
+  the collision surfaces), and everything but the PyVista window
+  (`tribuna/scene.py`) is plain NumPy. Its axis of steps is the training's own
+  clock (steps run, stage after stage), not the agents' steps: a second stage
+  starts from an earlier best agent. Trajectories are never averaged; what can
+  be averaged (how episodes ended, lap times) goes in charts beside them.
 - Type hints and docstrings on every public function.
 - Every physics module ships with tests against known analytic results.
 - Git: pull when starting, commit + push when finishing. Small commits, clear
@@ -344,7 +376,12 @@ jineta/
 │                   #   gymnasium_adapter, training (train, evaluate), courses
 │                   #   (random courses, many courses at once), parallel
 │                   #   (workers), realism, randomization, finish (stop after
-│                   #   the last gate)
+│                   #   the last gate), recording (recorded laps)
+├── tribuna/        # the viewer of recorded flights (phase 13): run (a run
+│                   #   folder read as it grows), geometry (course and drone as
+│                   #   meshes), motion (poses between samples), player
+│                   #   (playback, trails), scene (the PyVista window),
+│                   #   __main__ (python -m tribuna)
 ├── tests/
 ├── courses/        # course files (YAML)
 ├── policies/       # trained policies kept in the repository (.npz)
@@ -354,18 +391,14 @@ jineta/
 └── README.md
 ```
 
-Planned (each package arrives with its phase; names are proposals, settled when the
-phase starts):
-
-- a **visualisation layer** outside `jineta/` (phase 13), which reads recorded
-  flights and never runs the physics.
-
 Dependency rule: `core` imports nothing of the project; `campo` and `jinete` import
 `core`; layers that compose others (world, batch engine, training) sit on top and
 are never imported by the engine: `escuadron` imports `core`, `campo` and
 `jinete`; `atalaya` imports `core` and `escuadron.quaternion` (its estimator
 works on stacks); `doma` imports only NumPy; `picadero` imports all of them and
-nothing imports `picadero`.
+nothing in `jineta` imports `picadero`. `tribuna` sits outside `jineta/`: it
+imports `jineta` (to read recordings and courses, and for quaternions), never
+runs the physics, and nothing imports it; only its `scene.py` imports PyVista.
 
 ## 5. Roadmap
 
@@ -385,7 +418,7 @@ nothing imports `picadero`.
 | 10 | Training environment (observation, action, reward) + classical baseline | ✅ Done |
 | 11 | **MVP:** the Iris learns the course (reinforcement learning) | ✅ Done |
 | 12 | Realism for the real drone: motor lag, ground effect, sensor noise, latency, randomised parameters | ✅ Done |
-| 13 | 3D viewer of recorded flights | ⏳ |
+| 13 | 3D viewer of recorded flights | ✅ Done |
 | 14 | Towards the real drone: its profile, PX4 software-in-the-loop, offboard interface | ⏳ |
 | 15 | Builder: any user defines the environment and the drone profile | ⏳ |
 | 16 | Final README, demo video | ⏳ |
@@ -1293,7 +1326,190 @@ it commands alone (3.45 s), but crashes at the first gate with both, and with
    45).
 9. ✅ **Close the phase**: this document and the README.
 
+**Phase 13 — done.** A 3D viewer of recorded flights, to see a policy learn:
+trainings keep their evaluations' laps (recordings) with the agents that flew
+them, any saved agent can be flown again and recorded, and `tribuna`, a
+package outside the engine, plays the recordings in 3D with PyVista, live
+while a training goes on or afterwards, with the earlier laps as fading trails
+and the training's numbers in charts beside them. Changed on the way: the
+viewer's axis is the steps run, stage after stage (step 6). The PyVista window
+could not be run in Claude's workspace (loose end 47). Tests: 957 here (968
+with Gymnasium and PyVista, the author's run), ruff clean.
+
+Plan agreed with the author at the start of the phase (each step: tests green,
+ruff clean, commit + push). Decided with the author:
+- the viewer draws with **PyVista** (VTK; chosen by the author over three.js in
+  a desktop window, which Claude recommended because it could be rendered
+  and looked at in its workspace, and over matplotlib's 3D). PyVista cannot be
+  installed in Claude's workspace, so the viewer is split: everything but the
+  window is plain NumPy, tested everywhere; the window is a thin layer written
+  against PyVista 0.49.2's source, run in the workspace against a stand-in
+  with the same signatures (not in the repository), and its tests (skipped
+  without PyVista) run on the author's computer;
+- the long trainings of loose end 45 wait until trainings record (step 2), so
+  that they can be watched;
+- the plan of the phase description (section 5's item 13) as written: the
+  training only writes data, the viewer only reads it.
+
+1. ✅ **Recorded flights** (`picadero/recording.py`: `DroneShape`,
+   `drone_shape`, `Lap`, `Recording`, `laps_from_flight`, `write_recording`,
+   `read_recording`, `recording_files`; `campo.course.course_to_dict`;
+   `fly(..., record=True)` keeps every drone's lap; the environment's info has
+   each drone's lap clock and where it touched something): a recording is one
+   JSON file (format in the module), written whole or not at all. Tests: the
+   first course and 30 random courses written as a file's contents and read
+   back (also as YAML); the phase 11 lap recorded whole (the same states as
+   before, the lap clock every 0.02 s, the last sample the step that ended the
+   lap, every gate crossed between the two samples where the centre of mass
+   goes through its plane, the last at the lap time); a climb into the
+   ceiling recorded where it touched (the hitbox's top at the ceiling, 1e-5,
+   between the last two samples); six noisy laps each to its own end; a
+   recording written and read back (rounded as stated; ~40 kB for two laps;
+   strict JSON); a failed rename leaves no recording; only finished files are
+   listed, in order; a broken file names itself; bad input. Checked by breaking
+   the code (12 mistakes: the last gate not at the lap time, the end sample not
+   counted, the crash point after the restart, velocity for position, the
+   attitude slice, positions to the centimetre, a direct write, temporaries
+   listed, yaws in radians, width and height swapped, passes read after the
+   restart, the clock not copied); each made a test fail.
+2. ✅ **Trainings record, and any agent can be recorded** (loose end 43;
+   `evaluate`, `evaluate_drawn`, `evaluate_courses` with `record`;
+   `RECORDED_LAPS`, `save_recording`, `record_agent`, `realism_from_label`;
+   `run_training(..., courses, shape)`, `train(..., record=True)`,
+   `train_random(..., record=True)`; `examples/record_agent.py`): every
+   evaluation's laps are written with the agent that flew them. Tests: a short
+   training leaves one recording and one agent per evaluation, named by the
+   agent's steps, with what the log says of that evaluation, and the agent
+   kept flies the recorded mean lap again (0.1 mm); the same training with and
+   without recording gives the same log and agents; drawn drones recorded as
+   the evaluation flew them (each drone's own closest approach); one lap per
+   course on a set of courses, and every validation course recorded in a
+   training on random courses; an agent flown again and recorded (phase 11's:
+   3.23 s, 1 + 8 laps) and where a replay goes by default; the realism read
+   back from an agent's label. Measured: recording costs nothing measurable
+   (an evaluation of the first course 1.80 s without, 1.83 s with), writing
+   takes ~20 ms, a recording of 9 laps of 3.2 s is ~100 kB. Checked by breaking
+   the code (10 mistakes); the laps of other drawn drones survived the first
+   tests and got their own (each drone's closest approach is its own).
+3. ✅ **The viewer's parts without a window** (`tribuna/`: `geometry.py`,
+   `motion.py`, `run.py`): the course and the drone as meshes (points and
+   faces in VTK's flat layout), poses between samples (positions in a straight
+   line, attitudes by slerp the shorter way), a run folder read as it grows
+   (recordings and log; a broken file reported once and skipped; a row still
+   being written left out). Tests: boxes, columns, rectangular frames (also
+   turned 30°) and tori with every point on the collision surface of
+   `campo` (1e-12) and faces turned outwards; the frame's bars reach its eight
+   outer corners and leave the opening clear; the room's edges and floor grid;
+   the drone's rotors where the profile has them; a pose matrix places the
+   body as R b + p (and a rounded quaternion still gives a rotation); slerp
+   turns steadily about one axis (half-way is half the rotation; -q the same);
+   poses and paths between samples; a run read as it grows, two stages on one
+   axis, replays and folders of recordings. Checked by breaking the code (13
+   mistakes); bars too short survived the first tests (every point was still
+   on the surface) and got their own (the corners).
+4. ✅ **The window** (`tribuna/player.py`, `tribuna/scene.py`,
+   `tribuna/__main__.py`; `geometry.sphere`, `hitbox_mesh`,
+   `overview_camera`): recordings played in order, every lap of a recording at
+   once on its own lap clock, a pause of 1 s, the last one again while waiting
+   for a new one; drones with their attitude, their paths (blue while flying,
+   then the colour of how they ended), a marker where they touched something;
+   a camera over the whole room (as far as needed for its eight corners to fit
+   VTK's 30° view, with a tenth to spare) or following the first drone; the
+   collision spheres on demand; keys and a slider through the lap. Tests
+   (player, without PyVista): order, the pause in wall time at any speed, new
+   recordings, the keys, one course at a time, where every drone is (the
+   crash marked only once it happened, a lap ended only at its last sample),
+   the text; the camera sees every corner of three rooms. Tests of the window
+   (skipped without PyVista; run here against the stand-in): actors where the
+   player says, the course drawn once, new recordings read, the camera
+   following a drone. Checked by breaking the code (11 mistakes in the player,
+   6 in the window against the stand-in); a lap ended one sample early, a
+   fixed number of courses and the course redrawn every frame survived the
+   first tests and each got its own.
+5. ✅ **Seeing a policy learn** (`Player.trails`, `trail_opacity`,
+   `course_key`; `run.progress`; `scene.Charts`; the recordings slider): the
+   first lap of each of the 10 earlier recordings on the course shown, from
+   0.8 opaque (the one before) to 0.1 (ten back), coloured by how it ended,
+   with a marker where it touched something; two charts: how the episodes of
+   each update ended (the log's shares finished and crashed) and the lap time
+   (the log's mean, and each recording's first lap), with a dashed line at the
+   recording being played. Tests: opacities by age; the trails are the earlier
+   recordings' first laps, the most recent first, of the same course only
+   (found by its contents on a set of courses listed in another order); what
+   the recordings say (shares, lap times, each course's own first lap); the
+   trails drawn once per recording, faded and coloured, and the charts' data
+   and ranges (against the stand-in). Checked by breaking the code (10
+   mistakes); the first lap of any course survived and got its own test.
+6. ✅ **Commands, and a real training watched** (`--no-record` and "watch it
+   learn" in `examples.train_course`, `train_random`, `train_realism`;
+   `Run.stages`, `Run.positions`; the viewer's `positions`): a short training
+   here (the first course, 3 M + 0.33 M steps, 256 drones, 5.2 minutes) was
+   watched while it ran (the player and the window against the stand-in,
+   reading the folder every second): 6 recordings arrived while watching,
+   played in order, no file read half-written. It showed that a second stage
+   starts from the first stage's best agent (1.97 M steps there, the first
+   stage ran 3.0 M): in the agents' steps the stages overlap, so the viewer's
+   axis became the steps run, stage after stage, and the player keeps the
+   run's order (stage after stage, then steps). Its folders: 20 recordings,
+   2.3 MB of laps and 2.4 MB of agents. Tests: a second stage from an earlier
+   agent, on the run's axis, its stages in the order they were run whatever
+   their names; the charts on that axis. Checked by breaking the code (5
+   mistakes); each made a test fail.
+7. ✅ **Close the phase**: this document and the README.
+
 ## 6. Decision log
+
+Phase 13 (3D viewer of recorded flights):
+- **PyVista draws the viewer** (decided by the author): a native 3D window
+  (VTK) with the mouse to turn the view, a timer for live updates and its own
+  2D charts, so no browser or server is needed: the viewer reads the run
+  folder itself. Claude's workspace cannot install it, so the window is a thin
+  layer (`tribuna/scene.py`) over plain-NumPy parts tested everywhere; every
+  PyVista call used was read in PyVista 0.49.2's source (PolyData, copy_from,
+  user_matrix, the camera, CornerAnnotation, the timer, key events, sliders,
+  Chart2D), and the layer was run in the workspace against a stand-in with
+  those signatures. Found that way: the Plotter accepts no new attributes (the
+  viewer keeps its state outside it), sliders need a window (none off
+  screen), keys and timers are ignored off screen, PyVista's default theme
+  writes white text (made black on the white background), and the keys q, v,
+  b, C, Up, Down, plus, minus are already PyVista's.
+- **A recording is JSON, one file per evaluation** (not a growing file): a
+  reader can never meet half a file (written under a temporary name, then
+  renamed: a rename in one folder is atomic), any recording can be read on its
+  own, and a viewer that is slow or closed changes nothing for the training.
+  JSON, rounded for the eye, is ~100 kB for 9 laps of 3 s; a lap ended by the
+  time limit (30 s) is ten times that.
+- **Recording flies nothing more**: the laps are those the evaluation already
+  flies to choose the best agent (the mean action's and 8 noisy ones; 8 of the
+  drawn drones; one per validation course), so a training costs the same
+  (measured) and the recorded laps are exactly what judged the agents.
+- **The agent of every recording is kept** (loose end 43, changed from the
+  plan's "an agent every 1 M steps"): one mechanism instead of two, and every
+  recording can be flown again exactly. Cost: ~120 kB per evaluation (~5 MB for
+  a 30 M-step training at 1 024 drones, ~22 MB at 256).
+- **The environment says where a drone touched something** (`info`:
+  `crash_time`, `crash_point`, `crash_check`, and each drone's lap clock):
+  they are reset with the drone in the same step, so `fly` could not see them
+  after it. Arrays of one value per drone, so `CourseSetEnv` and the workers
+  join them as before (the gate passes, one per gate, would not join across
+  courses: `fly` keeps them from the referee while the lap goes on).
+- **Trails are laps, never averages**: the first lap of each earlier recording
+  (the mean action's: the policy as it would fly), fading with age; the
+  numbers that can be averaged are charted beside them.
+- **The viewer draws in NED** with the camera's up at -z: nothing is
+  converted, so a point drawn is a point simulated (a drawing with z flipped
+  to "up" would be a mirror image: NED with z up is left-handed).
+- **The meshes are tested on the collision model's surfaces**: every point of
+  a box, column, frame or torus has signed distance zero (1e-12) to the shape
+  `campo` uses, so what is drawn is what collides.
+- **The viewer's axis is the steps run, stage after stage** (step 6, found in
+  a real training): a second stage continues the first stage's best agent,
+  which may be older than its last, so in the agents' steps the stages
+  overlap and the log's curves would go back and forth. The text of a
+  recording still gives its agent's steps.
+- **The drone is drawn at its real size**: on the overview of an 18 m room it
+  is small; the key g follows it from 2.5 m behind. Drawing it larger would
+  misstate how close it passes to things.
 
 Phase 12 (realism for the real drone):
 - **Training is split over processes, not threads**: Python runs one line at a
@@ -2547,7 +2763,8 @@ Phase 6c (Kalman filter):
 - `jineta/campo/course.py` — `Course(name, room, start, start_yaw, gates,
   obstacles, time_limit)` (`start_state(rest_height)`, `monitor(...)`,
   `referee(...)` from a hitbox and gear), `load_course(path)`,
-  `course_from_dict(data)`, `CourseError`. The format is in its docstring.
+  `course_from_dict(data)`, `course_to_dict(course)` (its inverse: a file's
+  contents), `CourseError`. The format is in its docstring.
 - `courses/first_course.yaml` — the first course.
 - `jineta/campo/referee.py` — `GatePass(gate, time, point)`, `Referee(gates,
   monitor, time_limit)`: callable `stop`; `status` ("flying", "finished",
@@ -2627,8 +2844,9 @@ Phase 6c (Kalman filter):
   - `env.py` — `CourseEnv(course, n=1, profile, limits, weights, dt=0.01,
     action_repeat=2, lookahead=2, nearest=0, margin=0, realism=Realism(),
     stop=None)`: `reset(seed, options)`, `step(action)` (info:
-    `final_observation`, `final_state`, `status`, `lap_time`,
-    `episode_return`, `episode_steps`), `close()`, `observation_space`,
+    `final_observation`, `final_state`, `final_clock`, `crash_time`,
+    `crash_point`, `crash_check`, `status`, `lap_time`, `episode_return`,
+    `episode_steps`), `close()`, `observation_space`,
     `action_space`, `step_time`, `np_random`; `flight`, `pilot`, `observer`,
     `reward`, `start`, `vehicles`, `estimator`, `delays`, `ring`, `stopping`,
     `outcome`.
@@ -2653,21 +2871,31 @@ Phase 6c (Kalman filter):
   - `gymnasium_adapter.py` — `CourseGymEnv(course, **env)` (`gymnasium.Env`,
     one drone), `CourseVectorEnv(course, n, **env)` (`VectorEnv`, same-step
     autoreset), `to_box`, `EPISODE_KEYS`. Needs Gymnasium; nothing imports it.
-  - `training.py` — `fly(agent, env, rng=None, record=False, seed=0)`,
-    `Evaluation`, `evaluate(agent, course, n, seed, **env)`, `DrawnEvaluation`,
-    `evaluate_drawn(agent, course, n, seed, **env)`, `realism_label`,
-    `CourseSetEvaluation`, `evaluate_courses(agent, courses, **env)`,
-    `run_training(env, steps, out, judge, ...)`, `train(course, steps, out, n,
-    seed, settings, weights, evaluate_every, agent, nearest, margin, report,
-    workers, realism, stop, judged_by)`,
+  - `training.py` — `fly(agent, env, rng=None, record=False, seed=0)` (with
+    `record`: every drone's lap, gate passes, where it touched something),
+    `Evaluation`, `evaluate(agent, course, n, seed, record, **env)`,
+    `DrawnEvaluation`, `evaluate_drawn(agent, course, n, seed, record, **env)`,
+    `realism_label`, `realism_from_label`, `CourseSetEvaluation`,
+    `evaluate_courses(agent, courses, record, **env)` (each evaluation's
+    `laps` with `record`), `save_recording(out, agent, courses, laps, shape,
+    info)`, `record_agent(agent, course, out, n, seed, **env)`,
+    `run_training(env, steps, out, judge, ..., courses, shape)`, `train(course,
+    steps, out, n, seed, settings, weights, evaluate_every, agent, nearest,
+    margin, report, workers, realism, stop, judged_by, record=True)`,
     `random_courses(count, seed)`, `train_random(steps, out, k, n,
-    renew_every, nearest, ..., workers)`; `TRAINING_WEIGHTS` (time 0.25),
-    `TRAINING_MARGIN` (0.05), `LOG_COLUMNS`, `VALIDATION_SEED` (1000),
-    `TEST_SEED` (2000).
+    renew_every, nearest, ..., workers, record=True)`; `TRAINING_WEIGHTS`
+    (time 0.25), `TRAINING_MARGIN` (0.05), `LOG_COLUMNS`, `VALIDATION_SEED`
+    (1000), `TEST_SEED` (2000), `RECORDED_LAPS` (8), `LAPS_FOLDER`,
+    `AGENTS_FOLDER`.
   - `courses.py` — `CourseRanges` (what a random course may be),
     `random_course(rng, ranges, name)`, `gate_count`, `CourseSetEnv(make_course,
     k, n, renew_every, **env)` (k courses of n drones, renewed in turn, with
     `CourseEnv`'s shape).
+  - `recording.py` — recorded laps (phase 13; format in the module):
+    `DroneShape`, `drone_shape(profile)`, `Lap`, `Recording`,
+    `laps_from_flight(result, drones, labels, course)`, `recording_to_dict`,
+    `recording_from_dict`, `write_recording(folder, name, recording)` (whole
+    or not at all), `read_recording(path)`, `recording_files(folder)`.
 - `jineta/doma/` — learning (conventions in section 3):
   - `network.py` — `MLP(weights, biases)` (`create(sizes, rng, output_gain)`,
     `sizes`, `parameters`, `forward` → (outputs, cache), `backward(cache,
@@ -2685,10 +2913,29 @@ Phase 6c (Kalman filter):
     max_grad_norm 0.5, entropy 0, hidden (64, 64), log_std -0.5), `gae`,
     `Rollout`, `Episodes`, `PPO(env, settings, seed, agent, episode_info)`
     (`collect`, `update`, `learn(steps, callback)`, `steps`, `agent`).
+- `tribuna/` — the viewer of recorded flights (phase 13; outside `jineta/`):
+  - `run.py` — `Run(folder)` (`poll()`: new recordings in the run's order;
+    `log()`: a `LogSeries` on the run's axis; `positions()`; `stages()`;
+    `errors`), `read_log`, `lap_numbers`, `Progress`, `progress(recordings,
+    course, positions)`.
+  - `geometry.py` — `Mesh(points, faces, lines)` (VTK's flat layout),
+    `cell_lists`, `merge`, `block`, `column`, `rectangular_frame`,
+    `circular_frame`, `gate_frame`, `obstacle`, `room_edges`, `floor_grid`,
+    `CourseMeshes`, `course_meshes`, `disc`, `DroneMeshes`, `drone_meshes`,
+    `pose_matrix`, `path_lines`, `sphere`, `hitbox_mesh`, `overview_camera`.
+  - `motion.py` — `slerp`, `pose_at(lap, t)`, `path_until(lap, t)`.
+  - `player.py` — `Player(recordings)` (`advance(dt)`, `frame()`, `trails()`,
+    the keys' methods, `add`), `Frame`, `DroneFrame`, `Trail`,
+    `trail_opacity`, `course_key`, `describe`; `SPEEDS`, `PAUSE`, `TRAILS`.
+  - `scene.py` — the PyVista layer: `polydata`, `Scene`, `Charts`,
+    `Viewer(player, shape, source, plotter, poll_every, drones, log,
+    positions)` (`tick(dt)`, `keys()`, `show()`).
+  - `__main__.py` — `python -m tribuna <run | replay | recording> [--newest]`.
 - `policies/first_course.npz` — the policy of phase 11 on the first course
   (3.235 s; trained on the author's computer).
-- Tests (911 passing with Gymnasium installed, 905 and one skipped module
-  without it; ruff check + ruff format clean):
+- Tests (957 passing in Claude's workspace, without Gymnasium and PyVista,
+  whose modules are skipped there; 968 with both, on the author's computer;
+  ruff check + ruff format clean):
   - integrators (2): RK4 exact on free fall; Euler's error shrinks with dt.
   - rotation (5): 90° about z maps North to East; proper orthogonal matrix; steady
     spin about a principal axis; constant torque spins up linearly; torque-free
@@ -3048,6 +3295,32 @@ Phase 6c (Kalman filter):
   - training with realism (5): a widened agent acts as before; the realism's
     label; the evaluation on drawn drones; a short training in the randomised
     lab with the stop; the baseline through the interface.
+  - recordings (11): a course written as a file's contents and read back
+    (first course, as YAML, 30 random courses); the phase 11 lap recorded
+    whole (times, states, gate passes between the samples through each gate's
+    plane); a climb recorded where it touched the ceiling; every drone of a
+    batch to its own end; laps from a flight; a recording written and read
+    back (rounding, strict JSON, size); written whole or not at all; only
+    finished files listed; a broken file names itself; bad input.
+  - recording trainings (8): one recording and agent per evaluation, as the
+    log says, the agent flying its lap again; the same training without
+    recording; drawn drones as evaluated; one lap per course; random courses'
+    validation laps; plain JSON info; an agent flown again and recorded; the
+    realism from an agent's label.
+  - viewer without a window (22): boxes, columns, rectangular frames and tori
+    on the collision surfaces with faces outwards (frames reaching their
+    corners, the opening clear); the room's edges and grid; the first course;
+    merging meshes; the drone's rotors; a pose matrix; slerp; poses and paths
+    between samples; a run read as it grows; a broken file; a row being
+    written; a second stage from an earlier agent; two stages; what can be
+    averaged; what the recordings say about learning.
+  - playback (11): order and the pause; the pause in wall time; new
+    recordings; the keys; one course at a time; where every drone is; a
+    sphere; the overview camera; trails fading; trails of the earlier first
+    laps; trails of the same course only.
+  - viewer window (5, skipped without PyVista): a frame drawn where the player
+    says (and a screenshot); the course drawn once; new recordings read and a
+    drone followed; trails and charts; the charts on the run's axis.
 - Examples (all run, `python -m examples.<name>`):
   - `projectile_drag.py` — vacuum vs drag.
   - `density_comparison.py` — constant vs exponential vs ISA density (~1.7 km apogee:
@@ -3088,6 +3361,10 @@ Phase 6c (Kalman filter):
   - `train_realism.py` — trains in the randomised lab, with the stop after the
     finish (or `--no-stop`), from scratch or from an agent (`--start`), and
     measures it on drawn drones against the phase 11 policy and the baseline.
+  - `record_agent.py` — flies a saved agent again (as an evaluation does) and
+    records it for the viewer (`runs/replays/<agent>`).
+  - The training examples record by default (`--no-record`) and print the
+    command to watch them: `python -m tribuna <out>` (the viewer, phase 13).
 - Physics note (intermediate-axis instability, torque-free): spin Ω about the
   intermediate axis grows any tiny perturbation at rate
   `λ = Ω·sqrt((I2−I1)(I3−I2)/(I1·I3))`. The example perturbation (0.01 rad/s on p
@@ -3236,11 +3513,8 @@ Phase 6c (Kalman filter):
       kept as a file, and its regression tests allow for rounding. Measured: the
       same recipe gave 4.325 s in Claude's workspace and 3.235 s on the author's
       computer; one training is one sample.
-  43. Training saves only the best and the last agent. To show how a policy
-      learns (the 3D viewer of phase 13: from crashing to a clean lap), a
-      training should keep an agent every so often (e.g. every 1 M steps). With
-      the laps recorded during training (section 5, phase 13) it is how the
-      viewer shows learning.
+  43. (Closed in phase 13, step 2: a training keeps the agent of every
+      recording, `out/agents/<steps>.npz`.)
   44. The ceiling effect is not modelled (phase 12, step 3: no open model with
       coefficients for a rotor of the Iris's size could be checked), nor the
       ground effect over the top of an obstacle, nor the multirotor terms of the
@@ -3262,17 +3536,36 @@ Phase 6c (Kalman filter):
       profile's 1.9), and the rotor drag (x 0.5-2) alone leaves the classical
       baseline 61 % of the drawn drones. Narrower ranges, or ranges measured on
       the real drone (phase 14), would make the task easier and more honest.
-- Next, before phase 13, on the author's computer: measure the speed of the
-  workers (done: 2.26x with 8) and run the training of loose end 45 (phase
-  11's policy continued in the randomised lab, without the stop; the first
-  recipe failed); then decide how the stop is learned, and whether to narrow
-  the randomisation ranges (loose end 46). The policy that comes out of them, if it flies the drawn drones, is
-  kept in `policies/` like phase 11's. Then phase 13 (3D viewer of recorded
-  flights, live during a training and afterwards: section 5), whose step plan is
-  drawn up with the author at its start. The Project's copy of this document was
-  not updated at the end of phase 12 (the tool could not read the whole file in
-  one go): the new chat replaces it with the repository's first. New chat
-  in the Project: "Seguimos con Jineta, fase 13: visor 3D".
+  47. The viewer's window (`tribuna/scene.py`) was never run in Claude's
+      workspace (PyVista cannot be installed there): it is written against
+      PyVista 0.49.2's source and run against a stand-in. Its tests (5) and the
+      look of the window (colours, sizes, the charts' place, the sliders) are
+      the author's to check; whatever differs is fixed then.
+  48. The viewer's speed is not measured: every frame moves up to 9 drones,
+      replaces up to 9 paths and, when the recording changes, 10 trails. If a
+      computer cannot keep ~30 frames a second, the paths can be updated less
+      often or as fixed polylines whose drawn part grows.
+  49. Recordings grow with the time limit: a lap ended by the time limit (30 s)
+      is ~10 times a 3 s lap, so an early training whose laps wait (phase 11's
+      "waiting habit") writes ~1 MB per evaluation. Not a problem at the sizes
+      measured (step 6); downsampling long laps is the remedy if it becomes one.
+  50. The viewer shows one course at a time (c for the next): on random
+      courses each recording has one lap on each validation course, and their
+      trails are those of the same course in earlier recordings.
+- Next, on the author's computer: install PyVista, run the tests (the 5 of the
+  window, loose end 47) and open the viewer on a recording (`python -m
+  examples.record_agent`, then `python -m tribuna runs/replays/first_course`);
+  report what looks wrong. Then the training of loose end 45 with its new
+  recipe (phase 11's policy continued in the randomised lab, without the stop;
+  the first recipe failed, the judge is fixed; the workers' speed is measured:
+  2.26x with 8): it is recorded, so `python -m tribuna runs/realism_course2`
+  in another window shows it learning. Then decide how the stop is learned and
+  whether to narrow the randomisation ranges (loose end 46). The policy that
+  comes out of them, if it flies the drawn drones, is kept in `policies/` like
+  phase 11's. Then phase 14 (towards the real drone: its profile, PX4
+  software-in-the-loop, the offboard interface), whose step plan is drawn up
+  with the author at its start. New chat in the Project: "Seguimos con Jineta,
+  fase 14: hacia el dron real".
 
 ## 8. Working with Claude
 
