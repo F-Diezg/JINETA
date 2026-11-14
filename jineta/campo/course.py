@@ -126,6 +126,65 @@ def load_course(path: str | Path) -> Course:
         raise CourseError(f"{path}: {error}") from None
 
 
+def course_to_dict(course: Course) -> dict[str, Any]:
+    """The contents of a course file for this course: `course_from_dict` builds
+    the same course back (yaws in degrees, as in a file; only floats, lists and
+    text, so it can be written as YAML or JSON)."""
+
+    def floats(vector: npt.ArrayLike) -> list[float]:
+        return [float(v) for v in np.asarray(vector)]
+
+    gates = []
+    for gate in course.gates:
+        if isinstance(gate, RectangularGate):
+            shape = {
+                "shape": "rectangle",
+                "center": floats(gate.center),
+                "yaw_deg": float(np.degrees(gate.yaw)),
+                "width": float(gate.width),
+                "height": float(gate.height),
+            }
+        else:
+            shape = {
+                "shape": "circle",
+                "center": floats(gate.center),
+                "yaw_deg": float(np.degrees(gate.yaw)),
+                "radius": float(gate.radius),
+            }
+        gates.append({**shape, "thickness": float(gate.thickness)})
+    obstacles = []
+    for obstacle in course.obstacles:
+        if isinstance(obstacle, Box):
+            obstacles.append(
+                {
+                    "shape": "box",
+                    "center": floats(obstacle.center),
+                    "size": floats(obstacle.size),
+                    "yaw_deg": float(np.degrees(obstacle.yaw)),
+                }
+            )
+        else:
+            obstacles.append(
+                {
+                    "shape": "cylinder",
+                    "base": floats(obstacle.base),
+                    "radius": float(obstacle.radius),
+                    "height": float(obstacle.height),
+                }
+            )
+    return {
+        "name": course.name,
+        "time_limit": float(course.time_limit),
+        "room": {"size": floats(course.room.size)},
+        "start": {
+            "position": floats(course.start),
+            "yaw_deg": float(np.degrees(course.start_yaw)),
+        },
+        "gates": gates,
+        "obstacles": obstacles,
+    }
+
+
 def course_from_dict(data: Any) -> Course:
     """Build a course from the contents of a course file (a dict)."""
     fields = _keys(

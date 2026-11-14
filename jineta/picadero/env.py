@@ -38,6 +38,12 @@ truncated`):
     final_observation (n, size)   the last observation of an episode that ended
     final_state (n, size)         the drones' states at the end of the step (where
                                   an episode ended, before its drone restarted)
+    final_clock (n,)              their lap clocks at the end of the step [s]
+    crash_time (n,), crash_point (n, 3), crash_check (n,)
+                                  where a drone touched something: the moment
+                                  [s], its centre of mass then (NED [m]) and the
+                                  monitor's check (its `kinds`); nan and -1
+                                  where it did not
     status (n,)                   how it ended (codes of escuadron.referee)
     lap_time (n,)                 [s], nan unless it finished
     episode_return (n,)           the sum of its rewards
@@ -261,9 +267,14 @@ class CourseEnv:
             lap_time = np.where(status == FINISHED, referee.end_time, np.nan)
         terminated, truncated = episode_end(status)
         done = terminated | truncated
+        monitor = referee.monitor
         info: dict[str, Any] = {
             "final_observation": self._observe(),
             "final_state": self.flight.states.copy(),
+            "final_clock": self.flight.clock.copy(),
+            "crash_time": monitor.time.copy(),
+            "crash_point": monitor.position.copy(),
+            "crash_check": monitor.check.copy(),
             "status": status,
             "lap_time": lap_time,
             "episode_return": self.episode_return.copy(),

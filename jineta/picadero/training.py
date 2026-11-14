@@ -102,9 +102,22 @@ def fly(
     random draws: sensors' noise, randomised drones). Returns statuses (n,), lap
     times (n,; nan unless finished), gates passed (n,), clearances (n,: the
     closest approach to a wall, the ceiling, an obstacle or a frame before the
-    lap's last step) and,
-    if `record`, the states of drone 0 after every environment step until its
-    lap ended (steps + 1, 13)."""
+    lap's last step) and, if `record`:
+
+        states        drone 0's states after every environment step until its
+                      lap ended (steps + 1, state size)
+        flights       for every drone, {"times": (k,), "states": (k, size)}:
+                      its lap clock and true state at the start and after every
+                      environment step until its lap ended (where it ended)
+        pass_times    (n, gates) [s] when each gate was crossed (nan if not; a
+                      gate crossed in the step a lap ended by a crash or a
+                      time-out is not seen, as in `gates`)
+        crash_time, crash_point, crash_kind
+                      (n,), (n, 3), (n,): where a lap ended by touching
+                      something (the moment, the centre of mass then, the
+                      monitor's kind: "room", "obstacle", "gate" or "floor");
+                      nan and "" where it did not
+    """
     observations, _ = env.reset(seed=seed)
     n = env.n
     status = np.full(n, -1)
@@ -113,6 +126,13 @@ def fly(
     clearance = np.full(n, np.inf)
     referee = env.flight.referee
     states = [env.flight.states[0].copy()] if record else []
+    tracks = [env.flight.states.copy()] if record else []
+    clocks = [env.flight.clock.copy()] if record else []
+    samples = np.ones(n, dtype=int)
+    pass_times = np.full((n, len(env.course.gates)), np.nan)
+    crash_time = np.full(n, np.nan)
+    crash_point = np.full((n, 3), np.nan)
+    crash_check = np.full(n, -1)
     limit = int(np.ceil(env.course.time_limit / env.step_time)) + 1
     for _ in range(limit):
         flying = status < 0
@@ -125,8 +145,16 @@ def fly(
         gates = np.where(going_on, referee.passed, gates)
         status[done] = info["status"][done]
         lap_time[done] = info["lap_time"][done]
-        if record and flying[0]:
-            states.append(info["final_state"][0].copy())
+        if record:
+            if flying[0]:
+                states.append(info["final_state"][0].copy())
+            tracks.append(info["final_state"].copy())
+            clocks.append(info["final_clock"].copy())
+            samples = np.where(flying, samples + 1, samples)
+            pass_times = np.where(going_on[:, None], referee.pass_time, pass_times)
+            crash_time = np.where(done, info["crash_time"], crash_time)
+            crash_point = np.where(done[:, None], info["crash_point"], crash_point)
+            crash_check = np.where(done, info["crash_check"], crash_check)
         if np.all(status >= 0):
             break
     gates = np.where(status == FINISHED, len(env.course.gates), gates)
@@ -138,6 +166,23 @@ def fly(
     }
     if record:
         result["states"] = np.array(states)
+        tracks_array, clocks_array = np.array(tracks), np.array(clocks)
+        result["flights"] = [
+            {"times": clocks_array[:k, i], "states": tracks_array[:k, i]}
+            for i, k in enumerate(samples)
+        ]
+        # The last gate of a finished lap is crossed at its lap time (without a
+        # stop rule, in the step that ended the lap).
+        finished = status == FINISHED
+        last = pass_times[:, -1]
+        pass_times[:, -1] = np.where(finished & np.isnan(last), lap_time, last)
+        result["pass_times"] = pass_times
+        result["crash_time"] = crash_time
+        result["crash_point"] = crash_point
+        kinds = referee.monitor.kinds
+        result["crash_kind"] = np.array(
+            [kinds[c] if c >= 0 else "" for c in crash_check], dtype=object
+        )
     return result
 
 
