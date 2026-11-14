@@ -1,5 +1,6 @@
 """Tests for training with realism (phase 12, step 8): an agent widened for new
-inputs acts as before, the evaluation on drawn drones, the realism's label, and
+inputs acts as before, the evaluation on drawn drones and how it ranks agents,
+the realism's label, and
 a short training in the randomised lab with the stop after the finish."""
 
 import dataclasses
@@ -13,6 +14,7 @@ from jineta.picadero.finish import StopAfterFinish
 from jineta.picadero.realism import IDEAL, LAB, RANDOMISED_LAB, Realism
 from jineta.picadero.training import (
     DrawnEvaluation,
+    _drawn_rank,
     evaluate_drawn,
     realism_label,
     train,
@@ -115,3 +117,31 @@ def test_the_baseline_through_the_interface():
                 break
     assert laps[0] == pytest.approx(6.76, abs=0.02) and laps[1] == laps[0]
     np.testing.assert_array_equal(observations[0], observations[1])
+
+
+def _drawn(times, gates) -> DrawnEvaluation:
+    times = np.array(times, dtype=float)
+    finished = np.isfinite(times)
+    return DrawnEvaluation(
+        success_rate=float(np.mean(finished)),
+        mean_lap_time=float(np.nanmean(times)) if np.any(finished) else float("nan"),
+        lap_times=times,
+        clearances=np.ones(len(times)),
+        gates=np.array(gates),
+    )
+
+
+def test_drawn_agents_rank_by_share_then_lap_then_gates():
+    """More drones finished beats a faster lap; with the same share, the faster
+    lap; when none finishes, more gates on average (phase 12: without the gates
+    the first agent judged stayed the best through 20 M steps)."""
+    nan = np.nan
+    none_one_gate = _drawn([nan, nan, nan, nan], [1, 1, 1, 1])
+    none_three_gates = _drawn([nan, nan, nan, nan], [3, 3, 3, 2])
+    one_slow = _drawn([9.0, nan, nan, nan], [4, 0, 0, 0])
+    one_fast = _drawn([4.0, nan, nan, nan], [4, 0, 0, 0])
+    two_slow = _drawn([9.0, 9.5, nan, nan], [4, 4, 0, 0])
+    order = [none_one_gate, none_three_gates, one_slow, one_fast, two_slow]
+    ranks = [_drawn_rank(drawn) for drawn in order]
+    assert ranks == sorted(ranks)
+    assert len(set(ranks)) == len(ranks)

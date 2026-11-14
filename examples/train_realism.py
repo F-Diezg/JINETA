@@ -16,7 +16,8 @@ policy, widened by one input for the stop's flag) with the margin from the
 start, at a smaller learning rate, for `--refine` steps.
 
 Every 10 updates the mean action flies 64 drawn drones; the agent that flies
-the most of them (then the fastest) is kept (`best.npz`). At the end the best
+the most of them (then the fastest; while none finishes, the one passing
+the most gates) is kept (`best.npz`). At the end the best
 agent is measured on 256 drones it never flew (another seed), next to the
 phase 11 policy and the classical baseline in the same conditions (the
 baseline through the same interface, reading the same estimate; it was not

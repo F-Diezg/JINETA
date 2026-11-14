@@ -1399,6 +1399,21 @@ Phase 12 (realism for the real drone):
   after the finish for 8 M steps. A dense hint (the overrun, 1 per metre flown
   after the finish) did not change that in 8 M steps. The proposed recipe
   learns the course in the randomised lab first, and the stop after.
+- **The first trainings on the author's computer failed, and why** (after step
+  8, measured from their logs and agents): no drawn drone finished in either.
+  From scratch (loose end 45's first recipe), the first stage learned in 20 M
+  steps to pass the first gate and hover until the time limit (30 s). The judge
+  never replaced its first agent: with no drone finishing, every agent tied at
+  (0, -inf) and only a better one replaces the best, so `best.npz` stayed the
+  agent of 0.66 M steps; the second stage, and the stop run after it, started
+  from that agent instead of the trained one. Fixed: while none finishes, more
+  gates on average break the tie (`_drawn_rank`, tested by breaking it). The
+  stop run still got to the third gate, and its last agent (21.4 M steps) flies
+  all 64 drawn drones there and hovers until the time limit, also in the ideal
+  lab: crossing the last gate, 1.5 m from the wall, has led to crashes, so not
+  crossing it pays more. The recipe now continues phase 11's policy (in Claude's
+  workspace: 10 % to 22 % of drawn drones in 8 M steps) instead of starting from
+  scratch; the stop waits for its result (loose end 45).
 
 Phase 11 (the Iris learns the course):
 - **Gymnasium 1.4.0** (the newest, for Python 3.10-3.14) is an optional
@@ -3231,24 +3246,27 @@ Phase 6c (Kalman filter):
       ground effect over the top of an obstacle, nor the multirotor terms of the
       ground effect (neighbouring rotors, the body). A drone flying close to a
       ceiling, or one with small propellers, would need them.
-  45. The policies of phase 12 are not trained yet (step 8): in Claude's
-      workspace 8 M steps in the randomised lab took the phase 11 policy from
-      10 % to 22 % of drawn drones, and the stop after the finish was not
-      learned. The recipe for the author's computer (8 workers, 1 024 drones):
-      `python -m examples.train_realism --no-stop --workers 8 --drones 1024
-      --out runs/realism_course`, then `python -m examples.train_realism --start
-      runs/realism_course/margin/best.npz --refine 20e6 --workers 8 --drones
-      1024 --out runs/realism_stop`.
+  45. The policies of phase 12 are not trained yet (step 8). On the author's
+      computer the first recipe (from scratch, then the stop) gave 0 % of drawn
+      drones, partly by a fault of the judge, now fixed (decision log, phase
+      12). Next recipe: `python -m examples.train_realism --start
+      policies/first_course.npz --no-stop --refine 20e6 --workers 8 --drones
+      1024 --out runs/realism_course2` (in Claude's workspace 8 M steps of it
+      took the phase 11 policy from 10 % to 22 %). The stop on the first course
+      is open: its last agent hovers before the last gate rather than cross it
+      (1.5 m from the wall). To be decided with the author once the course is
+      flown: train the stop from that policy, give the finish room (a longer
+      room for the stop's trainings), or learn the stop on random courses.
   46. The randomisation ranges are chosen, and they compound (step 6): the
       drawn thrust-to-weight ratio goes from 1.16 to 2.2 (median 1.61, the
       profile's 1.9), and the rotor drag (x 0.5-2) alone leaves the classical
       baseline 61 % of the drawn drones. Narrower ranges, or ranges measured on
       the real drone (phase 14), would make the task easier and more honest.
 - Next, before phase 13, on the author's computer: measure the speed of the
-  workers (`python -m examples.parallel_speed --drones 1024 --workers 1 2 4 8`)
-  and run the trainings of loose end 45 (the randomised lab without the stop,
-  then the stop); decide whether to narrow the randomisation ranges first (loose
-  end 46). The policy that comes out of them, if it flies the drawn drones, is
+  workers (done: 2.26x with 8) and run the training of loose end 45 (phase
+  11's policy continued in the randomised lab, without the stop; the first
+  recipe failed); then decide how the stop is learned, and whether to narrow
+  the randomisation ranges (loose end 46). The policy that comes out of them, if it flies the drawn drones, is
   kept in `policies/` like phase 11's. Then phase 13 (3D viewer of recorded
   flights, live during a training and afterwards: section 5), whose step plan is
   drawn up with the author at its start. The Project's copy of this document was

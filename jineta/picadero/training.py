@@ -230,6 +230,21 @@ def _rank(result: Evaluation, margin: float = 0.0) -> tuple[float, float]:
     return (0.0, float(result.gates))
 
 
+def _drawn_rank(drawn: DrawnEvaluation) -> tuple[float, float, float]:
+    """Higher is better, for drones drawn from the randomisation: the share that
+    finishes, then the faster mean lap; when none finishes (all laps -inf),
+    more gates on average. Without the gates every unfinished agent ties with
+    the first one judged, which then stays the best however far later ones
+    fly (phase 12: the first trainings in the randomised lab kept agents of
+    1-2 M steps out of 20 M)."""
+    lap = drawn.mean_lap_time
+    return (
+        drawn.success_rate,
+        -lap if np.isfinite(lap) else -np.inf,
+        float(np.mean(drawn.gates)),
+    )
+
+
 def _better(new: Evaluation, old: Evaluation | None, margin: float = 0.0) -> bool:
     return old is None or _rank(new, margin) > _rank(old, margin)
 
@@ -300,7 +315,7 @@ def run_training(
     # The steps an agent has been trained for, counting those it brought with it
     # (a second stage starts from the first stage's agent).
     trained = int(agent.info.get("steps", 0)) if agent is not None else 0
-    best_rank: tuple[float, float] | None = None
+    best_rank: tuple[float, ...] | None = None
     best_result: Any = None
     best_agent = ppo.agent
     lap_times: list[float] = []
@@ -386,8 +401,9 @@ def train(
     With a `realism` (phase 12) the drones fly with its effects, and with a
     `stop` they must stop after the finish. When the realism draws (sensors'
     noise or randomised drones), the best agent is the one whose mean action
-    flies the most of `judged_by` drawn drones, then the fastest
-    (`evaluate_drawn`, seeded: every evaluation flies the same drones).
+    flies the most of `judged_by` drawn drones, then the fastest, and while
+    none finishes the one that passes the most gates (`_drawn_rank`;
+    `evaluate_drawn`, seeded: every evaluation flies the same drones).
 
     The policies of phase 11 are trained in two stages (`examples.train_course`):
     without the margin first (with it from the start, crashes are so frequent
@@ -405,7 +421,7 @@ def train(
                 "eval_gates": result.gates,
             }
             return _rank(result, margin), fields, result
-        # Drawn drones: the share the mean action flies, then how fast.
+        # Drawn drones: the share the mean action flies, how fast, the gates.
         drawn = evaluate_drawn(candidate, course, judged_by, seed, **effects)
         lap = drawn.mean_lap_time
         fields = {
@@ -413,8 +429,7 @@ def train(
             "eval_lap_time": lap,
             "eval_gates": float(np.mean(drawn.gates)),
         }
-        rank = (drawn.success_rate, -lap if np.isfinite(lap) else -np.inf)
-        return rank, fields, drawn
+        return _drawn_rank(drawn), fields, drawn
 
     if workers < 1 or n % workers != 0:
         raise ValueError("workers must be >= 1 and divide n")
