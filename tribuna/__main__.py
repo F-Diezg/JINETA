@@ -5,9 +5,11 @@
     python -m tribuna runs/replays/first_course      # examples.record_agent
     python -m tribuna runs/x/laps/000000163840.json  # one recording
 
-The recordings are played in order of training steps, from the first; while a
-training goes on, new ones are read every second and played when the player
-reaches them (End jumps to the newest). The keys are in the window.
+The recordings are played in order of training steps, from the first, each
+with the laps of the ones before as fading trails; while a training goes on,
+new ones are read every second and played when the player reaches them (End
+jumps to the newest). Beside them, the training's log: how its episodes ended
+and their lap time. The keys are in the window.
 """
 
 import argparse
@@ -40,6 +42,7 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit("The viewer needs PyVista: pip install pyvista")
 
     path = Path(args.path)
+    log = None
     if path.is_file():
         player, source = Player([read_recording(path)]), None
     else:
@@ -49,12 +52,12 @@ def main(argv: list[str] | None = None) -> None:
             print(f"Waiting for the first recording in {path} ...", flush=True)
             time.sleep(2.0)
             recordings = run.poll()
-        player, source = Player(recordings), run.poll
+        player, source, log = Player(recordings), run.poll, run.log
         for error in run.errors.values():
             print(f"Skipped: {error}")
     if args.newest:
         player.newest()
-    Viewer(player, player.recordings[0].shape, source).show()
+    Viewer(player, player.recordings[0].shape, source, log=log).show()
 
 
 if __name__ == "__main__":

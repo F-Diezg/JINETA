@@ -9,6 +9,14 @@ says (`geometry.pose_matrix`). A path that grows gets its points replaced
 (`copy_from`). A timer calls `Viewer.tick` about 30 times a second: the player
 moves on by the time that passed, and the actors follow.
 
+Seeing a policy learn: the earlier recordings' laps stay as fading trails
+(`Player.trails`), and two charts beside the scene show what can be averaged:
+how the training's episodes ended (the share that finished and that crashed,
+from its log) and the lap time (the log's mean, and each recording's first
+lap), with a dashed line at the recording being played. The slider at the top
+left moves through the recordings (the training's time); the one at the top
+right through the lap.
+
 The scene draws in NED, as the simulator computes; the camera's "up" is -z.
 
 Keys (also shown in the window):
@@ -45,7 +53,8 @@ from tribuna.geometry import (
     pose_matrix,
     sphere,
 )
-from tribuna.player import Frame, Player, describe
+from tribuna.player import TRAILS, Frame, Player, Trail, course_key, describe
+from tribuna.run import LogSeries, Progress, progress
 
 # Colours (names PyVista knows, or hex).
 STATUS_COLORS = {"finished": "#2ca02c", "crashed": "#d62728", "timeout": "#7f7f7f"}
@@ -77,15 +86,9 @@ def _line_points(path: np.ndarray) -> np.ndarray:
     return path if len(path) >= 2 else np.vstack([path[:1], path[:1]])
 
 
-def course_key(course: Course) -> tuple:
-    """Enough of a course to tell two apart (to redraw it only when it
-    changes)."""
-    return (
-        course.name,
-        tuple(course.room.size),
-        tuple(tuple(g.center) for g in course.gates),
-        tuple(type(o).__name__ for o in course.obstacles),
-    )
+def _at(point: np.ndarray) -> np.ndarray:
+    """The matrix that moves a marker made at the origin to a point."""
+    return pose_matrix(point, [1.0, 0.0, 0.0, 0.0])
 
 
 @dataclass
@@ -100,60 +103,60 @@ class _Drone:
 
 
 class Scene:
-    """The course and the drones of a recording, drawn in a plotter."""
+    """The course, the drones of a recording and the trails of earlier ones,
+    drawn in a plotter."""
 
     def __init__(self, plotter: Any, shape: DroneShape, drones: int) -> None:
         self.plotter = plotter
         self.shape = shape
         self.course_actors: list[str] = []
         self.shown: tuple | None = None
+        self.follow = False
+        self.show_hitbox = False
         plotter.set_background(BACKGROUND)
         meshes = drone_meshes(shape)
         frame, ccw, cw = (
             polydata(m) for m in (meshes.frame, meshes.discs_ccw, meshes.discs_cw)
         )
         marker = polydata(sphere([0.0, 0.0, 0.0], 0.08))
+
+        def add(mesh: Any, name: str, **style: Any) -> Any:
+            return plotter.add_mesh(mesh, name=name, reset_camera=False, **style)
+
         self.drones: list[_Drone] = []
         for i in range(drones):
             parts = [
-                plotter.add_mesh(
-                    mesh,
-                    color=color,
-                    opacity=opacity,
-                    name=f"drone-{i}-{part}",
-                    reset_camera=False,
-                )
-                for part, mesh, color, opacity in (
-                    ("frame", frame, "#333333", 1.0),
-                    ("ccw", ccw, "#e4572e", 0.75),
-                    ("cw", cw, "#2e86ab", 0.75),
-                )
+                add(frame, f"drone-{i}-frame", color="#333333"),
+                add(ccw, f"drone-{i}-ccw", color="#e4572e", opacity=0.75),
+                add(cw, f"drone-{i}-cw", color="#2e86ab", opacity=0.75),
             ]
             path = polydata(path_lines(np.zeros((2, 3))))
             main = i == 0  # the first lap (the mean action's) stands out
-            path_actor = plotter.add_mesh(
-                path, color=FLYING_COLOR, line_width=4 if main else 2,
-                opacity=1.0 if main else 0.6, name=f"drone-{i}-path",
-                reset_camera=False,
+            path_actor = add(
+                path, f"drone-{i}-path", color=FLYING_COLOR,
+                line_width=4 if main else 2, opacity=1.0 if main else 0.6,
             )  # fmt: skip
-            crash = plotter.add_mesh(
-                marker, color=STATUS_COLORS["crashed"], name=f"drone-{i}-crash",
-                reset_camera=False,
-            )  # fmt: skip
+            crash = add(marker, f"drone-{i}-crash", color=STATUS_COLORS["crashed"])
             self.drones.append(_Drone(parts, path, path_actor, crash))
-        self.hitbox = plotter.add_mesh(
-            polydata(hitbox_mesh(shape)), color="#f3c623", opacity=0.3,
-            name="drone-0-hitbox", reset_camera=False,
+        self.hitbox = add(
+            polydata(hitbox_mesh(shape)), "drone-0-hitbox", color="#f3c623",
+            opacity=0.3,
         )  # fmt: skip
         self.hitbox.visibility = False
+        self.trail_actors: list[tuple[Any, Any, Any]] = []
+        for i in range(TRAILS):
+            line = polydata(path_lines(np.zeros((2, 3))))
+            actor = add(line, f"trail-{i}", color=FLYING_COLOR, line_width=2)
+            end = add(marker, f"trail-{i}-crash", color=STATUS_COLORS["crashed"])
+            actor.visibility = False
+            end.visibility = False
+            self.trail_actors.append((line, actor, end))
         self.text = plotter.add_text(
             "", position="upper_left", font_size=10, color="black", name="status"
         )
         plotter.add_text(
             HELP, position="lower_edge", font_size=8, color="black", name="help"
         )
-        self.follow = False
-        self.show_hitbox = False
 
     def show_course(self, course: Course) -> None:
         """Draw a course (once: nothing is redrawn while it stays the same)."""
@@ -205,10 +208,29 @@ class Scene:
         camera.position = tuple(position - 2.5 * forward + np.array([0.0, 0.0, -1.2]))
         camera.up = (0.0, 0.0, -1.0)
 
-    def draw(self, frame: Frame, text: str) -> None:
-        """Put every actor where the frame says."""
+    def draw_trails(self, trails: list[Trail]) -> None:
+        """The earlier recordings' laps, fading with their age."""
+        for i, (line, actor, end) in enumerate(self.trail_actors):
+            if i >= len(trails):
+                actor.visibility = False
+                end.visibility = False
+                continue
+            trail = trails[i]
+            line.copy_from(polydata(path_lines(_line_points(trail.points))))
+            actor.prop.color = STATUS_COLORS[trail.status]
+            actor.prop.opacity = trail.opacity
+            actor.visibility = True
+            end.visibility = trail.crash_point is not None
+            if trail.crash_point is not None:
+                end.user_matrix = _at(trail.crash_point)
+                end.prop.opacity = trail.opacity
+
+    def draw(self, frame: Frame, text: str, trails: list[Trail] | None = None) -> None:
+        """Put every actor where the frame says (and the trails, when given)."""
         course = frame.recording.courses[frame.course]
         self.show_course(course)
+        if trails is not None:
+            self.draw_trails(trails)
         for i, drone in enumerate(self.drones):
             visible = i < len(frame.drones)
             for actor in drone.parts:
@@ -226,9 +248,7 @@ class Scene:
             drone.path_actor.prop.color = color
             drone.crash.visibility = state.crash_point is not None
             if state.crash_point is not None:
-                drone.crash.user_matrix = pose_matrix(
-                    state.crash_point, [1.0, 0.0, 0.0, 0.0]
-                )
+                drone.crash.user_matrix = _at(state.crash_point)
             if i == 0:
                 self.hitbox.visibility = self.show_hitbox
                 self.hitbox.user_matrix = matrix
@@ -239,10 +259,81 @@ class Scene:
         self.text.set_text("upper_left", text)
 
 
+def _finite(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """The points of a series that have a value (a chart draws no nan)."""
+    x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
+    keep = np.isfinite(x) & np.isfinite(y)
+    return x[keep], y[keep]
+
+
+def _upper(*series: np.ndarray, floor: float = 1.0) -> float:
+    """A round top for an axis: a tenth above every finite value (at least
+    `floor`), rounded up to a whole number."""
+    tops = [floor]
+    for values in series:
+        values = np.asarray(values, dtype=float)
+        values = values[np.isfinite(values)]
+        if len(values):
+            tops.append(float(np.max(values)))
+    return float(np.ceil(max(tops) * 1.1))
+
+
+class Charts:
+    """Two charts beside the scene (see the module): how the episodes ended,
+    and the lap time, against training steps."""
+
+    def __init__(self, plotter: Any) -> None:
+        import pyvista as pv
+
+        ends = pv.Chart2D(
+            size=(0.3, 0.27), loc=(0.69, 0.40), x_label="steps", y_label="share"
+        )
+        ends.title = "how the episodes of each update ended"
+        times = pv.Chart2D(
+            size=(0.3, 0.27), loc=(0.69, 0.09), x_label="steps", y_label="s"
+        )
+        times.title = "lap time"
+        self.ends, self.times = ends, times
+        zero = ([0.0, 0.0], [0.0, 0.0])
+        green, red = STATUS_COLORS["finished"], STATUS_COLORS["crashed"]
+        self.finished = ends.line(*zero, color=green, width=2, label="finished")
+        self.crashed = ends.line(*zero, color=red, width=2, label="crashed")
+        self.ends_now = ends.line(*zero, color="black", width=1, style="--")
+        self.mean_time = times.line(
+            *zero, color=FLYING_COLOR, width=2, label="training (mean)"
+        )
+        self.first_time = times.scatter(
+            *zero, color="black", size=6, label="recorded (first lap)"
+        )
+        self.times_now = times.line(*zero, color="black", width=1, style="--")
+        plotter.add_chart(ends, times)
+
+    def update(self, log: LogSeries | None, numbers: Progress, steps: float) -> None:
+        """New data (the log and the recordings so far), and the line at the
+        recording being played (`steps`)."""
+        has_log = log is not None and len(log) > 0
+        lasts = [1.0, float(steps), *numbers.steps[-1:]]
+        if has_log:
+            lasts.append(float(log.steps[-1]))
+            self.finished.update(log.steps, log.finished)
+            self.crashed.update(log.steps, log.crashed)
+            self.mean_time.update(*_finite(log.steps, log.mean_lap_time))
+        right = max(lasts) * 1.02
+        top = _upper(numbers.first_lap_time, log.mean_lap_time if has_log else [])
+        self.first_time.update(*_finite(numbers.steps, numbers.first_lap_time))
+        self.ends_now.update([steps, steps], [0.0, 1.0])
+        self.times_now.update([steps, steps], [0.0, top])
+        self.ends.x_range = [0.0, right]
+        self.ends.y_range = [0.0, 1.0]
+        self.times.x_range = [0.0, right]
+        self.times.y_range = [0.0, top]
+
+
 class Viewer:
-    """A window playing recordings: the player, the scene, the keys and a
-    timer. `source()` (optional) is asked for new recordings every
-    `poll_every` seconds (a training still writing them)."""
+    """A window playing recordings: the player, the scene, the charts, the
+    keys, the sliders and a timer. `source()` (optional) is asked for new
+    recordings every `poll_every` seconds (a training still writing them), and
+    `log()` (optional) for the training's log."""
 
     def __init__(
         self,
@@ -252,27 +343,42 @@ class Viewer:
         plotter: Any = None,
         poll_every: float = 1.0,
         drones: int = 9,
+        log: Callable[[], LogSeries] | None = None,
     ) -> None:
         import pyvista as pv
 
         self.player = player
         self.source = source
+        self.log = log
         self.poll_every = poll_every
         self.plotter = plotter if plotter is not None else pv.Plotter(
             window_size=[1400, 860], title="Jineta - tribuna"
         )  # fmt: skip
         self.scene = Scene(self.plotter, shape, drones)
+        self.charts = Charts(self.plotter)
         self._last = time.perf_counter()
         self._polled = 0.0
+        self._shown: tuple | None = None  # what the trails and charts are of
         self.slider: Any = None
+        self.timeline: Any = None
+        self.refresh()
+
+    def refresh(self) -> None:
+        """The charts with the latest data."""
+        frame = self.player.frame()
+        steps = float(frame.recording.steps) if frame is not None else 0.0
+        log = self.log() if self.log is not None else None
+        numbers = progress(self.player.recordings, self.player.course)
+        self.charts.update(log, numbers, steps)
 
     def tick(self, dt: float) -> None:
-        """One frame: new recordings (now and then), the player moved on by dt,
-        the scene drawn."""
+        """One frame: new recordings and the log (now and then), the player
+        moved on by dt, the scene drawn."""
         self._polled += dt
         if self.source is not None and self._polled >= self.poll_every:
             self._polled = 0.0
             self.player.add(self.source())
+            self.refresh()
         self.player.advance(dt)
         frame = self.player.frame()
         if frame is None:
@@ -283,11 +389,21 @@ class Viewer:
         text = describe(
             frame, self.player.speed, self.player.paused, len(self.player.recordings)
         )
-        self.scene.draw(frame, text)
+        trails = None
+        shown = (id(frame.recording), frame.course, len(self.player.recordings))
+        if shown != self._shown:  # another recording: its trails, the charts' line
+            self._shown = shown
+            trails = self.player.trails()
+            self.refresh()
+        self.scene.draw(frame, text, trails)
         if self.slider is not None:
             representation = self.slider.GetRepresentation()
             representation.SetMaximumValue(max(frame.duration, 1e-3))
             representation.SetValue(frame.t)
+        if self.timeline is not None:
+            representation = self.timeline.GetRepresentation()
+            representation.SetMaximumValue(max(len(self.player.recordings) - 1, 1))
+            representation.SetValue(self.player.index)
 
     def _on_timer(self, _step: int) -> None:
         now = time.perf_counter()
@@ -320,14 +436,25 @@ class Viewer:
             "h": hitbox,
         }
 
+    def go_to(self, value: float) -> None:
+        """The recordings slider: play the recording it points at."""
+        self.player.go_to(round(value))
+
     def show(self, frame_ms: int = 33) -> None:
         """Open the window and play until it is closed."""
         for key, action in self.keys().items():
             self.plotter.add_key_event(key, action)
+        style = {"style": "modern", "color": "black"}
+        self.timeline = self.plotter.add_slider_widget(
+            self.go_to, [0.0, max(len(self.player.recordings) - 1, 1)],
+            value=float(self.player.index), title="recording",
+            pointa=(0.30, 0.92), pointb=(0.52, 0.92), interaction_event="end",
+            fmt="%.0f", **style,
+        )  # fmt: skip
         self.slider = self.plotter.add_slider_widget(
             self.player.seek, [0.0, 1.0], value=0.0, title="lap clock [s]",
-            pointa=(0.55, 0.92), pointb=(0.95, 0.92), interaction_event="always",
-            style="modern", fmt="%.2f", color="black",
+            pointa=(0.58, 0.92), pointb=(0.95, 0.92), interaction_event="always",
+            fmt="%.2f", **style,
         )  # fmt: skip
         self.tick(0.0)
         self._last = time.perf_counter()

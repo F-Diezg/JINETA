@@ -396,3 +396,33 @@ def test_what_can_be_averaged_over_a_recording():
     assert one["laps"] == 1 and one["finished"] == 0.0 and np.isnan(one["lap_time"])
     assert lap_numbers(recording, course=5)["laps"] == 0
     assert isinstance(laps[0], Lap)
+
+
+def test_what_the_recordings_say_about_learning():
+    from tribuna.run import progress
+
+    def rec(steps, *laps):
+        return Recording(steps, (COURSE,), SHAPE, laps)
+
+    recordings = [
+        rec(100, lap(status="crashed", label="a"), lap(label="b")),
+        rec(200, lap(status="finished", lap_time=5.0, label="a"), lap(label="b")),
+        rec(300, lap(status="finished", lap_time=4.0, label="a"),
+            lap(status="finished", lap_time=4.5, label="b")),
+    ]  # fmt: skip
+    numbers = progress(recordings)
+    np.testing.assert_array_equal(numbers.steps, [100, 200, 300])
+    np.testing.assert_array_equal(numbers.finished, [0.0, 0.5, 1.0])
+    np.testing.assert_array_equal(numbers.lap_time[1:], [5.0, 4.25])
+    assert np.isnan(numbers.lap_time[0]) and np.isnan(numbers.first_lap_time[0])
+    np.testing.assert_array_equal(numbers.first_lap_time[1:], [5.0, 4.0])
+    assert len(progress(recordings, course=1).steps) == 0
+    # On a set of courses, each course's own first lap.
+    second = dataclasses.replace(COURSE, name="Second")
+    both = Recording(
+        400, (COURSE, second), SHAPE,
+        (lap(status="finished", lap_time=7.0, label="x", course=1),
+         lap(status="finished", lap_time=6.0, label="y", course=0)),
+    )  # fmt: skip
+    np.testing.assert_array_equal(progress([both], course=0).first_lap_time, [6.0])
+    np.testing.assert_array_equal(progress([both], course=1).first_lap_time, [7.0])

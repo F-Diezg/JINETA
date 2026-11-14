@@ -15,17 +15,64 @@ moves it by dt (the wall time since the last frame) times `speed`.
 
 It knows nothing of PyVista: `frame()` says where every drone is, which path it
 has flown and how it ended, and the scene draws that.
+
+Seeing a policy learn (phase 13): the laps of the recordings before the current
+one stay drawn as trails (`trails`), fading with their age, coloured by how they
+ended, so the change from crashing to finishing shows. A trail is the first lap
+of its recording on the course (the mean action's, the policy as it would fly):
+trajectories are never averaged (the average of a path into the pillar and one
+past it is a path nobody flew). What can be averaged (how many laps finished,
+their lap time) goes in the charts beside (`tribuna.run`).
 """
 
 from dataclasses import dataclass, field
 
 import numpy as np
 
+from jineta.campo.course import Course
 from jineta.picadero.recording import Lap, Recording
 from tribuna.motion import path_until, pose_at
 
 SPEEDS = (0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0)  # playback speeds offered
 PAUSE = 1.0  # [s] of wall time between the end of a recording and the next
+TRAILS = 10  # earlier recordings drawn as trails
+NEWEST_OPACITY = 0.8  # the trail of the recording just before the current one
+OLDEST_OPACITY = 0.1  # the trail TRAILS recordings back
+
+
+def course_key(course: Course) -> tuple:
+    """Enough of a course to tell two apart: its name, room and gates (the
+    courses of different recordings are compared with it)."""
+    return (
+        course.name,
+        tuple(float(x) for x in course.room.size),
+        tuple(tuple(float(x) for x in g.center) for g in course.gates),
+        len(course.obstacles),
+    )
+
+
+def trail_opacity(age: int, keep: int = TRAILS) -> float:
+    """How visible the trail of the recording `age` places back is: from
+    NEWEST_OPACITY (the one just before) down to OLDEST_OPACITY (keep back),
+    in a straight line; 0 beyond."""
+    if age < 1 or age > keep:
+        return 0.0
+    if keep == 1:
+        return NEWEST_OPACITY
+    fraction = (age - 1) / (keep - 1)
+    return NEWEST_OPACITY + fraction * (OLDEST_OPACITY - NEWEST_OPACITY)
+
+
+@dataclass
+class Trail:
+    """The first lap of an earlier recording on the course shown: its whole
+    path, how it ended (and where it touched something), how visible."""
+
+    steps: int
+    status: str
+    points: np.ndarray
+    crash_point: np.ndarray | None
+    opacity: float
 
 
 @dataclass
@@ -170,6 +217,40 @@ class Player:
         self._waited = 0.0
 
     # ---- what the scene draws ------------------------------------------------------
+
+    def trails(self, keep: int = TRAILS) -> list[Trail]:
+        """The earlier recordings' laps on the course shown (the first lap of
+        each, the most recent first), up to `keep` recordings back."""
+        recording = self.current
+        if recording is None:
+            return []
+        key = course_key(recording.courses[self.course])
+        trails = []
+        for age in range(1, keep + 1):
+            j = self.index - age
+            if j < 0:
+                break
+            earlier = self.recordings[j]
+            matching = [
+                i for i, c in enumerate(earlier.courses) if course_key(c) == key
+            ]
+            laps = [
+                lap for lap in earlier.laps if matching and lap.course == matching[0]
+            ]
+            if not laps:
+                continue
+            lap = laps[0]
+            crashed = lap.status == "crashed" and np.all(np.isfinite(lap.crash_point))
+            trails.append(
+                Trail(
+                    steps=earlier.steps,
+                    status=lap.status,
+                    points=lap.positions,
+                    crash_point=lap.crash_point.copy() if crashed else None,
+                    opacity=trail_opacity(age, keep),
+                )
+            )
+        return trails
 
     def frame(self) -> Frame | None:
         """Where everything is now (None before the first recording)."""

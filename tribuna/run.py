@@ -185,3 +185,36 @@ def lap_numbers(recording: Recording, course: int | None = None) -> dict[str, fl
             float(np.mean([lap.lap_time for lap in finished])) if finished else np.nan
         ),
     }
+
+
+@dataclass
+class Progress:
+    """The recordings' numbers on one axis of steps (one entry per recording
+    that has laps on the course): the share of its laps that finished, their
+    mean lap time [s] (nan if none), and the first lap's (the mean action's)
+    lap time [s] (nan unless it finished)."""
+
+    steps: np.ndarray
+    finished: np.ndarray
+    lap_time: np.ndarray
+    first_lap_time: np.ndarray
+
+
+def progress(recordings: list[Recording], course: int = 0) -> Progress:
+    """What the recordings say about learning, on one course."""
+    steps, finished, lap_time, first = [], [], [], []
+    for recording in recordings:
+        numbers = lap_numbers(recording, course)
+        if numbers["laps"] == 0:
+            continue
+        laps = [lap for lap in recording.laps if lap.course == course]
+        steps.append(recording.steps)
+        finished.append(numbers["finished"])
+        lap_time.append(numbers["lap_time"])
+        first.append(laps[0].lap_time)
+    return Progress(
+        np.array(steps, dtype=float),
+        np.array(finished, dtype=float),
+        np.array(lap_time, dtype=float),
+        np.array(first, dtype=float),
+    )

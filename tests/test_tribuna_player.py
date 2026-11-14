@@ -213,3 +213,65 @@ def test_the_overview_camera_sees_the_whole_room():
         rays = corners - position
         angles = np.degrees(np.arccos(rays @ sight / np.linalg.norm(rays, axis=1)))
         assert np.max(angles) == pytest.approx(0.9 * 15.0, abs=1e-9)  # the farthest
+
+
+def test_trails_fade_with_their_age():
+    from tribuna.player import NEWEST_OPACITY, OLDEST_OPACITY, trail_opacity
+
+    opacities = [trail_opacity(age, 10) for age in range(1, 11)]
+    assert opacities[0] == NEWEST_OPACITY and opacities[-1] == pytest.approx(
+        OLDEST_OPACITY
+    )
+    assert np.all(np.diff(opacities) < 0.0)
+    assert trail_opacity(0, 10) == trail_opacity(11, 10) == 0.0
+    assert trail_opacity(1, 1) == NEWEST_OPACITY
+
+
+def test_the_trails_are_the_earlier_recordings_first_laps():
+    from tribuna.player import trail_opacity
+
+    crash = flown(
+        0.2, status="crashed", crash_time=0.15, crash_point=np.array([0.15, 5.0, -1.0])
+    )
+    recordings = [
+        recording(100, crash, flown(0.3, label="noisy 1")),
+        recording(200, flown(0.4)),
+        recording(300, flown(0.5, status="finished")),
+        recording(400, flown(0.6, status="finished")),
+    ]
+    player = Player(recordings)
+    assert player.trails() == []  # nothing before the first
+    player.newest()
+    trails = player.trails(keep=2)
+    assert [t.steps for t in trails] == [300, 200]  # the most recent first
+    assert [t.opacity for t in trails] == [trail_opacity(1, 2), trail_opacity(2, 2)]
+    assert [t.status for t in trails] == ["finished", "timeout"]
+    np.testing.assert_array_equal(trails[0].points, recordings[2].laps[0].positions)
+    oldest = player.trails(keep=10)[-1]
+    assert oldest.steps == 100 and oldest.status == "crashed"
+    np.testing.assert_allclose(oldest.crash_point, [0.15, 5.0, -1.0])
+    assert all(t.crash_point is None for t in player.trails(keep=10)[:-1])
+
+
+def test_trails_only_of_the_same_course():
+    from tribuna.player import course_key
+
+    moved = COURSE.__class__(
+        **{**COURSE.__dict__, "gates": (COURSE.gates[0].__class__(
+            **{**COURSE.gates[0].__dict__, "center": np.array([6.0, 5.0, -1.5])}
+        ), *COURSE.gates[1:])}
+    )  # fmt: skip
+    assert course_key(moved) != course_key(COURSE)
+    other = COURSE.__class__(**{**COURSE.__dict__, "name": "Other"})
+    # Random courses: the same validation courses, but listed in another order.
+    first = recording(
+        100, flown(0.3, label="Other", course=0), flown(0.2, label="First", course=1),
+        courses=(other, COURSE),
+    )  # fmt: skip
+    elsewhere = recording(200, flown(0.4), courses=(moved,))
+    now = recording(300, flown(0.5), courses=(COURSE,))
+    player = Player([first, elsewhere, now])
+    player.newest()
+    trails = player.trails()
+    assert [t.steps for t in trails] == [100]  # not the moved course's lap
+    np.testing.assert_array_equal(trails[0].points, first.laps[1].positions)

@@ -15,6 +15,7 @@ from tests.test_tribuna_player import SHAPE
 from tribuna.geometry import overview_camera, pose_matrix
 from tribuna.motion import pose_at
 from tribuna.player import Player
+from tribuna.run import LogSeries
 
 pv = pytest.importorskip("pyvista")
 from tribuna.scene import STATUS_COLORS, Scene, Viewer, course_key  # noqa: E402
@@ -113,3 +114,43 @@ def test_the_viewer_reads_new_recordings_and_follows_a_drone(plotter, recordings
     assert plotter.camera.focal_point == pytest.approx((9.0, 5.0, -4.0 / 3.0))
     keys["End"]()
     assert viewer.player.current is second
+
+
+def test_the_trails_and_the_charts(plotter, recordings):
+    first, second = recordings
+    log = LogSeries(
+        steps=np.array([500.0, 1000.0, 1500.0, 2000.0]),
+        finished=np.array([0.0, 0.2, 0.5, 0.9]),
+        crashed=np.array([1.0, 0.8, 0.5, 0.1]),
+        timeout=np.zeros(4),
+        mean_lap_time=np.array([np.nan, 5.0, 4.0, 3.5]),
+        mean_return=np.zeros(4),
+    )
+    viewer = Viewer(Player([first, second]), SHAPE, None, plotter, log=lambda: log)
+    drawn = []
+    original = viewer.scene.draw_trails
+    viewer.scene.draw_trails = lambda trails: (
+        drawn.append(len(trails)),
+        original(trails),
+    )
+    viewer.tick(0.1)
+    viewer.tick(0.1)
+    assert drawn == [0]  # the first recording has no trails, drawn once
+    charts = viewer.charts
+    np.testing.assert_array_equal(charts.finished.x, log.steps)
+    np.testing.assert_array_equal(charts.finished.y, log.finished)
+    np.testing.assert_array_equal(charts.mean_time.x, [1000.0, 1500.0, 2000.0])
+    np.testing.assert_array_equal(charts.ends_now.x, [1000.0, 1000.0])
+    assert charts.ends.x_range[1] >= 2000.0
+    assert charts.times.y_range[1] >= 5.0
+    viewer.player.next()
+    viewer.tick(0.1)
+    assert drawn == [0, 1]  # the second recording: the first one's lap as a trail
+    line, actor, _ = viewer.scene.trail_actors[0]
+    assert actor.visibility and not viewer.scene.trail_actors[1][1].visibility
+    assert actor.prop.opacity == pytest.approx(0.8)
+    assert actor.prop.color == pv.Color(STATUS_COLORS["finished"])
+    assert line.n_points == len(first.laps[0].times)
+    np.testing.assert_array_equal(charts.ends_now.x, [2000.0, 2000.0])
+    viewer.go_to(0.4)  # the recordings slider
+    assert viewer.player.index == 0
