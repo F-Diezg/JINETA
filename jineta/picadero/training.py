@@ -12,6 +12,15 @@ deterministic policy's lap (status, lap time, closest approach to anything), and
 its robustness: the success rate of `n` laps with the actions drawn from the
 policy (its exploration noise standing in for the imperfections of a real
 flight, until phase 12 randomises the vehicle).
+
+Recordings (phase 13): the laps an evaluation flies can be kept
+(`record=True`): the mean action's lap and the first `RECORDED_LAPS` of the
+others (with the policy's noise, or drawn drones). A training keeps them: at
+every evaluation it writes them to `out/laps/<steps>.json`
+(`picadero.recording`) and the agent that flew them to
+`out/agents/<steps>.npz`, `<steps>` the steps the agent had been trained for
+(12 digits, so the files sort in order). Recording flies nothing more: the laps
+are the evaluation's own.
 """
 
 import csv
@@ -26,10 +35,19 @@ from jineta.campo.course import Course
 from jineta.doma.policy import Agent
 from jineta.doma.ppo import PPO, PPOSettings
 from jineta.escuadron.referee import CRASHED, FINISHED, STATUS_NAMES, TIMEOUT
+from jineta.jinete.profiles import MULTIROTOR_PROFILES
 from jineta.picadero.env import CourseEnv
 from jineta.picadero.finish import StopAfterFinish
 from jineta.picadero.parallel import CourseEnvPart, CourseSetEnvPart, make_parallel
 from jineta.picadero.realism import IDEAL, Realism
+from jineta.picadero.recording import (
+    DroneShape,
+    Lap,
+    Recording,
+    drone_shape,
+    laps_from_flight,
+    write_recording,
+)
 from jineta.picadero.reward import RewardWeights
 
 # The reward the policies of phase 11 are trained with (found by measurement;
@@ -38,6 +56,11 @@ TRAINING_WEIGHTS = RewardWeights(progress=1.0, gate=1.0, crash=5.0, time=0.25)
 # The safety margin of training [m]: the baseline's laps are robust only if they
 # keep 5 cm from everything, so the policy is trained to keep it too.
 TRAINING_MARGIN = 0.05
+# Recordings (phase 13): laps kept besides the mean action's, and where a
+# training writes them and the agents that flew them.
+RECORDED_LAPS = 8
+LAPS_FOLDER = "laps"
+AGENTS_FOLDER = "agents"
 
 LOG_COLUMNS = (
     "iteration",
@@ -75,6 +98,7 @@ class Evaluation:
     success_rate, mean_lap_time: over the laps flown with the policy's own
         noise (mean_lap_time over those that finished; nan if none did).
     lap_times: those laps' times (nan where they did not finish).
+    laps: with `record`, the deterministic lap and the first noisy ones.
     """
 
     status: str
@@ -84,6 +108,7 @@ class Evaluation:
     success_rate: float
     mean_lap_time: float
     lap_times: np.ndarray = field(repr=False)
+    laps: tuple[Lap, ...] = field(default=(), repr=False)
 
     @property
     def finished(self) -> bool:
@@ -191,16 +216,27 @@ def evaluate(
     course: Course,
     n: int = 64,
     seed: int = 0,
+    record: bool = False,
     **env_kwargs: Any,
 ) -> Evaluation:
     """The deterministic lap and the success rate of n laps flown with the
-    policy's noise (seeded)."""
-    single = fly(agent, CourseEnv(course, n=1, **env_kwargs))
+    policy's noise (seeded); with `record`, those laps are kept (`laps`)."""
+    single = fly(agent, CourseEnv(course, n=1, **env_kwargs), record=record)
     noisy = fly(
-        agent, CourseEnv(course, n=n, **env_kwargs), np.random.default_rng(seed)
+        agent,
+        CourseEnv(course, n=n, **env_kwargs),
+        np.random.default_rng(seed),
+        record=record,
     )
     finished = noisy["status"] == FINISHED
     times = np.where(finished, noisy["lap_time"], np.nan)
+    laps: tuple[Lap, ...] = ()
+    if record:
+        keep = range(min(n, RECORDED_LAPS))
+        laps = (
+            *laps_from_flight(single, [0], ["mean action"]),
+            *laps_from_flight(noisy, keep, [f"noisy {i + 1}" for i in keep]),
+        )
     return Evaluation(
         status=STATUS_NAMES[single["status"][0]],
         lap_time=float(single["lap_time"][0]),
@@ -209,6 +245,7 @@ def evaluate(
         success_rate=float(np.mean(finished)),
         mean_lap_time=float(np.nanmean(times)) if np.any(finished) else float("nan"),
         lap_times=times,
+        laps=laps,
     )
 
 
@@ -221,6 +258,7 @@ class DrawnEvaluation:
         stopped).
     mean_lap_time: over those (nan if none).
     lap_times, clearances, gates: per drone.
+    laps: with `record`, the laps of the first drones.
     """
 
     success_rate: float
@@ -228,22 +266,36 @@ class DrawnEvaluation:
     lap_times: np.ndarray = field(repr=False)
     clearances: np.ndarray = field(repr=False)
     gates: np.ndarray = field(repr=False)
+    laps: tuple[Lap, ...] = field(default=(), repr=False)
 
 
 def evaluate_drawn(
-    agent: Agent, course: Course, n: int = 64, seed: int = 0, **env_kwargs: Any
+    agent: Agent,
+    course: Course,
+    n: int = 64,
+    seed: int = 0,
+    record: bool = False,
+    **env_kwargs: Any,
 ) -> DrawnEvaluation:
     """The mean action flown by n drones at once (their draws seeded): how many
-    of the drones the policy flies, and how fast."""
-    lap = fly(agent, CourseEnv(course, n=n, **env_kwargs), seed=seed)
+    of the drones the policy flies, and how fast; with `record`, the laps of
+    the first `RECORDED_LAPS` drones are kept (`laps`)."""
+    lap = fly(agent, CourseEnv(course, n=n, **env_kwargs), seed=seed, record=record)
     finished = lap["status"] == FINISHED
     times = np.where(finished, lap["lap_time"], np.nan)
+    laps: tuple[Lap, ...] = ()
+    if record:
+        keep = range(min(n, RECORDED_LAPS))
+        laps = tuple(
+            laps_from_flight(lap, keep, [f"drawn drone {i + 1}" for i in keep])
+        )
     return DrawnEvaluation(
         success_rate=float(np.mean(finished)),
         mean_lap_time=float(np.nanmean(times)) if np.any(finished) else float("nan"),
         lap_times=times,
         clearances=lap["clearance"],
         gates=lap["gates"],
+        laps=laps,
     )
 
 
@@ -263,6 +315,42 @@ def realism_label(realism: Realism, stop: StopAfterFinish | None = None) -> str:
         if on
     ]
     return ", ".join(parts) if parts else "ideal"
+
+
+def realism_from_label(label: str) -> Realism:
+    """The realism an agent was trained in, from its info's label
+    (`realism_label`): the randomised lab, the lab (sensors without draws) or
+    the ideal simulator."""
+    from jineta.picadero.realism import LAB, RANDOMISED_LAB
+
+    if "randomised" in label:
+        return RANDOMISED_LAB
+    if "sensors" in label:
+        return LAB
+    return IDEAL
+
+
+def record_agent(
+    agent: Agent,
+    course: Course,
+    out: str | Path,
+    n: int = RECORDED_LAPS,
+    seed: int = 0,
+    **env_kwargs: Any,
+) -> Path:
+    """Fly an agent on a course as a training's evaluation does and record it
+    (`save_recording`): the mean action's lap and n with the policy's noise, or,
+    when the realism draws (sensors, randomised drones), the mean action on n
+    drawn drones. Returns the recording's path."""
+    realism = env_kwargs.get("realism", IDEAL)
+    if realism.randomization is None and realism.sensors is None:
+        result: Any = evaluate(agent, course, n, seed, True, **env_kwargs)
+    else:
+        result = evaluate_drawn(agent, course, n, seed, True, **env_kwargs)
+    stop = env_kwargs.get("stop")
+    info = {"replay": True, "flown_in": realism_label(realism, stop)}
+    shape = drone_shape(env_kwargs.get("profile", MULTIROTOR_PROFILES["iris"]))
+    return save_recording(out, agent, (course,), result.laps, shape, info)
 
 
 def _rank(result: Evaluation, margin: float = 0.0) -> tuple[float, float]:
@@ -300,12 +388,14 @@ class CourseSetEvaluation:
 
     finished: how many of the laps finished; lap_times (courses,) nan where not.
     gates: gates passed on each course; clearances: closest approach on each.
+    laps: with `record`, the lap on each course (its `course` the index).
     """
 
     finished: int
     lap_times: np.ndarray
     gates: np.ndarray
     clearances: np.ndarray
+    laps: tuple[Lap, ...] = field(default=(), repr=False)
 
     @property
     def success_rate(self) -> float:
@@ -318,16 +408,54 @@ class CourseSetEvaluation:
 
 
 def evaluate_courses(
-    agent: Agent, courses: Sequence[Course], **env_kwargs: Any
+    agent: Agent, courses: Sequence[Course], record: bool = False, **env_kwargs: Any
 ) -> CourseSetEvaluation:
-    """The deterministic policy's lap on each course."""
-    laps = [fly(agent, CourseEnv(c, n=1, **env_kwargs)) for c in courses]
+    """The deterministic policy's lap on each course (kept with `record`)."""
+    laps = [fly(agent, CourseEnv(c, n=1, **env_kwargs), record=record) for c in courses]
+    recorded: tuple[Lap, ...] = ()
+    if record:
+        recorded = tuple(
+            laps_from_flight(lap, [0], [course.name], course=i)[0]
+            for i, (lap, course) in enumerate(zip(laps, courses, strict=True))
+        )
     return CourseSetEvaluation(
         finished=sum(int(lap["status"][0] == FINISHED) for lap in laps),
         lap_times=np.array([lap["lap_time"][0] for lap in laps]),
         gates=np.array([lap["gates"][0] for lap in laps]),
         clearances=np.array([lap["clearance"][0] for lap in laps]),
+        laps=recorded,
     )
+
+
+def _plain(value: Any) -> Any:
+    """A value of a log row or an agent's info as JSON knows it (NumPy numbers
+    as Python ones, nan as None)."""
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, float) and not np.isfinite(value):
+        return None
+    return value
+
+
+def save_recording(
+    out: str | Path,
+    agent: Agent,
+    courses: Sequence[Course],
+    laps: Sequence[Lap],
+    shape: DroneShape,
+    info: dict[str, Any] | None = None,
+) -> Path:
+    """Write laps flown by `agent` as `out/laps/<steps>.json`, and the agent as
+    `out/agents/<steps>.npz` (`<steps>` its `info["steps"]`, 12 digits), so the
+    recording's laps can be flown again exactly. Returns the recording's path."""
+    out = Path(out)
+    steps = int(agent.info.get("steps", 0))
+    name = f"{steps:012d}"
+    (out / AGENTS_FOLDER).mkdir(parents=True, exist_ok=True)
+    agent.save(out / AGENTS_FOLDER / f"{name}.npz")
+    details = {k: _plain(v) for k, v in {**agent.info, **(info or {})}.items()}
+    recording = Recording(steps, tuple(courses), shape, tuple(laps), details)
+    return write_recording(out / LAPS_FOLDER, name, recording)
 
 
 Judge = Callable[[Agent], tuple[tuple[float, float], dict[str, Any], Any]]
@@ -344,6 +472,8 @@ def run_training(
     agent: Agent | None = None,
     info: dict[str, Any] | None = None,
     report: Callable[[dict[str, Any]], None] | None = None,
+    courses: Sequence[Course] = (),
+    shape: DroneShape | None = None,
 ) -> tuple[Agent, Any]:
     """Train an agent on any environment with CourseEnv's shape. Every
     `evaluate_every` updates `judge(agent)` gives (a rank, higher is better; the
@@ -351,8 +481,10 @@ def run_training(
     saved as `out/best.npz`, the latest as `out/last.npz` (their `info["steps"]`
     counts the steps the agent was trained for, those of an `agent` given to
     continue included). Writes `out/log.csv`
-    and calls `report(row)` after every update. Returns the best agent and its
-    result (the last agent and None if it was never judged)."""
+    and calls `report(row)` after every update. When the judge's result has
+    recorded laps (`laps`, flown on `courses` by a drone of this `shape`), they
+    are written with the agent (`save_recording`). Returns the best agent and
+    its result (the last agent and None if it was never judged)."""
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     ppo = PPO(env, settings, seed, agent, episode_info=("status", "lap_time"))
@@ -393,6 +525,12 @@ def run_training(
                 ppo.agent.info = {**info, "steps": trained + ppo.steps}
                 rank, fields, result = judge(ppo.agent)
                 row.update(fields)
+                laps = getattr(result, "laps", ())
+                if laps and courses and shape is not None:
+                    save_recording(
+                        out, ppo.agent, courses, laps, shape,
+                        {"iteration": stats["iteration"], **fields},
+                    )  # fmt: skip
                 ppo.agent.save(out / "last.npz")
                 if best_rank is None or rank > best_rank:
                     best_rank, best_result = rank, result
@@ -434,6 +572,7 @@ def train(
     realism: Realism = IDEAL,
     stop: StopAfterFinish | None = None,
     judged_by: int = 64,
+    record: bool = True,
 ) -> tuple[Agent, Evaluation | DrawnEvaluation | None]:
     """Train an agent on one course for `total_steps` environment steps with n drones
     (split over `workers` processes, n / workers each; the same training with
@@ -450,6 +589,10 @@ def train(
     none finishes the one that passes the most gates (`_drawn_rank`;
     `evaluate_drawn`, seeded: every evaluation flies the same drones).
 
+    With `record` (the default) every evaluation's laps are kept with the agent
+    that flew them (`out/laps/`, `out/agents/`; see the module): the mean
+    action's lap and 8 noisy ones, or the first 8 drawn drones.
+
     The policies of phase 11 are trained in two stages (`examples.train_course`):
     without the margin first (with it from the start, crashes are so frequent
     that the policy learns to wait until the time limit), then with it, starting
@@ -459,7 +602,7 @@ def train(
 
     def judge(candidate: Agent):
         if realism.randomization is None and realism.sensors is None:
-            result = evaluate(candidate, course, 16, seed, **effects)
+            result = evaluate(candidate, course, 16, seed, record, **effects)
             fields = {
                 "eval_status": result.status,
                 "eval_lap_time": result.lap_time,
@@ -467,7 +610,7 @@ def train(
             }
             return _rank(result, margin), fields, result
         # Drawn drones: the share the mean action flies, how fast, the gates.
-        drawn = evaluate_drawn(candidate, course, judged_by, seed, **effects)
+        drawn = evaluate_drawn(candidate, course, judged_by, seed, record, **effects)
         lap = drawn.mean_lap_time
         fields = {
             "eval_status": f"{round(drawn.success_rate * judged_by)}/{judged_by}",
@@ -491,7 +634,7 @@ def train(
     }
     return run_training(
         env, total_steps, out, judge, seed, settings, evaluate_every, agent, info,
-        report,
+        report, (course,), drone_shape(MULTIROTOR_PROFILES["iris"]),
     )  # fmt: skip
 
 
@@ -527,6 +670,7 @@ def train_random(
     margin: float = TRAINING_MARGIN,
     report: Callable[[dict[str, Any]], None] | None = None,
     workers: int = 1,
+    record: bool = True,
 ) -> tuple[Agent, CourseSetEvaluation | None]:
     """Train an agent on random courses: k at once (split over `workers`
     processes, k / workers each, each process drawing its own courses), n
@@ -534,7 +678,9 @@ def train_random(
     replaced by a new one every `renew_every` steps, the drones seeing the
     `nearest` surfaces around them. The best agent is the one whose mean action
     finishes the most of `validation` fixed courses (`VALIDATION_SEED`), and
-    among those the fastest on average. Returns it and its evaluation."""
+    among those the fastest on average. Returns it and its evaluation. With
+    `record` (the default) every evaluation's laps (one on each validation
+    course) are kept with the agent that flew them."""
     from functools import partial
 
     from jineta.picadero.courses import random_course
@@ -544,7 +690,9 @@ def train_random(
     validation_courses = random_courses(validation, VALIDATION_SEED, ranges)
 
     def judge(candidate: Agent):
-        result = evaluate_courses(candidate, validation_courses, nearest=nearest)
+        result = evaluate_courses(
+            candidate, validation_courses, record, nearest=nearest
+        )
         lap = result.mean_lap_time
         fields = {
             "eval_status": f"{result.finished}/{validation} finished",
@@ -569,5 +717,5 @@ def train_random(
     info = {"course": "random", "drones": k * n, "nearest": nearest}
     return run_training(
         env, total_steps, out, judge, seed, settings, evaluate_every, agent, info,
-        report,
+        report, validation_courses, drone_shape(MULTIROTOR_PROFILES["iris"]),
     )  # fmt: skip
